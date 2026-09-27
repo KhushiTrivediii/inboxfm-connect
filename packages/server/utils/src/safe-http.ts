@@ -14,14 +14,24 @@ export function parseAllowListFromEnv(): string[] {
 function buildAgents({ allowList, httpAgentOptions, httpsAgentOptions }: BuildAgentsParams): SsrfAgents {
     const filteringOptions = {
         keepAlive: true,
+        allowIPAddressList: allowList,
+    }
+    const pinnedSecurityOptions = {
         allowPrivateIPAddress: false,
         allowLoopbackIPAddress: false,
         allowMetaIPAddress: false,
-        allowIPAddressList: allowList,
     }
     return {
-        httpAgent: new RequestFilteringHttpAgent({ ...filteringOptions, ...httpAgentOptions }),
-        httpsAgent: new RequestFilteringHttpsAgent({ ...filteringOptions, ...httpsAgentOptions }),
+        httpAgent: new RequestFilteringHttpAgent({
+            ...filteringOptions,
+            ...httpAgentOptions,
+            ...pinnedSecurityOptions,
+        }),
+        httpsAgent: new RequestFilteringHttpsAgent({
+            ...filteringOptions,
+            ...httpsAgentOptions,
+            ...pinnedSecurityOptions,
+        }),
     }
 }
 

@@ -165,4 +165,14 @@ describe('safeHttp redirect & DNS rebinding edge cases', () => {
             message: expect.stringMatching(/DNS lookup 127\.0\.0\.1.*not allowed|is not allowed/i),
         })
     })
+
+    it('pins security-critical options and blocks private IP even if caller passes allowPrivateIPAddress: true', async () => {
+        const instance = safeHttp.createAxios(
+            { timeout: 2000 },
+            { httpAgentOptions: { allowPrivateIPAddress: true } as any },
+        )
+        await expect(instance.get('http://10.0.0.1/')).rejects.toMatchObject({
+            message: expect.stringMatching(/10\.0\.0\.1.*not allowed/i),
+        })
+    })
 })
