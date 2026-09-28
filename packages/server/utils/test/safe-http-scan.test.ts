@@ -5,9 +5,9 @@ import { findMonorepoRoot, findSourceFiles, scanFile, type Violation } from './s
 /**
  * SSRF Guard Enforcement Test Suite
  *
- * Scope: Outbound HTTP network requests across server packages (packages/server/{api,utils}/src).
- * Note: packages/server/engine and packages/server/sandbox execute in isolated worker sandboxes
- * communicating via internal localhost IPC and are not part of host server-utils.
+ * Scope: Outbound HTTP network requests across host server packages (packages/server/{api,utils}/src).
+ * Note: packages/server/engine and packages/server/sandbox execute worker tasks and piece/registry operations
+ * which are tracked for worker-level migration in follow-up issues (#123-#146 range).
  */
 describe('SSRF Guard Enforcement (packages/server/{api,utils})', () => {
     const rootDir = findMonorepoRoot(__dirname)
