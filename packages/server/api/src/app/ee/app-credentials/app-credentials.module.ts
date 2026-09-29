@@ -1,5 +1,5 @@
 import { SeekPage } from '@inboxfm-connect/core-utils'
-import { AppCredential, AppCredentialType, ListAppCredentialsRequest, PrincipalType, UpsertAppCredentialRequest } from '@inboxfm-connect/shared'
+import { AppCredential, AppCredentialType, ListAppCredentialsRequest, Permission, PrincipalType, UpsertAppCredentialRequest } from '@inboxfm-connect/shared'
 import { FastifyRequest } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
@@ -27,7 +27,7 @@ const appCredentialController: FastifyPluginAsyncZod = async (fastify) => {
             }>,
         ) => {
             const page = await appCredentialService.list(
-                request.query.projectId,
+                request.projectId,
                 request.query.appName,
                 request.query.cursor ?? null,
                 request.query.limit ?? DEFAULT_LIMIT_SIZE,
@@ -73,7 +73,13 @@ function censorClientSecret(
 
 const ListCredsRequest = {
     config: {
-        security: securityAccess.public(),
+        security: securityAccess.project(
+            [PrincipalType.USER, PrincipalType.SERVICE],
+            Permission.READ_APP_CONNECTION,
+            {
+                type: ProjectResourceType.QUERY,
+            },
+        ),
     },
     schema: {
         querystring: ListAppCredentialsRequest,

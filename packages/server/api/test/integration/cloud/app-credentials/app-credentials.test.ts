@@ -1,8 +1,6 @@
-import { apId } from '@inboxfm-connect/core-utils'
-import { AppCredentialType, PrincipalType } from '@inboxfm-connect/shared'
+import { AppCredentialType } from '@inboxfm-connect/shared'
 import { FastifyInstance } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
-import { generateMockToken } from '../../../helpers/auth'
 import { createTestContext } from '../../../helpers/test-context'
 import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/test-setup'
 
@@ -61,7 +59,7 @@ describe('App Credentials API', () => {
     })
 
     describe('GET /v1/app-credentials (List)', () => {
-        it('should list app credentials', async () => {
+        it('should list app credentials for authenticated project member', async () => {
             const ctx = await createTestContext(app!)
 
             await ctx.post('/v1/app-credentials', {
@@ -72,23 +70,39 @@ describe('App Credentials API', () => {
                 },
             })
 
-            // GET is public, but needs projectId
-            const testToken = await generateMockToken({
-                type: PrincipalType.UNKNOWN,
-                id: apId(),
-            })
-
-            const response = await app?.inject({
-                method: 'GET',
-                url: `/api/v1/app-credentials?projectId=${ctx.project.id}`,
-                headers: {
-                    authorization: `Bearer ${testToken}`,
-                },
-            })
+            const response = await ctx.get(`/v1/app-credentials?projectId=${ctx.project.id}`)
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
             expect(body.data.length).toBeGreaterThanOrEqual(1)
+        })
+
+        it('should reject unauthenticated requests', async () => {
+            const ctx = await createTestContext(app!)
+
+            const response = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/app-credentials?projectId=${ctx.project.id}`,
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.UNAUTHORIZED)
+        })
+
+        it('should reject cross-tenant enumeration from another project', async () => {
+            const ctx1 = await createTestContext(app!)
+            const ctx2 = await createTestContext(app!)
+
+            await ctx1.post('/v1/app-credentials', {
+                appName: 'victim-app',
+                projectId: ctx1.project.id,
+                settings: {
+                    type: AppCredentialType.API_KEY,
+                },
+            })
+
+            const response = await ctx2.get(`/v1/app-credentials?projectId=${ctx1.project.id}`)
+
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
         })
 
         it('should filter by appName', async () => {
@@ -106,18 +120,7 @@ describe('App Credentials API', () => {
                 settings: { type: AppCredentialType.API_KEY },
             })
 
-            const testToken = await generateMockToken({
-                type: PrincipalType.UNKNOWN,
-                id: apId(),
-            })
-
-            const response = await app?.inject({
-                method: 'GET',
-                url: `/api/v1/app-credentials?projectId=${ctx.project.id}&appName=filter-app-a`,
-                headers: {
-                    authorization: `Bearer ${testToken}`,
-                },
-            })
+            const response = await ctx.get(`/v1/app-credentials?projectId=${ctx.project.id}&appName=filter-app-a`)
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -143,18 +146,7 @@ describe('App Credentials API', () => {
                 },
             })
 
-            const testToken = await generateMockToken({
-                type: PrincipalType.UNKNOWN,
-                id: apId(),
-            })
-
-            const response = await app?.inject({
-                method: 'GET',
-                url: `/api/v1/app-credentials?projectId=${ctx.project.id}&appName=censor-test-app`,
-                headers: {
-                    authorization: `Bearer ${testToken}`,
-                },
-            })
+            const response = await ctx.get(`/v1/app-credentials?projectId=${ctx.project.id}&appName=censor-test-app`)
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
