@@ -15,10 +15,16 @@ export const pieceInstallService = (log: FastifyBaseLogger) => ({
         platformId: string,
         params: AddPieceRequestBody,
     ): Promise<PieceMetadataModel> {
-        // Tracked so a failure after the archive is uploaded can remove it: create() failing
-        // means no piece row was written, so the archive is unreferenced and would otherwise
-        // stay in storage forever - one leaked archive per failed or lost-race install.
+        // Tracked so a failure after the archive is uploaded can remove it: if no piece row
+        // was written, the archive is unreferenced and would otherwise stay in storage
+        // forever - one leaked archive per failed or lost-race install.
+        //
+        // `piecePersisted` is the guard that matters. create() persists the row and *then*
+        // invalidates the piece cache, so a cache-invalidation failure propagates out of a
+        // successful insert. Cleaning up on "an error was thrown" would delete the archive of
+        // a piece that exists and references it, leaving the piece unusable (issue #475).
         let uploadedArchive: File | undefined
+        let piecePersisted = false
         try {
             const piecePackage = await savePiecePackage(platformId, params, log)
             uploadedArchive = piecePackage.uploadedArchive
@@ -43,6 +49,8 @@ export const pieceInstallService = (log: FastifyBaseLogger) => ({
                 pieceType: PieceType.CUSTOM,
                 archiveId,
             })
+            piecePersisted = true
+
             // Reconcile tool-search for this tenant only (async, never blocking the install) so the new
             // custom piece's actions/triggers become searchable. Scoped → the shared catalog is untouched.
             // Gated on the flag so an install never enqueues a reconcile while tool-search is disabled.
@@ -54,7 +62,9 @@ export const pieceInstallService = (log: FastifyBaseLogger) => ({
         catch (error) {
             log.error({ error }, '[pieceInstallService#add] Failed to add piece')
 
-            await deleteOrphanedArchive(uploadedArchive, log)
+            if (!piecePersisted) {
+                await deleteOrphanedArchive(uploadedArchive, log)
+            }
 
             if (error instanceof ActivepiecesError && error.error.code === ErrorCode.VALIDATION) {
                 throw error

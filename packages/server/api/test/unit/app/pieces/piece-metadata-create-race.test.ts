@@ -36,8 +36,10 @@ vi.mock('../../../../src/app/core/db/repo-factory', () => ({
     }),
 }))
 
+const mockCacheInvalidate = vi.fn()
+
 vi.mock('../../../../src/app/pieces/metadata/piece-cache', () => ({
-    pieceCache: () => ({ invalidate: vi.fn().mockResolvedValue(undefined) }),
+    pieceCache: () => ({ invalidate: mockCacheInvalidate }),
     PieceRegistryEntry: {},
 }))
 
@@ -104,14 +106,14 @@ const pieceMetadata = {
     createdBy: '',
 }
 
-async function createPiece(service: Awaited<ReturnType<typeof loadService>>, platformId?: string) {
+async function createPiece(service: Awaited<ReturnType<typeof loadService>>, platformId?: string, publishCacheRefresh = false) {
     return service.create({
         pieceMetadata,
         packageType: PackageType.ARCHIVE,
         platformId,
         pieceType: PieceType.CUSTOM,
         archiveId: 'archive-1',
-        publishCacheRefresh: false,
+        publishCacheRefresh,
     })
 }
 
@@ -122,6 +124,7 @@ describe('pieceMetadataService.create race (#475)', () => {
         mockFindOneBy.mockResolvedValue(null)
         // findOldestCreatedDate() reads the earliest row for the piece name.
         mockFindOne.mockResolvedValue({ created: '2026-01-01T00:00:00.000Z' })
+        mockCacheInvalidate.mockResolvedValue(undefined)
         mockSave.mockImplementation(async (entity) => ({ id: 'piece-1', ...entity }))
     })
 
@@ -181,6 +184,31 @@ describe('pieceMetadataService.create race (#475)', () => {
         // losing insert must never overwrite the winner's primary key.
         expect(saved.id).toBeTruthy()
         expect(saved.name).toBe('my-piece')
+    })
+
+    // The row is committed before the cache refresh, so a refresh failure must not fail the
+    // install: propagating it makes the caller believe the insert rolled back, and any
+    // compensating cleanup then deletes the archive the saved row references (issue #475).
+    it('returns the piece even when the cache refresh fails after the insert', async () => {
+        const service = await loadService()
+        mockCacheInvalidate.mockRejectedValue(new Error('cache unavailable'))
+
+        // Must resolve, not reject - the insert already committed.
+        await expect(createPiece(service, 'platform-1', true)).resolves.toMatchObject({
+            name: 'my-piece',
+            version: '1.0.0',
+        })
+        expect(mockSave).toHaveBeenCalledTimes(1)
+        expect(mockCacheInvalidate).toHaveBeenCalled()
+    })
+
+    it('logs the cache failure rather than swallowing it silently', async () => {
+        const service = await loadService()
+        mockCacheInvalidate.mockRejectedValue(new Error('cache unavailable'))
+
+        await createPiece(service, 'platform-1', true)
+
+        expect(mockLog.error).toHaveBeenCalled()
     })
 
     it('uses a platform-less lock key for community pieces', async () => {

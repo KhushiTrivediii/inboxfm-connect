@@ -173,7 +173,24 @@ export const pieceMetadataService = (log: FastifyBaseLogger) => {
                         created: createdDate,
                     })
                     if (publishCacheRefresh) {
-                        await pieceCache(log).invalidate()
+                        // The row is already committed at this point, so a cache refresh
+                        // failure must not fail the install. Propagating it makes the caller
+                        // believe the insert rolled back, and any compensating cleanup then
+                        // deletes the archive this saved row references - leaving an
+                        // installed piece that cannot load (issue #475).
+                        // The cache is derived state, so staleness self-heals; log loudly.
+                        try {
+                            await pieceCache(log).invalidate()
+                        }
+                        catch (cacheError) {
+                            // No piece id in the log: `savedPiece` is typed as an intersection
+                            // that TS reduces to `never` (packageType conflicts between the
+                            // explicit fields and ...pieceMetadata), so reading `.id` off it
+                            // does not typecheck. The name/version pair identifies the row and
+                            // are plain strings off the request.
+                            log.error({ cacheError, name: pieceMetadata.name, version: pieceMetadata.version },
+                                '[pieceMetadataService#create] Piece cache refresh failed; the piece is installed')
+                        }
                     }
                     return savedPiece
                 },
