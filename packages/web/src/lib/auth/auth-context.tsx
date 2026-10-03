@@ -185,14 +185,38 @@ export function useAuth(): AuthContextType {
 
 const PERSISTED_USER_KEY = 'ap-user'
 
+// The user object carries PII (email, firstName, lastName, platformId) and was
+// previously written to localStorage — world-readable on the same origin. It is
+// now stored in sessionStorage so the parked data is bound to the tab's lifetime
+// instead of persisting across sessions (issue #383, same fix as the JWT token).
 function persistUser(user: User): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(PERSISTED_USER_KEY, JSON.stringify(user))
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(PERSISTED_USER_KEY, JSON.stringify(user))
+    }
+  } catch {
+    // Storage blocked or quota-exhausted: user stays in memory for this tab.
+  }
 }
 
 function readPersistedUser(): User | null {
-  if (typeof localStorage === 'undefined') return null
-  const raw = localStorage.getItem(PERSISTED_USER_KEY)
+  if (typeof sessionStorage === 'undefined') return null
+  // One-time adopt-and-remove: a user upgrading from an older build keeps their
+  // warm-start rendering (no flash of empty name) while the world-readable copy
+  // in localStorage is purged in the same breath.
+  let raw = sessionStorage.getItem(PERSISTED_USER_KEY)
+  if (raw === null && typeof localStorage !== 'undefined') {
+    const legacy = localStorage.getItem(PERSISTED_USER_KEY)
+    if (legacy !== null) {
+      try {
+        sessionStorage.setItem(PERSISTED_USER_KEY, legacy)
+        raw = legacy
+      } catch {
+        // Migration blocked — leave unauthenticated rather than crash.
+      }
+      localStorage.removeItem(PERSISTED_USER_KEY)
+    }
+  }
   if (!raw) return null
   try {
     return JSON.parse(raw) as User
@@ -202,6 +226,16 @@ function readPersistedUser(): User | null {
 }
 
 function clearPersistedUser(): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.removeItem(PERSISTED_USER_KEY)
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(PERSISTED_USER_KEY)
+    }
+  } catch {
+    // Ignore storage errors on sign-out.
+  }
+  // Purge any stale copy left in localStorage (e.g. a second tab that hasn't
+  // adopted yet, or an older build that still wrote there).
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(PERSISTED_USER_KEY)
+  }
 }

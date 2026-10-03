@@ -79,6 +79,7 @@ async function clickTextButton(label: string): Promise<void> {
 describe('Connections page', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     document.body.innerHTML = ''
     vi.restoreAllMocks()
   })
@@ -366,7 +367,7 @@ describe('Connections page', () => {
 
     apiClient.setToken('test-token')
     apiClient.setProjectId('proj_1')
-    localStorage.setItem('ap-user', JSON.stringify(testUser()))
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser()))
 
     const queryClient = createTestQueryClient()
     const container = mount(

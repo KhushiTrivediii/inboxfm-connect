@@ -16,7 +16,7 @@ const PROJECT = testProject()
 function signIn({ user = testUser() }: { user?: User } = {}): void {
   apiClient.setToken('test-token')
   apiClient.setProjectId(PROJECT.id)
-  localStorage.setItem('ap-user', JSON.stringify(user))
+  sessionStorage.setItem('ap-user', JSON.stringify(user))
 }
 
 function renderSettingsPage(): HTMLElement {
@@ -46,6 +46,7 @@ describe('Settings page', () => {
 
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     signIn()
     vi.restoreAllMocks()
     assignSpy = vi.fn()
@@ -312,9 +313,10 @@ describe('Settings page', () => {
 
   it('renders neutral placeholders and dash fallbacks when project and user role are missing (#174)', async () => {
     localStorage.clear()
+    sessionStorage.clear()
     apiClient.setToken('test-token')
     apiClient.setProjectId('')
-    localStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev' }))
+    sessionStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev' }))
 
     stubApi([
       { match: PROJECTS_MATCH, respond: () => ({ body: { data: [] } }) },

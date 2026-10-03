@@ -56,6 +56,7 @@ const REAL_USER = {
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
   apiClient.setToken(null)
   apiClient.setProjectId(null)
   capturedAuth = null
@@ -65,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   localStorage.clear()
   setAuthNavigator(null)
+  sessionStorage.clear()
 })
 
 describe('auth session restore', () => {
@@ -95,6 +97,8 @@ describe('auth session restore', () => {
     // The dev-mock project must never clobber a valid restored session.
     expect(capturedAuth?.currentProject?.id).not.toBe('proj_default')
     expect(apiClient.getProjectId()).toBe(REAL_PROJECT_ID)
+    expect(sessionStorage.getItem('ap-user')).toContain('dev@ap.com')
+    expect(localStorage.getItem('ap-user')).toBeNull()
   })
 
   it('persists the flat sign-in payload as the user and survives a remount', async () => {
@@ -118,8 +122,9 @@ describe('auth session restore', () => {
     })
 
     expect(capturedAuth?.user?.id).toBe(REAL_USER.id)
-    expect(localStorage.getItem('ap-user')).toContain('dev@ap.com')
-    // Token + project moved to sessionStorage (issue #383)
+    // User, token + project moved to sessionStorage (issue #383)
+    expect(sessionStorage.getItem('ap-user')).toContain('dev@ap.com')
+    expect(localStorage.getItem('ap-user')).toBeNull()
     expect(sessionStorage.getItem('ap-token')).toBe('real-jwt')
     expect(sessionStorage.getItem('ap-project-id')).toBe(REAL_PROJECT_ID)
     expect(localStorage.getItem('ap-token')).toBeNull()
@@ -145,8 +150,11 @@ describe('auth session restore', () => {
     })
 
     expect(localStorage.getItem('ap-user')).toBeNull()
+    expect(sessionStorage.getItem('ap-user')).toBeNull()
     expect(localStorage.getItem('ap-token')).toBeNull()
+    expect(sessionStorage.getItem('ap-token')).toBeNull()
     expect(localStorage.getItem('ap-project-id')).toBeNull()
+    expect(sessionStorage.getItem('ap-project-id')).toBeNull()
     expect(capturedAuth?.isAuthenticated).toBe(false)
   })
 

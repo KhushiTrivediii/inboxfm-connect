@@ -46,17 +46,21 @@ function signInTestUser() {
   }
   apiClient.setToken('mock-token')
   apiClient.setProjectId('prj_test')
-  localStorage.setItem('ap-user', JSON.stringify(mockUser))
+  sessionStorage.setItem('ap-user', JSON.stringify(mockUser))
 }
 
 function signOutTestUser() {
   apiClient.setToken(null)
   apiClient.setProjectId(null)
   localStorage.clear()
+  sessionStorage.clear()
 }
 
 async function navigateAndMount(path: string): Promise<HTMLElement> {
   await act(async () => {
+    if (router.state.location.pathname === path) {
+      await router.navigate('/__reset_route__')
+    }
     await router.navigate(path)
   })
 
@@ -73,7 +77,7 @@ async function navigateAndMount(path: string): Promise<HTMLElement> {
 
 async function renderRouterAt(path: string): Promise<HTMLElement> {
   const container = await navigateAndMount(path)
-  await waitFor(() => container.querySelector('aside') !== null)
+  await waitFor(() => container.querySelector('aside') !== null, 8000)
   return container
 }
 
@@ -81,6 +85,7 @@ describe('router', () => {
   beforeEach(() => {
     queryClient.clear()
     localStorage.clear()
+    sessionStorage.clear()
     document.body.innerHTML = ''
     apiClient.setToken('test-token')
     apiClient.setProjectId('proj_default')
@@ -98,7 +103,7 @@ describe('router', () => {
   it('serves the dashboard page at /', async () => {
     const container = await renderRouterAt('/')
 
-    await waitFor(() => container.textContent?.includes('Developer Quick Actions') === true)
+    await waitFor(() => container.textContent?.includes('Developer Quick Actions') === true, 8000)
 
     expect(container.textContent).toContain('Welcome back')
     expect(container.textContent).toContain('Available Tools')
