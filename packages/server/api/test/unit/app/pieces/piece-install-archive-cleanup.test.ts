@@ -37,12 +37,24 @@ vi.mock('../../../../src/app/pieces/metadata/piece-cache', () => ({
     pieceCache: () => ({ invalidate: mockCacheInvalidate }),
 }))
 
+// Throws synchronously when set, so a failure AFTER the metadata row commits
+// propagates out of installPiece's try block (a rejected promise would be swallowed by
+// rejectedPromiseHandler and never reach the catch under test).
+let mockPostCommitFailure: Error | undefined
+
 vi.mock('../../../../src/app/tool-search/tool-search-flag', () => ({
-    isToolSearchEnabled: () => false,
+    isToolSearchEnabled: () => mockPostCommitFailure !== undefined,
 }))
 
 vi.mock('../../../../src/app/tool-search/tool-search-reindex.job', () => ({
-    toolSearchReindexJob: () => ({ enqueue: () => Promise.resolve() }),
+    toolSearchReindexJob: () => ({
+        enqueue: () => {
+            if (mockPostCommitFailure) {
+                throw mockPostCommitFailure
+            }
+            return Promise.resolve()
+        },
+    }),
 }))
 
 vi.mock('../../../../src/app/helper/promise-handler', () => ({
@@ -87,6 +99,7 @@ const request = {
 describe('installPiece orphaned-archive cleanup (#475)', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+        mockPostCommitFailure = undefined
         mockFileSave.mockResolvedValue(ARCHIVE_FILE)
         mockS3Delete.mockResolvedValue(undefined)
         mockFileDelete.mockResolvedValue({ affected: 1 })
@@ -113,6 +126,28 @@ describe('installPiece orphaned-archive cleanup (#475)', () => {
         const service = await loadService()
         await expect(service.installPiece('platform-1', request)).resolves.toMatchObject({ id: 'piece-1' })
 
+        expect(mockFileDelete).not.toHaveBeenCalled()
+        expect(mockS3Delete).not.toHaveBeenCalled()
+    })
+
+    it('never deletes the archive when a step AFTER the row commit fails', async () => {
+        // choksi2212 on #496: create() can throw *after* its row commits (a cache refresh
+        // between save() and return), and a later failure in this try must not delete an
+        // archive the committed row references. Two guards: the refresh is now best-effort
+        // inside create(), and `uploadedArchive` is cleared the moment the row is saved.
+        mockCreateMetadata.mockResolvedValue({ id: 'piece-1' })
+        mockPostCommitFailure = new Error('tool-search enqueue failed')
+
+        const service = await loadService()
+        await expect(service.installPiece('platform-1', request)).rejects.toMatchObject({
+            error: {
+                code: 'ENGINE_OPERATION_FAILURE',
+                params: { message: 'tool-search enqueue failed' },
+            },
+        })
+
+        // The row exists (create resolved), so the archive must survive.
+        expect(mockCreateMetadata).toHaveBeenCalled()
         expect(mockFileDelete).not.toHaveBeenCalled()
         expect(mockS3Delete).not.toHaveBeenCalled()
     })

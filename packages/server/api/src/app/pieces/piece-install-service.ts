@@ -50,6 +50,10 @@ export const pieceInstallService = (log: FastifyBaseLogger) => ({
                 archiveId,
             })
             piecePersisted = true
+            // Drop the reference the moment the row is committed (choksi2212 on #496): no
+            // failure after this point may delete an archive the saved row points at, and
+            // clearing it here makes that true by construction rather than by predicate.
+            uploadedArchive = undefined
 
             // Reconcile tool-search for this tenant only (async, never blocking the install) so the new
             // custom piece's actions/triggers become searchable. Scoped → the shared catalog is untouched.
