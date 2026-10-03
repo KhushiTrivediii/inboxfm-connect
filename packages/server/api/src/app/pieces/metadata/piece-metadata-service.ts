@@ -7,6 +7,7 @@ import { FastifyBaseLogger } from 'fastify'
 import semVer from 'semver'
 import { EntityManager, In, IsNull } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
+import { distributedLock } from '../../database/redis-connections'
 import { pieceTagService } from '../tags/pieces/piece-tag.service'
 import { localPieceCatalog } from './local-piece-catalog'
 import { pieceCache, PieceRegistryEntry } from './piece-cache'
@@ -123,36 +124,60 @@ export const pieceMetadataService = (log: FastifyBaseLogger) => {
             archiveId,
             publishCacheRefresh = true,
         }: CreateParams): Promise<PieceMetadataSchema> {
-            const existingMetadata = await pieceRepos().findOneBy({
-                name: pieceMetadata.name,
-                version: pieceMetadata.version,
-                platformId: platformId ?? IsNull(),
+            // Serialize the existence-check + insert on the natural key
+            // (name, version, platformId). Without this, two concurrent installs of the same
+            // version - a double-clicked dashboard install, an admin retry, two replicas
+            // handling the same provisioning action, or the project-replace deploy loop
+            // racing a manual install - both pass the check and both insert, and the loser
+            // hits idx_piece_metadata_name_platform_id_version as a raw driver error.
+            //
+            // In-lock the re-check still arbitrates, so a caller that genuinely raced still
+            // gets the same clean piece_metadata_already_exists VALIDATION error rather than
+            // a constraint string wrapped as ENGINE_OPERATION_FAILURE.
+            const lockKey = [
+                'piece-metadata',
+                'create',
+                platformId ?? 'no-platform',
+                pieceMetadata.name,
+                pieceMetadata.version,
+            ].join(':')
+
+            return distributedLock(log).runExclusive({
+                key: lockKey,
+                timeoutInSeconds: 60,
+                fn: async () => {
+                    const existingMetadata = await pieceRepos().findOneBy({
+                        name: pieceMetadata.name,
+                        version: pieceMetadata.version,
+                        platformId: platformId ?? IsNull(),
+                    })
+                    if (!isNil(existingMetadata)) {
+                        throw new ActivepiecesError({
+                            code: ErrorCode.VALIDATION,
+                            params: {
+                                message: `piece_metadata_already_exists name=${pieceMetadata.name} version=${pieceMetadata.version}`,
+                            },
+                        })
+                    }
+                    const createdDate = await findOldestCreatedDate({
+                        name: pieceMetadata.name,
+                        platformId,
+                    })
+                    const savedPiece = await pieceRepos().save({
+                        ...pickArchiveControlledMetadata(pieceMetadata),
+                        id: apId(),
+                        packageType,
+                        pieceType,
+                        archiveId,
+                        platformId,
+                        created: createdDate,
+                    })
+                    if (publishCacheRefresh) {
+                        await pieceCache(log).invalidate()
+                    }
+                    return savedPiece
+                },
             })
-            if (!isNil(existingMetadata)) {
-                throw new ActivepiecesError({
-                    code: ErrorCode.VALIDATION,
-                    params: {
-                        message: `piece_metadata_already_exists name=${pieceMetadata.name} version=${pieceMetadata.version}`,
-                    },
-                })
-            }
-            const createdDate = await findOldestCreatedDate({
-                name: pieceMetadata.name,
-                platformId,
-            })
-            const savedPiece = await pieceRepos().save({
-                ...pickArchiveControlledMetadata(pieceMetadata),
-                id: apId(),
-                packageType,
-                pieceType,
-                archiveId,
-                platformId,
-                created: createdDate,
-            })
-            if (publishCacheRefresh) {
-                await pieceCache(log).invalidate()
-            }
-            return savedPiece
         },
 
         async bulkDelete(pieces: { name: string, version: string }[]): Promise<void> {
