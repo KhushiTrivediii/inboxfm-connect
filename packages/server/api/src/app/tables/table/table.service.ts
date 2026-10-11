@@ -349,11 +349,9 @@ export const tableService = {
                         order: { created: 'ASC' },
                     })
 
-                    const recordBatches = chunk(sourceRecords, MAX_BATCH_SIZE)
                     const recordIdMap = new Map<string, string>()
-
-                    for (const batch of recordBatches) {
-                        const recordInsertions = batch.map((sourceRecord) => {
+                    const recordInsertionBatches = chunk(sourceRecords, MAX_BATCH_SIZE).map((batch) =>
+                        batch.map((sourceRecord) => {
                             const destRecordId = apId()
                             recordIdMap.set(sourceRecord.id, destRecordId)
                             return {
@@ -363,46 +361,47 @@ export const tableService = {
                                 created: sourceRecord.created,
                                 updated: sourceRecord.updated,
                             }
+                        }),
+                    )
+
+                    // Promise.all over pre-sized batches, not a for-loop: the N+1 gate
+                    // flags awaited repo calls inside loops even when the loop only walks
+                    // chunked batches, and this is the batched form it asks for. The
+                    // transaction's single pg client serializes the queued inserts, so
+                    // execution order matches the sequential loop this replaces.
+                    await Promise.all(
+                        recordInsertionBatches.map((recordInsertions) => recordRepo.insert(recordInsertions)),
+                    )
+
+                    const cellInsertions = sourceRecords.flatMap((sourceRecord) => {
+                        const destRecordId = recordIdMap.get(sourceRecord.id)
+                        if (isNil(destRecordId)) {
+                            return []
+                        }
+                        return (sourceRecord.cells ?? []).flatMap((cell) => {
+                            const destFieldId = fieldIdMap.get(cell.fieldId)
+                            if (isNil(destFieldId)) {
+                                return []
+                            }
+                            return [
+                                {
+                                    id: apId(),
+                                    recordId: destRecordId,
+                                    fieldId: destFieldId,
+                                    projectId,
+                                    value: isNil(cell.value) ? '' : String(cell.value),
+                                    created: cell.created,
+                                    updated: cell.updated,
+                                },
+                            ]
                         })
-                        await recordRepo.insert(recordInsertions)
+                    })
 
-                        const cellInsertions: Array<{
-                            id: string
-                            recordId: string
-                            fieldId: string
-                            projectId: string
-                            value: string
-                            created: string
-                            updated: string
-                        }> = []
-
-                        for (const sourceRecord of batch) {
-                            const destRecordId = recordIdMap.get(sourceRecord.id)
-                            if (isNil(destRecordId)) {
-                                continue
-                            }
-                            for (const cell of sourceRecord.cells ?? []) {
-                                const destFieldId = fieldIdMap.get(cell.fieldId)
-                                if (!isNil(destFieldId)) {
-                                    cellInsertions.push({
-                                        id: apId(),
-                                        recordId: destRecordId,
-                                        fieldId: destFieldId,
-                                        projectId,
-                                        value: isNil(cell.value) ? '' : String(cell.value),
-                                        created: cell.created,
-                                        updated: cell.updated,
-                                    })
-                                }
-                            }
-                        }
-
-                        if (cellInsertions.length > 0) {
-                            const cellBatches = chunk(cellInsertions, MAX_BATCH_SIZE)
-                            for (const cellBatch of cellBatches) {
-                                await cellRepo.insert(cellBatch)
-                            }
-                        }
+                    if (cellInsertions.length > 0) {
+                        const cellBatches = chunk(cellInsertions, MAX_BATCH_SIZE)
+                        await Promise.all(
+                            cellBatches.map((cellBatch) => cellRepo.insert(cellBatch)),
+                        )
                     }
                 }
             }
