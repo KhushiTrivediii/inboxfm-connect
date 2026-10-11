@@ -130,6 +130,32 @@ describe('auth session restore', () => {
     expect(localStorage.getItem('ap-token')).toBeNull()
   })
 
+  it('purges the legacy localStorage user on a fresh sign-in', async () => {
+    stubApi([
+      {
+        match: (url) => url.pathname.endsWith('/api/v1/projects'),
+        respond: () => ({
+          status: 200,
+          body: { data: [{ id: REAL_PROJECT_ID, displayName: 'InboxFM Main Project', platformId: REAL_USER.platformId }] },
+        }),
+      },
+    ])
+
+    // A tokenless visit ran first: no restore, no adopt-and-remove, so the
+    // world-readable copy from an older build is still in localStorage.
+    localStorage.setItem('ap-user', JSON.stringify({ ...REAL_USER, email: 'stale-legacy@ap.com' }))
+
+    renderAuth()
+    await waitFor(() => capturedAuth?.isLoading === false)
+
+    act(() => {
+      requireAuth().signIn('real-jwt', REAL_USER, REAL_PROJECT_ID)
+    })
+
+    expect(sessionStorage.getItem('ap-user')).toContain('dev@ap.com')
+    expect(localStorage.getItem('ap-user')).toBeNull()
+  })
+
   it('signOut clears the persisted identity', async () => {
     apiClient.setToken('real-jwt')
     apiClient.setProjectId(REAL_PROJECT_ID)

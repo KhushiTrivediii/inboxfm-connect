@@ -194,6 +194,13 @@ function persistUser(user: User): void {
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.setItem(PERSISTED_USER_KEY, JSON.stringify(user))
     }
+    // A fresh persist makes any legacy copy stale by definition. The
+    // adopt-and-remove in readPersistedUser never sees it when the visit
+    // preceding this sign-in carried no token (no restore, no adoption),
+    // so the world-readable localStorage entry must go here too.
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(PERSISTED_USER_KEY)
+    }
   } catch {
     // Storage blocked or quota-exhausted: user stays in memory for this tab.
   }
