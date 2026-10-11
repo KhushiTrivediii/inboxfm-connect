@@ -7,6 +7,7 @@ import { FastifyBaseLogger } from 'fastify'
 import semVer from 'semver'
 import { EntityManager, In, IsNull } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
+import { distributedLock } from '../../database/redis-connections'
 import { pieceTagService } from '../tags/pieces/piece-tag.service'
 import { localPieceCatalog } from './local-piece-catalog'
 import { pieceCache, PieceRegistryEntry } from './piece-cache'
@@ -123,36 +124,77 @@ export const pieceMetadataService = (log: FastifyBaseLogger) => {
             archiveId,
             publishCacheRefresh = true,
         }: CreateParams): Promise<PieceMetadataSchema> {
-            const existingMetadata = await pieceRepos().findOneBy({
-                name: pieceMetadata.name,
-                version: pieceMetadata.version,
-                platformId: platformId ?? IsNull(),
+            // Serialize the existence-check + insert on the natural key
+            // (name, version, platformId). Without this, two concurrent installs of the same
+            // version - a double-clicked dashboard install, an admin retry, two replicas
+            // handling the same provisioning action, or the project-replace deploy loop
+            // racing a manual install - both pass the check and both insert, and the loser
+            // hits idx_piece_metadata_name_platform_id_version as a raw driver error.
+            //
+            // In-lock the re-check still arbitrates, so a caller that genuinely raced still
+            // gets the same clean piece_metadata_already_exists VALIDATION error rather than
+            // a constraint string wrapped as ENGINE_OPERATION_FAILURE.
+            const lockKey = [
+                'piece-metadata',
+                'create',
+                platformId ?? 'no-platform',
+                pieceMetadata.name,
+                pieceMetadata.version,
+            ].join(':')
+
+            return distributedLock(log).runExclusive({
+                key: lockKey,
+                timeoutInSeconds: 60,
+                fn: async () => {
+                    const existingMetadata = await pieceRepos().findOneBy({
+                        name: pieceMetadata.name,
+                        version: pieceMetadata.version,
+                        platformId: platformId ?? IsNull(),
+                    })
+                    if (!isNil(existingMetadata)) {
+                        throw new ActivepiecesError({
+                            code: ErrorCode.VALIDATION,
+                            params: {
+                                message: `piece_metadata_already_exists name=${pieceMetadata.name} version=${pieceMetadata.version}`,
+                            },
+                        })
+                    }
+                    const createdDate = await findOldestCreatedDate({
+                        name: pieceMetadata.name,
+                        platformId,
+                    })
+                    const savedPiece = await pieceRepos().save({
+                        ...pickArchiveControlledMetadata(pieceMetadata),
+                        id: apId(),
+                        packageType,
+                        pieceType,
+                        archiveId,
+                        platformId,
+                        created: createdDate,
+                    })
+                    if (publishCacheRefresh) {
+                        // The row is already committed at this point, so a cache refresh
+                        // failure must not fail the install. Propagating it makes the caller
+                        // believe the insert rolled back, and any compensating cleanup then
+                        // deletes the archive this saved row references - leaving an
+                        // installed piece that cannot load (issue #475).
+                        // The cache is derived state, so staleness self-heals; log loudly.
+                        try {
+                            await pieceCache(log).invalidate()
+                        }
+                        catch (cacheError) {
+                            // No piece id in the log: `savedPiece` is typed as an intersection
+                            // that TS reduces to `never` (packageType conflicts between the
+                            // explicit fields and ...pieceMetadata), so reading `.id` off it
+                            // does not typecheck. The name/version pair identifies the row and
+                            // are plain strings off the request.
+                            log.error({ cacheError, name: pieceMetadata.name, version: pieceMetadata.version },
+                                '[pieceMetadataService#create] Piece cache refresh failed; the piece is installed')
+                        }
+                    }
+                    return savedPiece
+                },
             })
-            if (!isNil(existingMetadata)) {
-                throw new ActivepiecesError({
-                    code: ErrorCode.VALIDATION,
-                    params: {
-                        message: `piece_metadata_already_exists name=${pieceMetadata.name} version=${pieceMetadata.version}`,
-                    },
-                })
-            }
-            const createdDate = await findOldestCreatedDate({
-                name: pieceMetadata.name,
-                platformId,
-            })
-            const savedPiece = await pieceRepos().save({
-                ...pickArchiveControlledMetadata(pieceMetadata),
-                id: apId(),
-                packageType,
-                pieceType,
-                archiveId,
-                platformId,
-                created: createdDate,
-            })
-            if (publishCacheRefresh) {
-                await pieceCache(log).invalidate()
-            }
-            return savedPiece
         },
 
         async bulkDelete(pieces: { name: string, version: string }[]): Promise<void> {
