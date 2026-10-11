@@ -15,7 +15,7 @@ const PROJECT = testProject()
 function signIn(): void {
   apiClient.setToken('test-token')
   apiClient.setProjectId(PROJECT.id)
-  localStorage.setItem('ap-user', JSON.stringify(testUser({ firstName: 'Alex' })))
+  sessionStorage.setItem('ap-user', JSON.stringify(testUser({ firstName: 'Alex' })))
 }
 
 function renderDashboard(): HTMLElement {
@@ -109,6 +109,7 @@ function successRoutes(): StubRoute[] {
 describe('DashboardPage', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     signIn()
     vi.restoreAllMocks()
   })

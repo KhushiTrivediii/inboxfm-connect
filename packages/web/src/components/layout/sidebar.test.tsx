@@ -19,6 +19,7 @@ const LEGACY_ITEMS = ['Flows', 'Flow Runs', 'Flow Versions', 'Folders']
 describe('Sidebar', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     document.body.innerHTML = ''
   })
 
@@ -58,7 +59,7 @@ describe('Sidebar', () => {
   })
 
   it('shows the current project from the auth context when authenticated', async () => {
-    localStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev', email: 'dev@inboxfm.local' }))
+    sessionStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev', email: 'dev@inboxfm.local' }))
     apiClient.setToken('test-token')
     stubApi([
       {
@@ -79,7 +80,7 @@ describe('Sidebar', () => {
 
   it('shows Not signed in for the session user with an empty email', () => {
     // Explicit session user with empty email string (covers auth-context fallback)
-    localStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev', email: '' }))
+    sessionStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev', email: '' }))
     apiClient.setToken('test-token')
     const container = mountAt(<Sidebar />, { route: '/' })
 

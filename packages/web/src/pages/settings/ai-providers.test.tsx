@@ -113,9 +113,10 @@ async function submitDialogForm(): Promise<void> {
 describe('AI Provider management in Settings page', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     apiClient.setToken('test-token')
     apiClient.setProjectId(PROJECT.id)
-    localStorage.setItem('ap-user', JSON.stringify(testUser()))
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser()))
     vi.restoreAllMocks()
   })
 
