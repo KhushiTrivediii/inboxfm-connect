@@ -11,17 +11,27 @@ export function parseAllowListFromEnv(): string[] {
     return raw.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-function buildAgents({ allowList, httpsAgentOptions }: BuildAgentsParams): SsrfAgents {
+function buildAgents({ allowList, httpAgentOptions, httpsAgentOptions }: BuildAgentsParams): SsrfAgents {
     const filteringOptions = {
         keepAlive: true,
+        allowIPAddressList: allowList,
+    }
+    const pinnedSecurityOptions = {
         allowPrivateIPAddress: false,
         allowLoopbackIPAddress: false,
         allowMetaIPAddress: false,
-        allowIPAddressList: allowList,
     }
     return {
-        httpAgent: new RequestFilteringHttpAgent(filteringOptions),
-        httpsAgent: new RequestFilteringHttpsAgent({ ...filteringOptions, ...httpsAgentOptions }),
+        httpAgent: new RequestFilteringHttpAgent({
+            ...filteringOptions,
+            ...httpAgentOptions,
+            ...pinnedSecurityOptions,
+        }),
+        httpsAgent: new RequestFilteringHttpsAgent({
+            ...filteringOptions,
+            ...httpsAgentOptions,
+            ...pinnedSecurityOptions,
+        }),
     }
 }
 
@@ -50,9 +60,10 @@ function attachSsrfErrorInterceptor(instance: AxiosInstance): AxiosInstance {
 // value still wins because ...config spreads after it.
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
-function createAxios(config?: AxiosRequestConfig, { httpsAgentOptions }: SafeAxiosOptions = {}): AxiosInstance {
+function createAxios(config?: AxiosRequestConfig, { httpAgentOptions, httpsAgentOptions }: SafeAxiosOptions = {}): AxiosInstance {
     const { httpAgent, httpsAgent } = buildAgents({
         allowList: parseAllowListFromEnv(),
+        httpAgentOptions,
         httpsAgentOptions,
     })
     return attachSsrfErrorInterceptor(axios.create({
@@ -100,10 +111,12 @@ export type SsrfAgents = {
 }
 
 export type SafeAxiosOptions = {
+    httpAgentOptions?: http.AgentOptions
     httpsAgentOptions?: https.AgentOptions
 }
 
 type BuildAgentsParams = {
     allowList: string[]
+    httpAgentOptions?: http.AgentOptions
     httpsAgentOptions?: https.AgentOptions
 }

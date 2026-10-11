@@ -6,8 +6,10 @@ export const INFINITE_LOCK_TIMEOUT = 60 * 60 * 1000
 
 async function resolveRealpathThroughMissingTail(targetPath: string): Promise<string> {
     const absolute = nodePath.resolve(targetPath)
-    const segments = absolute.split(nodePath.sep).filter((segment) => segment.length > 0)
-    let existing: string = nodePath.sep
+    const { root } = nodePath.parse(absolute)
+    const relative = absolute.slice(root.length)
+    const segments = relative.split(nodePath.sep).filter((segment) => segment.length > 0)
+    let existing: string = root
     let consumed = 0
     for (const segment of segments) {
         const candidate = nodePath.join(existing, segment)

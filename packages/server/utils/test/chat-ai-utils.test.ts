@@ -330,7 +330,13 @@ describe('createChatModel — CUSTOM provider egress guard', () => {
             auth,
             config: { apiKeyHeader: 'Authorization', baseUrl: 'http://169.254.169.254/v1' },
             modelId: 'gpt-4o',
-        })).toThrow(/not an allowed outbound destination/)
+        })).toThrow(expect.objectContaining({
+            error: expect.objectContaining({
+                params: expect.objectContaining({
+                    message: 'The configured base URL is not an allowed outbound destination',
+                }),
+            }),
+        }))
     })
 
     it('refuses loopback and private-range targets', () => {
@@ -340,7 +346,13 @@ describe('createChatModel — CUSTOM provider egress guard', () => {
                 auth,
                 config: { apiKeyHeader: 'Authorization', baseUrl },
                 modelId: 'gpt-4o',
-            }), `expected ${baseUrl} to be refused`).toThrow(/not an allowed outbound destination/)
+            }), `expected ${baseUrl} to be refused`).toThrow(expect.objectContaining({
+                error: expect.objectContaining({
+                    params: expect.objectContaining({
+                        message: 'The configured base URL is not an allowed outbound destination',
+                    }),
+                }),
+            }))
         }
     })
 
@@ -350,7 +362,13 @@ describe('createChatModel — CUSTOM provider egress guard', () => {
             auth,
             config: { apiKeyHeader: 'Authorization', baseUrl: 'not-a-url' },
             modelId: 'gpt-4o',
-        })).toThrow(/not an allowed outbound destination/)
+        })).toThrow(expect.objectContaining({
+            error: expect.objectContaining({
+                params: expect.objectContaining({
+                    message: 'The configured base URL is not an allowed outbound destination',
+                }),
+            }),
+        }))
     })
 
     it('never includes the API key or upstream detail in the thrown error', () => {
