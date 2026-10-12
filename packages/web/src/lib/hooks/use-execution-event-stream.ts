@@ -12,15 +12,25 @@ const TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
 /**
  * Subscribes to `GET /v1/executions/:id/events`.
  *
- * Backend reality this hook is built against, and deliberately does not paper over:
- * - Only `ExecutionStarted` is emitted today. The runtime never calls
- *   `executionService.updateStatus`, so terminal events are unreachable. The
- *   renderer is generic so newly wired event types appear without a code change.
- * - There is no replay/backfill. Events emitted before this subscription opened are
- *   never delivered, so an execution created minutes ago legitimately shows an empty
- *   stream. Nothing is synthesised to fill that gap.
- * - The server tears down every listener for an execution when any one subscriber
- *   disconnects, so two concurrent viewers of the same execution interfere.
+ * Backend contract this hook is built against, traced to the current server code
+ * (`execution.controller.ts` + `execution-event.service.ts`) rather than inherited
+ * from docs written before that code existed:
+ * - The server replays the stored event history to every subscriber on connect
+ *   (`streamResumableExecutionEvents` → `getEventsSince`), so an execution
+ *   recorded before this page opened still shows its past events. History is
+ *   capped at 1000 events with a 1h TTL server-side; nothing beyond what was
+ *   stored is synthesised to fill gaps.
+ * - Every frame carries `id: <executionId>:<seq>` above the `data:` JSON, and ids
+ *   are monotonic per execution. A reconnect that presents the last received id —
+ *   through the `Last-Event-ID` header native EventSource auto-reconnect sends,
+ *   or the `lastEventId` query param offered to fetch-based clients like this one —
+ *   is replayed only the events after it. The server also keeps a high-water
+ *   sequence guard, so the history/live overlap is idempotent.
+ * - Only `ExecutionStarted` is emitted today. `executionService.updateStatus`
+ *   has no callers, so terminal events are unreachable. The renderer is
+ *   generic so newly wired event types appear without a code change.
+ * - Concurrent subscribers are independent: one viewer disconnecting never
+ *   tears down another's stream (fixed server-side in #158).
  *
  * Payloads live in component state only — never in localStorage/sessionStorage — and
  * the request is aborted on unmount so a late chunk can never touch a dead tree.

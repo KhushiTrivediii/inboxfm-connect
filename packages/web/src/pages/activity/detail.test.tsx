@@ -433,7 +433,7 @@ describe('Execution detail page', () => {
       expect(container.querySelector('[data-testid="stream-retry"]')).not.toBeNull()
     }, 20000)
 
-    it('shows an honest empty state instead of replaying history', async () => {
+    it('shows an honest empty state when the server replays no history', async () => {
       const factory = createSseStreamFactory()
       stubApi(defaultRoutes(factory))
       const container = renderDetail()
@@ -442,7 +442,8 @@ describe('Execution detail page', () => {
 
       const text = container.querySelector('[data-testid="stream-empty"]')?.textContent ?? ''
       expect(text).toContain('No events received yet.')
-      expect(text).toContain('not replayed')
+      expect(text).toContain('replays')
+      expect(text).not.toContain('not replayed')
     }, 15000)
 
     it('surfaces a stream failure and reconnects on demand', async () => {
