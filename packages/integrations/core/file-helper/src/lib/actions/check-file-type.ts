@@ -29,8 +29,14 @@ export const checkFileType = createAction({
     // Determine the MIME type of the file
     const fileType = file.extension ? mime.lookup(file.extension) || 'application/octet-stream' : 'application/octet-stream';
 
-    // Check if the file's MIME type matches any of the selected MIME types.
-    const isMatch = fileType && selectedMimeTypes.includes(fileType);
+    // Check if the file's MIME type exactly matches the selected MIME type(s).
+    // `mimeTypes` is a single-select dropdown, so the value is a string and
+    // `includes` was String.prototype.includes — a substring match that let
+    // e.g. a .3gp file (video/3gpp) pass a video/3gpp2 filter (#557). Accept
+    // arrays too, so a future multi-select dropdown keeps working unchanged.
+    const isMatch = Array.isArray(selectedMimeTypes)
+        ? selectedMimeTypes.includes(fileType)
+        : selectedMimeTypes === fileType;
 
     return {
       mimeType: fileType || 'unknown',
