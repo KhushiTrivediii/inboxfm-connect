@@ -139,7 +139,8 @@ export interface PieceMetadata {
 
 export type AppConnectionType = 'OAUTH2' | 'SECRET_TEXT' | 'BASIC_AUTH' | 'CUSTOM_AUTH'
 
-export type AppConnectionStatus = 'ACTIVE' | 'ERROR'
+/** Mirrors the backend `AppConnectionStatus` enum (`packages/core/shared/.../app-connection.ts`): placeholder connections are stored with `MISSING`. */
+export type AppConnectionStatus = 'ACTIVE' | 'MISSING' | 'ERROR'
 
 export interface AppConnection {
   id: string
@@ -484,7 +485,7 @@ export type ConnectionsListParams = {
   projectId?: string
   pieceName?: string
   displayName?: string
-  status?: 'ACTIVE' | 'ERROR'
+  status?: AppConnectionStatus
   cursor?: string
   limit?: number
 }
