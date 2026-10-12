@@ -38,7 +38,28 @@ export const agentService = {
             status: params.status ?? 'ENABLED',
         }
 
-        return agentRepo().save(newAgent)
+        // create() is only reachable from the project-replace apply loop, which is
+        // meant to be idempotent against its destination project. Two concurrent
+        // applies (a retried deploy, two replicas) both pass their checks and both
+        // INSERT, and the loser of idx_agent_project_id_external_id failed the
+        // whole replace batch with the raw driver error. The row it was about to
+        // write already exists under the same natural key, so converge on the
+        // winner's row the same way the get-or-create legs do (#469/#509); a
+        // violation that does not resolve to the natural key (e.g. a colliding
+        // explicit id) still propagates raw.
+        try {
+            return await agentRepo().save(newAgent)
+        }
+        catch (error: unknown) {
+            if (!isUniqueViolation(error)) {
+                throw error
+            }
+            const winner = await agentRepo().findOneBy({ projectId: params.projectId, externalId: params.externalId })
+            if (isNil(winner)) {
+                throw error
+            }
+            return winner
+        }
     },
 
     async update(params: {
@@ -103,4 +124,12 @@ export const agentService = {
             ...(params.platformId && { platformId: params.platformId }),
         })
     },
+}
+
+// Postgres surfaces a unique violation as SQLSTATE 23505 on `code`, and pglite puts it
+// on `driverError.code` instead, so a matcher keyed on the message misses half the
+// supported drivers. Same shape as the user-service / managed-authn helpers.
+function isUniqueViolation(error: unknown): boolean {
+    const candidate = error as { code?: string, driverError?: { code?: string } } | null | undefined
+    return candidate?.code === '23505' || candidate?.driverError?.code === '23505'
 }
