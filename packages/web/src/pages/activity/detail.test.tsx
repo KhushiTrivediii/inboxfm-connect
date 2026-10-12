@@ -474,6 +474,43 @@ describe('Execution detail page', () => {
       )
     }, 20000)
 
+    it('resumes from the last received event id when the stream reconnects', async () => {
+      const factory = createSseStreamFactory()
+      const { requests } = stubApi(defaultRoutes(factory))
+      const container = renderDetail()
+
+      await waitFor(() => factory.latest() !== undefined, 5000)
+
+      await act(async () => {
+        factory.latest()?.pushEvent(executionStartedEvent(recordedExecution.id, 1))
+      })
+      await waitFor(() => container.querySelectorAll('[data-testid="stream-event"]').length === 1, 5000)
+
+      const firstStreamUrl = requests.find((request) => request.url.includes('/events'))?.url ?? ''
+      expect(firstStreamUrl).not.toContain('lastEventId')
+
+      // The server closes the stream mid-run (replica churn, deploy, network blip).
+      await act(async () => {
+        factory.latest()?.close()
+      })
+      await waitFor(() => container.querySelector('[data-testid="stream-retry"]') !== null, 5000)
+
+      await clickTestId('stream-retry')
+
+      await waitFor(() => factory.opened.length === 2, 5000)
+
+      // The reconnect presents the cursor instead of restarting from a full replay.
+      const reconnectUrl = [...requests].reverse().find((request) => request.url.includes('/events'))?.url ?? ''
+      expect(reconnectUrl).toContain(`lastEventId=${encodeURIComponent(`${recordedExecution.id}:1`)}`)
+
+      // What already arrived stays on screen; only events the client missed flow.
+      expect(container.querySelectorAll('[data-testid="stream-event"]').length).toBe(1)
+      await act(async () => {
+        factory.latest()?.pushEvent(executionStartedEvent(recordedExecution.id, 2))
+      })
+      await waitFor(() => container.querySelectorAll('[data-testid="stream-event"]').length === 2, 5000)
+    }, 20000)
+
     it('aborts the stream request when the page unmounts', async () => {
       const factory = createSseStreamFactory()
       stubApi(defaultRoutes(factory))
