@@ -1,4 +1,4 @@
-import { apId, isNil } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, apId, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
 import { Agent, AgentOutputField, AgentTool } from '@inboxfm-connect/shared'
 import { repoFactory } from '../core/db/repo-factory'
 import { AgentEntity, AgentSchema } from './agent.entity'
@@ -95,7 +95,28 @@ export const agentService = {
             ...(params.status !== undefined && { status: params.status }),
         }
 
-        return agentRepo().save(updated)
+        // A unique loss on update means the requested externalId is already taken
+        // by a DIFFERENT agent in the same project. Unlike the create race there
+        // is no winner row to converge on - returning the conflicting row would
+        // hand back an entity the caller never named - so map it to the
+        // 409-mapped conflict code (the shape project-role and the ai-provider
+        // create use) instead of leaking the raw driver error with its constraint
+        // name. Violations that cannot come from the (projectId, externalId)
+        // index still propagate raw.
+        try {
+            return await agentRepo().save(updated)
+        }
+        catch (error: unknown) {
+            if (isUniqueViolation(error) && params.externalId !== undefined) {
+                throw new ActivepiecesError({
+                    code: ErrorCode.VALIDATION,
+                    params: {
+                        message: `Agent with externalId "${params.externalId}" already exists in this project`,
+                    },
+                })
+            }
+            throw error
+        }
     },
 
     async delete(params: { id: string, projectId: string, platformId: string }): Promise<void> {
