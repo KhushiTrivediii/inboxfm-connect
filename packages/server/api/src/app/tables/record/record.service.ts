@@ -4,6 +4,7 @@ import { FastifyBaseLogger } from 'fastify'
 import { EntityManager, In, SelectQueryBuilder } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
 import { transaction } from '../../core/db/transaction'
+import { distributedLock } from '../../database/redis-connections'
 import { buildPaginator } from '../../helper/pagination/build-paginator'
 import { paginationHelper } from '../../helper/pagination/pagination-utils'
 import { Order } from '../../helper/pagination/paginator'
@@ -15,6 +16,11 @@ import { CellEntity } from './cell.entity'
 import { RecordEntity, RecordSchema } from './record.entity'
 
 const MAX_BATCH_SIZE = 50
+
+// Lock acquisition budget for record creates, mirroring the field writer lock.
+// Redlock auto-extends while the locked fn runs (distributed-lock-factory), so
+// this only bounds acquisition retries, not the insert itself.
+const RECORD_INSERT_LOCK_TIMEOUT_SECONDS = 30
 
 // Bounded pagination for record listing (issue #400). MAX_PAGE_SIZE follows the
 // piece-metadata pagination convention; the service-level clamp bounds every
@@ -38,7 +44,6 @@ export const recordService = {
         projectId,
         fields,
     }: CreateParams): Promise<PopulatedRecord[]> {
-        await this.validateCount({ projectId, tableId: request.tableId }, request.records.length)
         const existingFields = fields ?? await fieldService.getAll({
             tableId: request.tableId,
             projectId,
@@ -50,24 +55,37 @@ export const recordService = {
             ),
         )
 
-        let insertedRecordIds: string[] = []
-        insertedRecordIds = await transaction(async (entityManager: EntityManager) => {
-            const batches = chunk(validRecords, MAX_BATCH_SIZE)
-            const records: RecordSchema[] = []
-            const insertedRecordIds: string[] = []
+        // The MAX_RECORDS_PER_TABLE check used to run before the insert
+        // transaction, making the quota a check-then-act: two concurrent batch
+        // creates both counted below the limit and both inserted, drifting the
+        // quota by one racing batch. Serialize the count check with the insert
+        // behind a per-table distributedLock - the same writer serialization
+        // field.service relies on - so create, the only records insert path,
+        // always counts the rows the previous create committed.
+        const insertedRecordIds = await distributedLock(system.globalLogger()).runExclusive({
+            key: recordInsertLockKey(request.tableId),
+            timeoutInSeconds: RECORD_INSERT_LOCK_TIMEOUT_SECONDS,
+            fn: async () => {
+                await this.validateCount({ projectId, tableId: request.tableId }, request.records.length)
+                return transaction(async (entityManager: EntityManager) => {
+                    const batches = chunk(validRecords, MAX_BATCH_SIZE)
+                    const records: RecordSchema[] = []
+                    const insertedRecordIds: string[] = []
 
-            for (const batch of batches) {
-                const now = new Date(new Date().getTime() + records.length)
-                const recordInsertions = prepareRecordInsertions(batch, request.tableId, projectId, now)
-                await entityManager.getRepository(RecordEntity).insert(recordInsertions)
+                    for (const batch of batches) {
+                        const now = new Date(new Date().getTime() + records.length)
+                        const recordInsertions = prepareRecordInsertions(batch, request.tableId, projectId, now)
+                        await entityManager.getRepository(RecordEntity).insert(recordInsertions)
 
-                const cellInsertions = prepareCellInsertions(batch, recordInsertions, projectId)
-                await entityManager.getRepository(CellEntity).insert(cellInsertions)
+                        const cellInsertions = prepareCellInsertions(batch, recordInsertions, projectId)
+                        await entityManager.getRepository(CellEntity).insert(cellInsertions)
 
-                insertedRecordIds.push(...recordInsertions.map((r) => r.id))
-            }
+                        insertedRecordIds.push(...recordInsertions.map((r) => r.id))
+                    }
 
-            return insertedRecordIds
+                    return insertedRecordIds
+                })
+            },
         })
 
         const insertedRecords = await recordRepo().find({
@@ -451,6 +469,10 @@ type CellInsertion = {
     fieldId: string
     projectId: string
     value: string
+}
+
+function recordInsertLockKey(tableId: string): string {
+    return `record-insert_${tableId}`
 }
 
 function prepareRecordInsertions(
