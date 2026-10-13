@@ -130,6 +130,40 @@ describe('auth session restore', () => {
     expect(localStorage.getItem('ap-token')).toBeNull()
   })
 
+  it('loads the projects list on signIn so the switcher works without a reload', async () => {
+    // loadSession only fetches /projects when a token was already stored at
+    // mount. The login page signs in mid-session, so without this the
+    // sidebar's project switcher stays empty and shows the hardcoded
+    // "Default Project" placeholder until the user hard-reloads.
+    const { calls } = stubApi([
+      {
+        match: (url) => url.pathname.endsWith('/api/v1/projects'),
+        respond: () => ({
+          status: 200,
+          body: {
+            data: [
+              { id: REAL_PROJECT_ID, displayName: 'InboxFM Main Project', platformId: REAL_USER.platformId },
+              { id: 'proj_second', displayName: 'Second Project', platformId: REAL_USER.platformId },
+            ],
+          },
+        }),
+      },
+    ])
+
+    renderAuth()
+    await waitFor(() => capturedAuth?.isLoading === false)
+    expect(calls.some((c) => c.includes('/api/v1/projects'))).toBe(false)
+
+    act(() => {
+      requireAuth().signIn('real-jwt', REAL_USER, REAL_PROJECT_ID)
+    })
+
+    await waitFor(() => capturedAuth?.projects.length === 2)
+    expect(calls.some((c) => c.includes('/api/v1/projects'))).toBe(true)
+    expect(capturedAuth?.currentProject?.id).toBe(REAL_PROJECT_ID)
+    expect(capturedAuth?.currentProject?.displayName).toBe('InboxFM Main Project')
+  })
+
   it('purges the legacy localStorage user on a fresh sign-in', async () => {
     stubApi([
       {

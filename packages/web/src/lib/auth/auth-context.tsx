@@ -43,6 +43,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setCurrentProjectState(proj)
     }
+    // loadSession ran at mount, when this tab still had no token, so the
+    // projects list is empty and the placeholder above is all the sidebar's
+    // switcher has. Sign-in happens mid-session, so load the list here — the
+    // switcher populates and the real project replaces the "Default Project"
+    // placeholder without requiring a hard reload. Fallback mirrors the
+    // restore path: the signed-in project, else the first project.
+    void apiClient
+      .get<{ data: Project[] }>('/projects')
+      .then(
+        (projectsData) => {
+          const loaded = projectsData.data ?? []
+          setProjects(loaded)
+          const target = projectId ?? apiClient.getProjectId()
+          const matched = loaded.find((p) => p.id === target) ?? loaded[0]
+          if (matched) {
+            setCurrentProject(matched)
+          }
+        },
+        () => {
+          // The session itself is valid; only the switcher stays empty until
+          // the next full reload re-runs loadSession.
+        }
+      )
   }
 
   const resetAuthState = () => {
@@ -92,17 +115,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               password: '12345678',
             })
             const { token: devToken, projectId: devProjectId, ...devUser } = res
+            // signIn loads the projects list and resolves the real project
+            // (the dev-mock id may not match a seeded row), so the explicit
+            // fetch that used to live here would only duplicate the request.
             signIn(devToken, devUser, devProjectId)
-            try {
-              const projectsData = await apiClient.get<{ data: Project[] }>('/projects')
-              if (projectsData?.data?.length) {
-                setProjects(projectsData.data)
-                const matched = projectsData.data.find((p) => p.id === devProjectId) || projectsData.data[0]
-                if (matched) setCurrentProject(matched)
-              }
-            } catch {
-              // Ignore projects fetch error in dev fallback
-            }
             setIsLoading(false)
             return
           } catch {
