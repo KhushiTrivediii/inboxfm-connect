@@ -133,7 +133,7 @@
     "check-migrations": "node ../../../tools/ci/check-migrations.mjs",
     "db": "ts-node --transpile-only -r tsconfig-paths/register -P tsconfig.app.json node_modules/typeorm/cli.js",
     "db-migration": "export $(cat .env.tests | xargs) && export AP_DEV_PIECES='' && export AP_ENVIRONMENT=dev && export AP_EDITION=ce && ts-node --transpile-only -r tsconfig-paths/register -P tsconfig.app.json node_modules/typeorm/cli.js migration:generate -p -d src/app/database/migration-data-source.ts",
-    "test:docker": "UID=\"$(id -u)\" GID=\"$(id -g)\" docker compose --profile full -f docker-compose.test.yml up --exit-code-from app --attach app",
+    "test:docker": "UID=\"$(id -u)\" GID=\"$(id -g)\" docker compose --profile full -f ../../docker-compose.test.yml up --exit-code-from app --attach app",
     "rollback": "node dist/src/rollback.js"
   }
 }
