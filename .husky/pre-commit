@@ -1,8 +1,11 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
-# Prevent committing .env files
-ENV_FILES=$(git diff --cached --name-only | grep '\.env' || true)
+# Prevent committing .env files — but not the tracked templates (.env.dev, .env.example,
+# packages/server/api/.env.tests, packages/tests-e2e/.env.e2e): those are committed on
+# purpose, and blocking every staged change matching `\.env` rejected legitimate edits
+# to them (the hook itself had to be bypassed to commit c9bd59a9a5's .env.dev change).
+ENV_FILES=$(git diff --cached --name-only | grep '\.env' | grep -vE '^(\.env\.(dev|example)|packages/server/api/\.env\.tests|packages/tests-e2e/\.env\.e2e)$' || true)
 if [ -n "$ENV_FILES" ]; then
   echo "Error: Attempting to commit .env files:"
   echo "$ENV_FILES"
