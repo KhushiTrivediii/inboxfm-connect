@@ -333,6 +333,7 @@
       },
       "devDependencies": {
         "@types/node": "24.11.0",
+        "vitest": "3.2.6",
       },
     },
     "packages/connect-sdk": {
@@ -395,7 +396,7 @@
     },
     "packages/core/shared": {
       "name": "@inboxfm-connect/shared",
-      "version": "0.125.0",
+      "version": "0.128.0",
       "dependencies": {
         "@inboxfm-connect/core-execution": "workspace:*",
         "@inboxfm-connect/core-formula": "workspace:*",
@@ -407,7 +408,6 @@
       },
       "devDependencies": {
         "@types/node": "24.11.0",
-        "@types/semver": "7.5.6",
         "vitest": "3.2.6",
       },
     },
@@ -1355,6 +1355,7 @@
       },
       "devDependencies": {
         "tslib": "^2.3.0",
+        "vitest": "3.2.6",
       },
     },
     "packages/integrations/community/bigcommerce": {
@@ -7797,6 +7798,7 @@
       },
       "devDependencies": {
         "tslib": "^2.3.0",
+        "vitest": "3.2.6",
       },
     },
     "packages/integrations/community/retune": {

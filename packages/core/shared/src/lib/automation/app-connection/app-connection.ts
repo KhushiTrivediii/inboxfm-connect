@@ -111,6 +111,12 @@ export type AppConnection<Type extends AppConnectionType = AppConnectionType> = 
     metadata: Metadata | null
     pieceVersion: string
     preSelectForNewProjects: boolean
+    // Bookkeeping of the last explicit health check (POST /v1/app-connections/:id/test):
+    // when it ran, the verdict it reached, and the readable failure reason if it failed.
+    // Optional because rows created before the health-check columns exist have none.
+    testedAt?: string | null
+    testedStatus?: AppConnectionStatus | null
+    testedMessage?: string | null
 }
 
 export type OAuth2AppConnection = AppConnection<AppConnectionType.OAUTH2>
@@ -138,6 +144,9 @@ export const AppConnectionWithoutSensitiveData = z.object({
     pieceVersion: z.string(),
     preSelectForNewProjects: z.boolean(),
     usingSecretManager: z.boolean(),
+    testedAt: Nullable(z.string()),
+    testedStatus: Nullable(z.nativeEnum(AppConnectionStatus)),
+    testedMessage: Nullable(z.string()),
 }).describe('App connection is a connection to an external app.')
 export type AppConnectionWithoutSensitiveData = z.infer<typeof AppConnectionWithoutSensitiveData>
 

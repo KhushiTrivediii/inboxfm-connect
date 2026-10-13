@@ -103,6 +103,9 @@ describe('AppConnectionWithoutSensitiveData schema', () => {
         pieceVersion: '0.1.0',
         preSelectForNewProjects: false,
         usingSecretManager: false,
+        testedAt: null,
+        testedStatus: null,
+        testedMessage: null,
     }
 
     it('parses valid connection object without sensitive data', () => {
@@ -110,6 +113,18 @@ describe('AppConnectionWithoutSensitiveData schema', () => {
         expect(parsed.displayName).toBe('My Slack Connection')
         expect(parsed.type).toBe(AppConnectionType.SECRET_TEXT)
         expect(parsed.status).toBe(AppConnectionStatus.ACTIVE)
+    })
+
+    it('parses persisted health-check bookkeeping', () => {
+        const parsed = AppConnectionWithoutSensitiveData.parse({
+            ...validBaseConnection,
+            testedAt: '2026-10-13T09:00:00.000Z',
+            testedStatus: AppConnectionStatus.ERROR,
+            testedMessage: 'The app rejected the stored credentials.',
+        })
+        expect(parsed.testedAt).toBe('2026-10-13T09:00:00.000Z')
+        expect(parsed.testedStatus).toBe(AppConnectionStatus.ERROR)
+        expect(parsed.testedMessage).toBe('The app rejected the stored credentials.')
     })
 
     it('validates with platform scope and metadata', () => {
