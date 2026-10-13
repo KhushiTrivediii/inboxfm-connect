@@ -305,7 +305,7 @@ export default function ExecutionDetailPage() {
                 <span>Event stream</span>
               </CardTitle>
               <CardDescription className="text-xs">
-                Live server-sent events for this execution. History is not replayed.
+                Live server-sent events for this execution. History replays on connect.
               </CardDescription>
             </CardHeader>
             <CardContent>
