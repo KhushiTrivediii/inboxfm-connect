@@ -233,6 +233,8 @@ export const createPieceCommand = new Command('create')
     ];
 
     const answers = await inquirer.prompt(questions);
-    createPiece(answers.pieceName, answers.packageName, answers.pieceType);
+    // Await so failures inside createPiece (write errors, invalid names) reject
+    // the commander action instead of becoming an unhandled rejection.
+    await createPiece(answers.pieceName, answers.packageName, answers.pieceType);
   });
 
