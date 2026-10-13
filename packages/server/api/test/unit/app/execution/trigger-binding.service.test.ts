@@ -1,9 +1,40 @@
+import { ActivepiecesError } from '@inboxfm-connect/core-utils'
 import { TriggerBinding, TriggerBindingStatus, TriggerHookType } from '@inboxfm-connect/shared'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { executeEngineHook } from '../../../../src/app/execution/trigger-binding/trigger-binding.service'
+import { executeEngineHook, triggerBindingService } from '../../../../src/app/execution/trigger-binding/trigger-binding.service'
 import { system } from '../../../../src/app/helper/system/system'
 import { AppSystemProp } from '../../../../src/app/helper/system/system-props'
 import { userInteractionWatcher } from '../../../../src/app/helper/user-interaction/user-interaction-watcher'
+
+const schedulerSpies = vi.hoisted(() => ({
+    cron: vi.fn(),
+    cancel: vi.fn(),
+}))
+
+const repositoryMock = vi.hoisted(() => ({
+    findOneBy: vi.fn(),
+    save: vi.fn(),
+}))
+
+vi.mock('@inboxfm-connect/scheduler', async (importOriginal) => {
+    // Keep the real cron parser (the service validates expressions with it) but stub
+    // the scheduler so the in-memory job registration is observable and side-effect free.
+    const actual = await importOriginal<typeof import('@inboxfm-connect/scheduler')>()
+    return {
+        ...actual,
+        scheduler: {
+            cron: schedulerSpies.cron,
+            cancel: schedulerSpies.cancel,
+        },
+    }
+})
+
+vi.mock('../../../../src/app/database/database-connection', () => ({
+    databaseConnection: () => ({
+        getRepository: () => repositoryMock,
+    }),
+}))
+
 
 const createSampleBinding = (id = 'tb_test_webhook_123'): TriggerBinding => ({
     id,
@@ -163,3 +194,84 @@ describe('TriggerBinding Domain & Safety Audit', () => {
         })
     })
 })
+
+describe('TriggerBinding Schedule Re-sync on Update', () => {
+    beforeEach(() => {
+        schedulerSpies.cron.mockReset().mockResolvedValue('job-id')
+        schedulerSpies.cancel.mockReset().mockResolvedValue(undefined)
+        repositoryMock.findOneBy.mockReset()
+        repositoryMock.save.mockReset().mockImplementation((entity: TriggerBinding) => entity)
+    })
+
+    const existingBinding = (id: string, settings: TriggerBinding['settings']): TriggerBinding => ({
+        ...createSampleBinding(id),
+        settings,
+    })
+
+    it('re-registers the in-memory cron job when settings.cronExpression changes while staying ENABLED', async () => {
+        const binding = existingBinding('tb_resync_001', { cronExpression: '0 0 * * *' })
+        repositoryMock.findOneBy.mockResolvedValue(binding)
+
+        await triggerBindingService.update({
+            id: binding.id,
+            projectId: binding.projectId,
+            platformId: binding.platformId,
+            request: { settings: { cronExpression: '30 12 * * *' } },
+        })
+
+        // Old jobs are torn down so a stale schedule cannot keep firing…
+        expect(schedulerSpies.cancel).toHaveBeenCalledWith(`trigger-cron-${binding.id}`)
+        expect(schedulerSpies.cancel).toHaveBeenCalledWith(`trigger-renew-${binding.id}`)
+        // …and the run job is re-registered with the NEW expression.
+        expect(schedulerSpies.cron).toHaveBeenCalledWith(expect.objectContaining({
+            name: `trigger-cron-${binding.id}`,
+            cronExpression: '30 12 * * *',
+        }))
+    })
+
+    it('stops scheduling when the updated settings remove the cron expression', async () => {
+        const binding = existingBinding('tb_resync_002', { cronExpression: '0 0 * * *' })
+        repositoryMock.findOneBy.mockResolvedValue(binding)
+
+        await triggerBindingService.update({
+            id: binding.id,
+            projectId: binding.projectId,
+            platformId: binding.platformId,
+            request: { settings: {} },
+        })
+
+        expect(schedulerSpies.cancel).toHaveBeenCalledWith(`trigger-cron-${binding.id}`)
+        expect(schedulerSpies.cron).not.toHaveBeenCalled()
+    })
+
+    it('rejects an invalid cron expression and leaves the previous schedule intact', async () => {
+        const binding = existingBinding('tb_resync_003', { cronExpression: '0 0 * * *' })
+        repositoryMock.findOneBy.mockResolvedValue(binding)
+
+        await expect(triggerBindingService.update({
+            id: binding.id,
+            projectId: binding.projectId,
+            platformId: binding.platformId,
+            request: { settings: { cronExpression: 'not a cron' } },
+        })).rejects.toThrow(ActivepiecesError)
+
+        expect(schedulerSpies.cancel).not.toHaveBeenCalled()
+        expect(schedulerSpies.cron).not.toHaveBeenCalled()
+    })
+
+    it('does not re-register the schedule for updates that cannot affect scheduling', async () => {
+        const binding = existingBinding('tb_resync_004', { cronExpression: '0 0 * * *' })
+        repositoryMock.findOneBy.mockResolvedValue(binding)
+
+        await triggerBindingService.update({
+            id: binding.id,
+            projectId: binding.projectId,
+            platformId: binding.platformId,
+            request: { promptTemplate: 'New prompt' },
+        })
+
+        expect(schedulerSpies.cron).not.toHaveBeenCalled()
+        expect(schedulerSpies.cancel).not.toHaveBeenCalled()
+    })
+})
+

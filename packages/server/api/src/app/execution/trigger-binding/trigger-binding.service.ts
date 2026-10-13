@@ -140,6 +140,17 @@ export const triggerBindingService = {
             await executeEngineHook({ binding: saved, hookType: TriggerHookType.ON_DISABLE })
             await unsyncTriggerSchedule(saved.id)
         }
+        else if (oldStatus === TriggerBindingStatus.ENABLED && saved.status === TriggerBindingStatus.ENABLED && touchesSchedule(request)) {
+            // An update that keeps the binding enabled but changes WHEN it fires must
+            // re-register the in-memory jobs: the scheduler closures captured the cron
+            // expression at registration time, so without this a changed cron keeps
+            // firing on the old schedule, and a removed cron/renewCron keeps firing
+            // forever, until the next process restart. Validate before unsyncing so an
+            // invalid expression rejects the request with the previous schedule intact.
+            validateBindingCronExpressions(saved)
+            await unsyncTriggerSchedule(saved.id)
+            await syncTriggerSchedule(saved)
+        }
 
         return saved
     },
@@ -278,9 +289,36 @@ async function claimTriggerTick(bindingId: string, cronType: 'run' | 'renew', cr
     return true
 }
 
-async function syncTriggerSchedule(binding: TriggerBinding): Promise<void> {
+// The scheduler closures registered by syncTriggerSchedule capture these values at
+// registration time; every other binding field is re-read from the database on each
+// fire, so only these require a schedule re-registration when the row changes.
+function getScheduleSettings(binding: TriggerBinding): { cronExpr: string | null, renewCron: string | null, timezone: string } {
     const cronExpr = typeof binding.settings?.cronExpression === 'string' ? binding.settings.cronExpression : null
+    const renewCron = typeof binding.settings?.renewCronExpression === 'string' ? binding.settings.renewCronExpression : null
     const timezone = typeof binding.settings?.timezone === 'string' ? binding.settings.timezone : 'UTC'
+    return { cronExpr, renewCron, timezone }
+}
+
+function touchesSchedule(request: UpdateTriggerBindingRequest): boolean {
+    return request.settings !== undefined
+        || request.pieceName !== undefined
+        || request.pieceVersion !== undefined
+}
+
+function validateBindingCronExpressions(binding: TriggerBinding): void {
+    const { cronExpr, renewCron } = getScheduleSettings(binding)
+    for (const [field, expression] of [['cronExpression', cronExpr], ['renewCronExpression', renewCron]] as const) {
+        if (expression !== null && !cronParser.validateCronExpression(expression)) {
+            throw new ActivepiecesError({
+                code: ErrorCode.VALIDATION,
+                params: { message: `Invalid ${field} cron expression: ${expression}` },
+            })
+        }
+    }
+}
+
+async function syncTriggerSchedule(binding: TriggerBinding): Promise<void> {
+    const { cronExpr, renewCron, timezone } = getScheduleSettings(binding)
     if (cronExpr) {
         if (!cronParser.validateCronExpression(cronExpr)) {
             throw new ActivepiecesError({
@@ -307,7 +345,6 @@ async function syncTriggerSchedule(binding: TriggerBinding): Promise<void> {
         })
     }
 
-    const renewCron = typeof binding.settings?.renewCronExpression === 'string' ? binding.settings.renewCronExpression : null
     if (renewCron) {
         if (!cronParser.validateCronExpression(renewCron)) {
             await scheduler.cancel(`trigger-cron-${binding.id}`)
