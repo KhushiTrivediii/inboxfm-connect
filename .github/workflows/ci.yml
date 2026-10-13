@@ -49,6 +49,7 @@ jobs:
       - name: Check licensing boundaries, notices and N+1 queries
         run: |
           node --test tools/ci/*.test.mjs
+          npm run test-tools
           node tools/ci/check-license-boundaries.mjs
           node tools/ci/check-n-plus-one.mjs
       - name: Verify benchmark regression gate
