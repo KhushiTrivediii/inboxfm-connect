@@ -4,6 +4,7 @@ import { FastifyInstance } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appConnectionService, appConnectionsRepo } from '../../../../src/app/app-connection/app-connection-service/app-connection-service'
+import { encryptUtils } from '../../../../src/app/helper/encryption'
 import { createTestContext, TestContext } from '../../../helpers/test-context'
 import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/test-setup'
 
@@ -62,10 +63,35 @@ describe('POST /v1/app-connections/:id/test (Issue #188)', () => {
         expect(body.ok).toBe(true)
         expect(body.status).toBe(AppConnectionStatus.ACTIVE)
         expect(typeof body.testedAt).toBe('string')
+
+        // The verdict is persisted on the row, so GET serves it after a reload too.
+        const stored = await appConnectionsRepo().findOneByOrFail({ id })
+        expect(stored.status).toBe(AppConnectionStatus.ACTIVE)
+        expect(stored.testedAt).toBe(body.testedAt)
+        expect(stored.testedStatus).toBe(AppConnectionStatus.ACTIVE)
+        expect(stored.testedMessage).toBeNull()
+
+        const fetched = await app!.inject({
+            method: 'GET',
+            url: `/api/v1/connections/${id}`,
+            headers: { authorization: `Bearer ${ctx.token}` },
+        })
+        expect(fetched.statusCode).toBe(StatusCodes.OK)
+        const fetchedBody = fetched.json()
+        expect(fetchedBody.testedAt).toBe(body.testedAt)
+        expect(fetchedBody.testedStatus).toBe(AppConnectionStatus.ACTIVE)
+        expect(fetchedBody.testedMessage).toBeNull()
     })
 
-    it('flips an ERROR connection back to ACTIVE on a passing test', async () => {
-        const { id } = await upsertConnection({ ctx, externalId: 'conn-recovered', status: AppConnectionStatus.ERROR })
+    /**
+     * Regression (issue #188): an ERROR row used to be rubber-stamped back to
+     * ACTIVE with ok:true — without any verification running at all, because
+     * needRefresh short-circuits on the stored ERROR status. A secret-text
+     * connection has nothing refreshable to re-verify, so the honest verdict is
+     * a failure that tells the user to reconnect.
+     */
+    it('reports failure for an ERROR connection with nothing refreshable to verify', async () => {
+        const { id } = await upsertConnection({ ctx, externalId: 'conn-stays-error', status: AppConnectionStatus.ERROR })
 
         const response = await app!.inject({
             method: 'POST',
@@ -74,8 +100,15 @@ describe('POST /v1/app-connections/:id/test (Issue #188)', () => {
         })
 
         expect(response.statusCode).toBe(StatusCodes.OK)
-        expect(response.json().ok).toBe(true)
-        expect(response.json().status).toBe(AppConnectionStatus.ACTIVE)
+        const body = response.json()
+        expect(body.ok).toBe(false)
+        expect(body.status).toBe(AppConnectionStatus.ERROR)
+        expect(body.message).toBeDefined()
+
+        const stored = await appConnectionsRepo().findOneByOrFail({ id })
+        expect(stored.status).toBe(AppConnectionStatus.ERROR)
+        expect(stored.testedStatus).toBe(AppConnectionStatus.ERROR)
+        expect(stored.testedMessage).toContain('Reconnect the app')
     })
 
     /**
@@ -102,13 +135,18 @@ describe('POST /v1/app-connections/:id/test (Issue #188)', () => {
         expect(stored.status).toBe(AppConnectionStatus.ACTIVE)
     })
 
-    it('persists ERROR on the row when the check fails, matching the returned verdict', async () => {
+    it('fails the check and persists ERROR when the stored value cannot be decrypted', async () => {
         const { id } = await upsertConnection({ ctx, externalId: 'conn-goes-bad', status: AppConnectionStatus.ACTIVE })
 
-        // Break decryption so the health check takes its failure path.
+        // Corrupt the ciphertext (a value that decrypts to garbage instead of
+        // adding inert json keys, which decryptObject silently ignores).
         const repo = appConnectionsRepo()
-        const encrypted = await repo.findOneByOrFail({ id })
-        await repo.update({ id }, { value: { ...encrypted.value, __broken: true } })
+        await repo.update({ id }, {
+            value: {
+                iv: '0'.repeat(32),
+                data: 'deadbeef',
+            },
+        })
 
         const response = await app!.inject({
             method: 'POST',
@@ -116,18 +154,78 @@ describe('POST /v1/app-connections/:id/test (Issue #188)', () => {
             headers: { authorization: `Bearer ${ctx.token}` },
         })
 
+        expect(response.statusCode).toBe(StatusCodes.OK)
         const body = response.json()
-        if (body.ok === false) {
-            expect(body.status).toBe(AppConnectionStatus.ERROR)
-            const stored = await appConnectionsRepo().findOneByOrFail({ id })
-            expect(stored.status).toBe(AppConnectionStatus.ERROR)
+        expect(body.ok).toBe(false)
+        expect(body.status).toBe(AppConnectionStatus.ERROR)
+        expect(body.message).toContain('decrypted')
+
+        const stored = await appConnectionsRepo().findOneByOrFail({ id })
+        expect(stored.status).toBe(AppConnectionStatus.ERROR)
+        expect(stored.testedStatus).toBe(AppConnectionStatus.ERROR)
+        expect(stored.testedMessage).toContain('decrypted')
+    })
+
+    /**
+     * Regression (issue #188): a refresh that fails for a transient reason
+     * (provider unreachable, SSRF-guarded token URL) must fail the verdict but
+     * must NOT flip the row to ERROR — that would stop executions from retrying
+     * the refresh. Previously any non-null return from the refresh machinery was
+     * reported as healthy.
+     */
+    it('fails the verdict without marking the row ERROR on a transient refresh failure', async () => {
+        const expiredOauth2Value = {
+            type: AppConnectionType.OAUTH2,
+            client_id: 'cid',
+            client_secret: 'csecret',
+            redirect_url: 'http://localhost:3000/callback',
+            token_type: 'Bearer',
+            access_token: 'stale',
+            refresh_token: 'rt',
+            claimed_at: 0,
+            expires_in: 3600,
+            scope: 'read',
+            token_url: 'http://127.0.0.1:9/token',
+            grant_type: 'authorization_code',
+            data: {},
         }
-        else {
-            // The corrupted value did not break this fixture's decrypt path; the
-            // contract asserted above (returned verdict == stored verdict) is
-            // covered by the preceding test either way.
-            expect(body.status).toBe(AppConnectionStatus.ACTIVE)
+        const connection = {
+            id: apId(),
+            created: new Date(),
+            updated: new Date(),
+            displayName: 'Unreachable OAuth2',
+            externalId: 'conn-transient',
+            type: AppConnectionType.OAUTH2,
+            status: AppConnectionStatus.ACTIVE,
+            platformId: ctx.platform.id,
+            pieceName: '@inboxfm-connect/piece-slack',
+            ownerId: null,
+            projectIds: [ctx.project.id],
+            scope: AppConnectionScope.PROJECT,
+            value: await encryptUtils.encryptObject(expiredOauth2Value),
+            metadata: null,
+            pieceVersion: '1.0.0',
+            preSelectForNewProjects: false,
         }
+        await appConnectionsRepo().upsert(connection, ['id'])
+
+        const response = await app!.inject({
+            method: 'POST',
+            url: `/api/v1/connections/${connection.id}/test`,
+            headers: { authorization: `Bearer ${ctx.token}` },
+        })
+
+        expect(response.statusCode).toBe(StatusCodes.OK)
+        const body = response.json()
+        expect(body.ok).toBe(false)
+        expect(body.status).toBe(AppConnectionStatus.ERROR)
+        expect(body.message).toBeTruthy()
+
+        const stored = await appConnectionsRepo().findOneByOrFail({ id: connection.id })
+        // Row stays ACTIVE: a transient failure is not evidence the connection is bad.
+        expect(stored.status).toBe(AppConnectionStatus.ACTIVE)
+        expect(stored.testedStatus).toBe(AppConnectionStatus.ERROR)
+        expect(stored.testedMessage).toBeTruthy()
     })
 
     it('returns 404 for an unknown connection id', async () => {
