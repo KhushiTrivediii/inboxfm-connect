@@ -8,6 +8,7 @@ import { distributedLock } from '../../database/redis-connections'
 import { projectMemberService } from '../../ee/projects/project-members/project-member.service'
 import { containsSecretManagerReference, secretManagersService } from '../../ee/secret-managers/secret-managers.service'
 import { encryptUtils } from '../../helper/encryption'
+import { exceptionHandler } from '../../helper/exception-handler'
 import { buildPaginator } from '../../helper/pagination/build-paginator'
 import { paginationHelper } from '../../helper/pagination/pagination-utils'
 import { system } from '../../helper/system/system'
@@ -24,6 +25,7 @@ import {
     AppConnectionSchema,
 } from '../app-connection.entity'
 import { appConnectionHandler } from './app-connection.handler'
+import type { TestConnectionOutcome } from './app-connection.handler'
 import { oauth2Handler } from './oauth2'
 import { oauth2Util } from './oauth2/oauth2-util'
 export const appConnectionsRepo = repoFactory(AppConnectionEntity)
@@ -231,18 +233,35 @@ export const appConnectionService = (log: FastifyBaseLogger) => ({
             })
         }
         const testedAt = new Date().toISOString()
+        let outcome: TestConnectionOutcome
         try {
-            const refreshed = await this.decryptAndRefreshConnection(encryptedAppConnection, projectId, log)
-            if (isNil(refreshed)) {
-                return await markConnectionTested({ id, status: AppConnectionStatus.ERROR, testedAt, message: 'The connection could not be refreshed.' })
-            }
-            return await markConnectionTested({ id, status: AppConnectionStatus.ACTIVE, testedAt })
+            outcome = await appConnectionHandler(log).lockAndTestConnection({
+                platformId,
+                projectId,
+                externalId: encryptedAppConnection.externalId,
+                log,
+            })
         }
         catch (error) {
-            log.warn({ error, connection: { id } }, '[appConnectionService#testConnection] Health check failed')
-            const message = error instanceof Error && error.message ? error.message : 'The connection test failed.'
-            return markConnectionTested({ id, status: AppConnectionStatus.ERROR, testedAt, message })
+            // Infra failures (lock unavailable, db write error) must not 500 the
+            // route — the check failed, but the connection is not proven bad.
+            exceptionHandler.handle(error, log)
+            outcome = {
+                ok: false,
+                markRowError: false,
+                message: 'The connection could not be tested. Try again in a moment.',
+            }
         }
+        log.info({ connection: { id }, ok: outcome.ok, markRowError: outcome.markRowError }, 'App connection health check finished')
+        return markConnectionTested({
+            id,
+            testedAt,
+            rowStatus: outcome.ok
+                ? AppConnectionStatus.ACTIVE
+                : (outcome.markRowError ? AppConnectionStatus.ERROR : null),
+            verdict: outcome.ok ? AppConnectionStatus.ACTIVE : AppConnectionStatus.ERROR,
+            message: outcome.message,
+        })
     },
     async getOne({
         projectId,
@@ -511,25 +530,50 @@ const fetchProjectsForPlatform = async (projectIds: string[], platformId: string
     return new Map(projects.map((project) => [project.id, { id: project.id, displayName: project.displayName, type: project.type }]))
 }
 
-async function markConnectionTested({ id, status, testedAt, message }: {
-    id: string
-    status: AppConnectionStatus
+async function markConnectionTested({ id, testedAt, rowStatus, verdict, message }: {
+    id: AppConnectionId
     testedAt: string
+    // The row's health status to write, or null to leave it alone — a transient
+    // failure (network blip, lock outage) is not evidence the connection is bad,
+    // so it must not stop executions from retrying a refresh.
+    rowStatus: AppConnectionStatus | null
+    // The health check's own verdict, always persisted with the timestamp so the
+    // detail page can show "last tested <when>: <result>" across reloads.
+    verdict: AppConnectionStatus
     message?: string
 }): Promise<TestConnectionResult> {
     // Plain, unconditional write. A previous revision guarded this with
     // `current.status !== status` and claimed it avoided clobbering a newer
     // result, but that condition is true precisely when the stored status
     // differs - i.e. exactly the stale case - so the guard inverted its own
-    // intent while costing an extra SELECT. `testedAt` is not a persisted
-    // column, so there is nothing to compare an ordering against.
+    // intent while costing an extra SELECT.
     //
     // Consequence, stated plainly: if two health checks race, the slower one
     // can write its older verdict last. That is accepted - the next check
-    // self-heals the row, and a conditional write would need a persisted
-    // timestamp plus a compare-and-set to be any safer.
-    await appConnectionsRepo().update({ id }, { status })
-    return { ok: status === AppConnectionStatus.ACTIVE, status, testedAt, message }
+    // self-heals the row, and a conditional write would need a compare-and-set
+    // on `testedAt` to be any safer.
+    await appConnectionsRepo().update({ id }, {
+        ...(isNil(rowStatus) ? {} : { status: rowStatus }),
+        testedAt,
+        testedStatus: verdict,
+        testedMessage: sanitizeTestMessage(message),
+    })
+    return {
+        ok: verdict === AppConnectionStatus.ACTIVE,
+        status: verdict,
+        testedAt,
+        message,
+    }
+}
+
+// The failure message can quote external provider responses (error_description)
+// and is persisted to a varchar column: strip control characters postgres
+// rejects and cap the length so an oversized provider payload can't bloat rows.
+function sanitizeTestMessage(message: string | undefined): string | null {
+    if (isNil(message)) {
+        return null
+    }
+    return message.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, 512) || null
 }
 
 async function assertProjectIds(projectIds: ProjectId[], platformId: string): Promise<void> {

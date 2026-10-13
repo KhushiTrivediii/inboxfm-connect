@@ -154,6 +154,10 @@ export interface AppConnection {
   /** Always present in the backend response (`AppConnectionWithoutSensitiveData` declares it required). */
   externalId: string
   projectIds: string[]
+  /** Health-check bookkeeping from POST /connections/:id/test; null until first test. */
+  testedAt?: string | null
+  testedStatus?: AppConnectionStatus | null
+  testedMessage?: string | null
 }
 
 export interface TestConnectionResult {

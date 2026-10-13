@@ -49,6 +49,9 @@ export interface ConnectionContract {
   pieceVersion: string
   preSelectForNewProjects: boolean
   usingSecretManager: boolean
+  testedAt?: string | null
+  testedStatus?: ('ACTIVE' | 'MISSING' | 'ERROR') | null
+  testedMessage?: string | null
 }
 
 export interface ConnectionsPageContract {
@@ -89,6 +92,9 @@ export interface ConnectionsPageContract {
     pieceVersion: string
     preSelectForNewProjects: boolean
     usingSecretManager: boolean
+    testedAt?: string | null
+    testedStatus?: ('ACTIVE' | 'MISSING' | 'ERROR') | null
+    testedMessage?: string | null
   }[]
   next?: string | null
   previous?: string | null

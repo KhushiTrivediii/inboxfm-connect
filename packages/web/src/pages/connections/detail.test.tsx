@@ -110,6 +110,49 @@ describe('Connection detail page', () => {
     expect(deleteButton).not.toBeNull()
   }, 15000)
 
+  /**
+   * The last-tested verdict is persisted on the row (POST /test writes
+   * testedAt/testedStatus/testedMessage), so it must survive a fresh page load —
+   * not only exist in the component's state right after a click.
+   */
+  it('shows the persisted last-tested result without running a test', async () => {
+    const testedAt = '2026-10-13T09:30:00.000Z'
+    global.fetch = vi.fn(async (): Promise<Response> => {
+      return new Response(
+        JSON.stringify(
+          githubConnection('conn_1', 'Mihir GitHub', {
+            testedAt,
+            testedStatus: 'ERROR',
+            testedMessage: 'The app rejected the stored credentials.',
+          })
+        ),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    })
+
+    const container = renderDetail('conn_1')
+
+    await waitFor(() => container.textContent?.includes('Mihir GitHub') === true)
+
+    expect(container.textContent).toContain('Last tested')
+    expect(container.textContent).toContain(new Date(testedAt).toLocaleString())
+    expect(container.textContent).toContain('Test result')
+    expect(container.textContent).toContain('The app rejected the stored credentials.')
+  }, 15000)
+
+  it('shows an em dash for last tested when the connection was never tested', async () => {
+    stubRoutes()
+    const container = renderDetail('conn_1')
+
+    await waitFor(() => container.textContent?.includes('Mihir GitHub') === true)
+
+    const lastTestedRow = Array.from(container.querySelectorAll('*')).find((node) =>
+      node.textContent?.trim().startsWith('Last tested')
+    )
+    expect(lastTestedRow?.textContent).toContain('—')
+    expect(container.textContent).not.toContain('Test result')
+  }, 15000)
+
   it('shows the not-found state for an unknown connection id', async () => {
     stubRoutes()
     const container = renderDetail('missing')
