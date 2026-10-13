@@ -30,9 +30,16 @@ import type {
 } from '@inboxfm-connect/shared'
 import { toast } from 'sonner'
 
+// Mirrors the api-keys page gate: backend write endpoints for AI providers
+// accept only this platform role.
+const PLATFORM_ADMIN_ROLE = 'ADMIN'
+
 export default function SettingsPage() {
   const { user, currentProject } = useAuth()
   const { theme, setTheme } = useTheme()
+  // AI provider create/update/delete endpoints are `securityAccess.platformAdminOnly`
+  // on the backend, so the mutation affordances must not render for other users.
+  const isPlatformAdmin = user?.platformRole === PLATFORM_ADMIN_ROLE
   const billingQuery = useBillingInfoQuery()
   const portalMutation = useCreateBillingPortalMutation()
   const checkoutMutation = useCreateBillingCheckoutMutation()
@@ -264,14 +271,16 @@ export default function SettingsPage() {
                   Configure large language model credentials for agent automations, tools, and chat.
                 </CardDescription>
               </div>
-              <Button
-                size="sm"
-                className="gap-1.5 text-xs shadow-xs"
-                onClick={handleOpenAddProvider}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Add Provider</span>
-              </Button>
+              {isPlatformAdmin && (
+                <Button
+                  size="sm"
+                  className="gap-1.5 text-xs shadow-xs"
+                  onClick={handleOpenAddProvider}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Provider</span>
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -291,12 +300,13 @@ export default function SettingsPage() {
                 icon={Bot}
                 title="No AI providers configured"
                 description="Connect an API key from OpenAI, Anthropic, Google Gemini, or AWS Bedrock to empower AI agent capabilities."
-                actionLabel="Add AI Provider"
-                onAction={handleOpenAddProvider}
+                actionLabel={isPlatformAdmin ? 'Add AI Provider' : undefined}
+                onAction={isPlatformAdmin ? handleOpenAddProvider : undefined}
               />
             ) : (
               <AIProvidersTable
                 providers={aiProviders}
+                canManage={isPlatformAdmin}
                 onEdit={handleOpenEditProvider}
                 onDelete={(p) => setDeletingProvider(p)}
                 onBrowseModels={(p) => setBrowsingProvider(p)}

@@ -273,6 +273,52 @@ describe('AI Provider management in Settings page', () => {
     expect(document.body.textContent).toContain('Configure AI Provider')
   })
 
+  it('surfaces the server-side credential validation reason from the { code, params } error body', async () => {
+    // The API's error handler serializes ActivepiecesError as `{ code, params }`
+    // with no top-level `message` — the human-readable reason (which provider
+    // failed credential validation) lives in `params.message`.
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: defaultBilling }) },
+      { match: AI_PROVIDERS_MATCH, respond: () => ({ body: sampleProviders }) },
+      {
+        match: AI_PROVIDERS_CREATE_MATCH,
+        respond: () => ({
+          status: 400,
+          body: {
+            code: 'INVALID_AI_PROVIDER_CREDENTIALS',
+            params: { provider: AIProviderName.OPENAI, message: 'Failed to validate credentials for OpenAI' },
+          },
+        }),
+      },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('Add Provider') === true)
+
+    const addBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Add Provider')
+    )
+
+    await act(async () => {
+      addBtn?.click()
+    })
+
+    await waitFor(() => document.body.textContent?.includes('Configure AI Provider') === true)
+
+    await setInputValue('#api-key-input', 'sk-invalid-test-key')
+    await submitDialogForm()
+
+    await waitFor(
+      () => document.body.textContent?.includes('Failed to validate credentials for OpenAI') === true
+    )
+    // The generic status fallback must not replace the server-provided reason.
+    expect(document.body.textContent).not.toContain('Request failed with status 400')
+    expect(document.body.textContent).toContain('Validation Failed')
+    // Dialog must remain open so the user can fix the key.
+    expect(document.body.textContent).toContain('Configure AI Provider')
+  })
+
   it('browses models via GET /:provider/models and filters them', async () => {
     stubApi([
       { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
@@ -616,5 +662,55 @@ describe('AI Provider management in Settings page', () => {
       })
     )
     toastErrorSpy.mockRestore()
+  })
+
+  it('hides AI provider management controls from non-admin users', async () => {
+    // Backend create/update/delete routes are platformAdminOnly; the matching
+    // affordances must not render for a non-admin platform member.
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser({ platformRole: 'MEMBER' })))
+
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: defaultBilling }) },
+      { match: AI_PROVIDERS_MATCH, respond: () => ({ body: sampleProviders }) },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('Anthropic Claude') === true)
+
+    const addBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Add Provider')
+    )
+    expect(addBtn).toBeUndefined()
+
+    expect(container.querySelector('button[aria-label="Edit Anthropic Claude"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="Delete Anthropic Claude"]')).toBeNull()
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle chat for Anthropic Claude"]'
+    )
+    expect(toggle).not.toBeNull()
+    expect(toggle?.hasAttribute('disabled')).toBe(true)
+
+    // Read-only affordances stay available to everyone.
+    expect(container.querySelector('button[aria-label="Browse models for OpenAI Production"]')).not.toBeNull()
+  })
+
+  it('omits the empty-state add action for non-admin users', async () => {
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser({ platformRole: 'MEMBER' })))
+
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: defaultBilling }) },
+      { match: AI_PROVIDERS_MATCH, respond: () => ({ body: [] }) },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('No AI providers configured') === true)
+
+    const actionBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Add AI Provider')
+    )
+    expect(actionBtn).toBeUndefined()
   })
 })
