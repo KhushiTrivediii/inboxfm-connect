@@ -18,7 +18,12 @@ const FEATURE_DOC = '.agents/features/ee-platform.md'
 
 function collectSourceFiles(dir, collected = []) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue
+        // `dist` too: tsc emits declarations into `dist/src/**/*.d.ts` (tsconfig.app.json has
+        // rootDir ".", outDir "./dist", declaration: true), and a `.d.ts` name passes the
+        // `.ts`/`.tsx` filter below with `src` still in its path. After any local build,
+        // platform-plan.service.d.ts would sit next to the real source and double-count the
+        // identifier, flipping the "wired vs vestigial" branch below purely on build state.
+        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
         const entryPath = path.join(dir, entry.name)
         if (entry.isDirectory()) collectSourceFiles(entryPath, collected)
         else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) collected.push(entryPath)
@@ -27,7 +32,10 @@ function collectSourceFiles(dir, collected = []) {
 }
 
 function filesMentioning(identifier, sources) {
-    const pattern = new RegExp(`\\b${identifier}\\b`, 'g')
+    // No `g` flag: with it, `.test` is stateful across files (lastIndex persists after a
+    // match), so a file whose mention sits before the previous file's match end is missed
+    // and the identifier is undercounted — the wrong branch below can then pass.
+    const pattern = new RegExp(`\\b${identifier}\\b`)
     return sources.filter((file) => pattern.test(fs.readFileSync(file, 'utf8')))
 }
 
