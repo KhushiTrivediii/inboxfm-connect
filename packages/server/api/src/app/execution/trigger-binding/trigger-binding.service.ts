@@ -146,8 +146,8 @@ export const triggerBindingService = {
             // expression at registration time, so without this a changed cron keeps
             // firing on the old schedule, and a removed cron/renewCron keeps firing
             // forever, until the next process restart. Validate before unsyncing so an
-            // invalid expression rejects the request with the previous schedule intact.
-            validateBindingCronExpressions(saved)
+            // invalid expression/timezone rejects the request with the previous schedule intact.
+            validateBindingSchedule(saved)
             await unsyncTriggerSchedule(saved.id)
             await syncTriggerSchedule(saved)
         }
@@ -305,8 +305,28 @@ function touchesSchedule(request: UpdateTriggerBindingRequest): boolean {
         || request.pieceVersion !== undefined
 }
 
-function validateBindingCronExpressions(binding: TriggerBinding): void {
-    const { cronExpr, renewCron } = getScheduleSettings(binding)
+function isValidTimezone(timezone: string): boolean {
+    try {
+        new Intl.DateTimeFormat(undefined, { timeZone: timezone })
+        return true
+    }
+    catch {
+        return false
+    }
+}
+
+function validateBindingSchedule(binding: TriggerBinding): void {
+    const { cronExpr, renewCron, timezone } = getScheduleSettings(binding)
+    // node-cron builds an Intl.DateTimeFormat for the timezone, which throws a raw
+    // RangeError for an invalid one — surfacing as a 500 on create/update and as a
+    // silently unregistered binding on boot. Reject it with a clean VALIDATION error
+    // instead (mirrors scheduledTaskService.isValidTimezone).
+    if ((cronExpr !== null || renewCron !== null) && !isValidTimezone(timezone)) {
+        throw new ActivepiecesError({
+            code: ErrorCode.VALIDATION,
+            params: { message: `Invalid timezone: ${timezone}` },
+        })
+    }
     for (const [field, expression] of [['cronExpression', cronExpr], ['renewCronExpression', renewCron]] as const) {
         if (expression !== null && !cronParser.validateCronExpression(expression)) {
             throw new ActivepiecesError({
@@ -319,6 +339,7 @@ function validateBindingCronExpressions(binding: TriggerBinding): void {
 
 async function syncTriggerSchedule(binding: TriggerBinding): Promise<void> {
     const { cronExpr, renewCron, timezone } = getScheduleSettings(binding)
+    validateBindingSchedule(binding)
     if (cronExpr) {
         if (!cronParser.validateCronExpression(cronExpr)) {
             throw new ActivepiecesError({

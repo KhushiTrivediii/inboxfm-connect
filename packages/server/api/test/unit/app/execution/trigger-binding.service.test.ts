@@ -197,6 +197,10 @@ describe('TriggerBinding Domain & Safety Audit', () => {
 
 describe('TriggerBinding Schedule Re-sync on Update', () => {
     beforeEach(() => {
+        // The sibling describe's last test mocks system.getOrThrow to throw; its
+        // restoreAllMocks is scoped to its own describe, so restore here to avoid
+        // inheriting that (or any other) leaked spy across describe blocks.
+        vi.restoreAllMocks()
         schedulerSpies.cron.mockReset().mockResolvedValue('job-id')
         schedulerSpies.cancel.mockReset().mockResolvedValue(undefined)
         repositoryMock.findOneBy.mockReset()
@@ -272,6 +276,43 @@ describe('TriggerBinding Schedule Re-sync on Update', () => {
 
         expect(schedulerSpies.cron).not.toHaveBeenCalled()
         expect(schedulerSpies.cancel).not.toHaveBeenCalled()
+    })
+
+    it('rejects an invalid timezone on update and leaves the previous schedule intact', async () => {
+        const binding = existingBinding('tb_resync_005', { cronExpression: '0 0 * * *', timezone: 'America/New_York' })
+        repositoryMock.findOneBy.mockResolvedValue(binding)
+
+        await expect(triggerBindingService.update({
+            id: binding.id,
+            projectId: binding.projectId,
+            platformId: binding.platformId,
+            request: { settings: { cronExpression: '0 0 * * *', timezone: 'Mars/Olympus' } },
+        })).rejects.toThrow(ActivepiecesError)
+
+        expect(schedulerSpies.cancel).not.toHaveBeenCalled()
+        expect(schedulerSpies.cron).not.toHaveBeenCalled()
+    })
+
+    it('create with an invalid timezone in cron settings rejects with a validation error, never registering the job', async () => {
+        const watcherSpy = vi.spyOn(userInteractionWatcher, 'submitAndWaitForResponse').mockResolvedValue({ output: [] })
+
+        await expect(triggerBindingService.create({
+            projectId: 'proj_resync',
+            platformId: 'plat_resync',
+            request: {
+                pieceName: '@inboxfm-connect/piece-test',
+                pieceVersion: '1.0.0',
+                triggerName: 'new_message',
+                connectionId: null,
+                promptTemplate: 'Handle message',
+                settings: { cronExpression: '0 9 * * *', timezone: 'Not/AZone' },
+                status: TriggerBindingStatus.ENABLED,
+            },
+        })).rejects.toThrow(ActivepiecesError)
+
+        // node-cron would have thrown a raw RangeError from Intl.DateTimeFormat instead.
+        expect(schedulerSpies.cron).not.toHaveBeenCalled()
+        expect(watcherSpy).toHaveBeenCalledTimes(1)
     })
 })
 
