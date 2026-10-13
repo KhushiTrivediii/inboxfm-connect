@@ -663,4 +663,54 @@ describe('AI Provider management in Settings page', () => {
     )
     toastErrorSpy.mockRestore()
   })
+
+  it('hides AI provider management controls from non-admin users', async () => {
+    // Backend create/update/delete routes are platformAdminOnly; the matching
+    // affordances must not render for a non-admin platform member.
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser({ platformRole: 'MEMBER' })))
+
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: defaultBilling }) },
+      { match: AI_PROVIDERS_MATCH, respond: () => ({ body: sampleProviders }) },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('Anthropic Claude') === true)
+
+    const addBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Add Provider')
+    )
+    expect(addBtn).toBeUndefined()
+
+    expect(container.querySelector('button[aria-label="Edit Anthropic Claude"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="Delete Anthropic Claude"]')).toBeNull()
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle chat for Anthropic Claude"]'
+    )
+    expect(toggle).not.toBeNull()
+    expect(toggle?.hasAttribute('disabled')).toBe(true)
+
+    // Read-only affordances stay available to everyone.
+    expect(container.querySelector('button[aria-label="Browse models for OpenAI Production"]')).not.toBeNull()
+  })
+
+  it('omits the empty-state add action for non-admin users', async () => {
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser({ platformRole: 'MEMBER' })))
+
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: defaultBilling }) },
+      { match: AI_PROVIDERS_MATCH, respond: () => ({ body: [] }) },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('No AI providers configured') === true)
+
+    const actionBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Add AI Provider')
+    )
+    expect(actionBtn).toBeUndefined()
+  })
 })
