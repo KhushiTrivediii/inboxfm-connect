@@ -70,6 +70,8 @@ export const createActionCommand = new Command('create')
     ];
 
     const answers = await inquirer.prompt(questions);
-    createAction(answers.pieceName, answers.actionName, answers.actionDescription);
+    // Await so failures inside createAction (write errors, missing piece) reject
+    // the commander action instead of becoming an unhandled rejection.
+    await createAction(answers.pieceName, answers.actionName, answers.actionDescription);
   });
 
