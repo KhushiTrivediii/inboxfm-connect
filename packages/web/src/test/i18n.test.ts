@@ -48,6 +48,41 @@ describe('i18n runtime and crowdin localization pipeline (#177)', () => {
     expect(i18n.exists('non_existent_key_untranslated_12345')).toBe(false)
   })
 
+  it('translates command palette resource-search keys and proves key existence', () => {
+    const paletteKeys = [
+      'Search resources, integrations, routes...',
+      'Loading resources...',
+      'No results found.',
+      'Connections',
+      'Trigger Bindings',
+      'Scheduled Tasks',
+      'Recent Executions',
+      'Integrations',
+      'Navigation',
+      'Monitoring & Platform',
+      'Overview Dashboard',
+      'Integrations Catalog',
+      'Connections & Credentials',
+      'Actions & Tool Discovery',
+      'Triggers & Event Capabilities',
+      'MCP Server & Tools',
+      'Activity & Execution Logs',
+      'Developer SDK & API Reference',
+      'Project Settings',
+      'Command Palette',
+      'Search for resources, integrations, and navigation commands',
+    ]
+
+    for (const key of paletteKeys) {
+      expect(i18n.exists(key)).toBe(true)
+      expect(i18n.t(key)).toBe(key)
+    }
+
+    // Interpolated fallback label for executions without a prompt
+    expect(i18n.exists('Execution {{id}}...')).toBe(true)
+    expect(i18n.t('Execution {{id}}...', { id: 'exec_abc' })).toBe('Execution exec_abc...')
+  })
+
   it('changes language and falls back to English when a language bundle is absent', async () => {
     await i18nUtils.changeLanguage('fr')
     expect(i18nUtils.getLanguage()).toBe('fr')

@@ -12,6 +12,7 @@ import {
   Zap,
 } from 'lucide-react'
 import * as React from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import {
   CommandDialog,
@@ -38,6 +39,7 @@ export interface CommandPaletteProps {
 
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate()
+  const { t } = useTranslation()
 
   const {
     data: connectionsPages,
@@ -151,20 +153,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Search resources, integrations, routes..." />
+      <CommandInput placeholder={t('Search resources, integrations, routes...')} />
       <CommandList>
         {isInitialLoading && (
           <CommandLoading>
             <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              <span>Loading resources...</span>
+              <span>{t('Loading resources...')}</span>
             </div>
           </CommandLoading>
         )}
-        <CommandEmpty>No results found.</CommandEmpty>
+        <CommandEmpty>{t('No results found.')}</CommandEmpty>
 
         {connections && connections.length > 0 && (
-          <CommandGroup heading="Connections">
+          <CommandGroup heading={t('Connections')}>
             {connections.map((c) => (
               <CommandItem
                 key={`conn-${c.id}`}
@@ -184,7 +186,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         )}
 
         {triggerBindings && triggerBindings.length > 0 && (
-          <CommandGroup heading="Trigger Bindings">
+          <CommandGroup heading={t('Trigger Bindings')}>
             {triggerBindings.map((b) => (
               <CommandItem
                 key={`trigger-${b.id}`}
@@ -204,7 +206,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         )}
 
         {scheduledTasks && scheduledTasks.length > 0 && (
-          <CommandGroup heading="Scheduled Tasks">
+          <CommandGroup heading={t('Scheduled Tasks')}>
             {scheduledTasks.map((s) => (
               <CommandItem
                 key={`sched-${s.id}`}
@@ -226,7 +228,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         )}
 
         {executions && executions.length > 0 && (
-          <CommandGroup heading="Recent Executions">
+          <CommandGroup heading={t('Recent Executions')}>
             {executions.map((e) => (
               <CommandItem
                 key={`exec-${e.id}`}
@@ -238,7 +240,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 <Activity className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="flex flex-1 items-center justify-between overflow-hidden">
                   <span className="truncate font-medium">
-                    {e.prompt || `Execution ${e.id.slice(0, 8)}...`}
+                    {e.prompt || t('Execution {{id}}...', { id: e.id.slice(0, 8) })}
                   </span>
                   <span className="ml-2 shrink-0 text-xs capitalize text-muted-foreground">
                     {e.status.toLowerCase()}
@@ -250,7 +252,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         )}
 
         {integrations && integrations.length > 0 && (
-          <CommandGroup heading="Integrations">
+          <CommandGroup heading={t('Integrations')}>
             {integrations.map((p) => (
               <CommandItem
                 key={`integ-${p.name}`}
@@ -273,88 +275,88 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
         <CommandSeparator />
 
-        <CommandGroup heading="Navigation">
+        <CommandGroup heading={t('Navigation')}>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/'))}
             className="cursor-pointer"
           >
             <LayoutGrid className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Overview Dashboard</span>
+            <span>{t('Overview Dashboard')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/integrations'))}
             className="cursor-pointer"
           >
             <Blocks className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Integrations Catalog</span>
+            <span>{t('Integrations Catalog')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/connections'))}
             className="cursor-pointer"
           >
             <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Connections & Credentials</span>
+            <span>{t('Connections & Credentials')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/actions'))}
             className="cursor-pointer"
           >
             <Zap className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Actions & Tool Discovery</span>
+            <span>{t('Actions & Tool Discovery')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/triggers'))}
             className="cursor-pointer"
           >
             <Radio className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Triggers & Event Capabilities</span>
+            <span>{t('Triggers & Event Capabilities')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/automations/triggers'))}
             className="cursor-pointer"
           >
             <Radio className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Trigger Bindings</span>
+            <span>{t('Trigger Bindings')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/automations/schedules'))}
             className="cursor-pointer"
           >
             <CalendarClock className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Scheduled Tasks</span>
+            <span>{t('Scheduled Tasks')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/mcp'))}
             className="cursor-pointer"
           >
             <Bot className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>MCP Server & Tools</span>
+            <span>{t('MCP Server & Tools')}</span>
           </CommandItem>
         </CommandGroup>
 
         <CommandSeparator />
 
-        <CommandGroup heading="Monitoring & Platform">
+        <CommandGroup heading={t('Monitoring & Platform')}>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/activity'))}
             className="cursor-pointer"
           >
             <Activity className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Activity & Execution Logs</span>
+            <span>{t('Activity & Execution Logs')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/developers'))}
             className="cursor-pointer"
           >
             <Code2 className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Developer SDK & API Reference</span>
+            <span>{t('Developer SDK & API Reference')}</span>
           </CommandItem>
           <CommandItem
             onSelect={() => runCommand(() => navigate('/settings'))}
             className="cursor-pointer"
           >
             <Settings className="mr-2 h-4 w-4 text-muted-foreground" />
-            <span>Project Settings</span>
+            <span>{t('Project Settings')}</span>
           </CommandItem>
         </CommandGroup>
       </CommandList>
