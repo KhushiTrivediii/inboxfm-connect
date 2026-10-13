@@ -343,9 +343,17 @@ export function useDeleteTriggerBinding() {
 }
 
 export function useRunTriggerBinding() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, payload }: { id: string; payload?: unknown }) =>
       apiClient.post<Execution[]>(`/trigger-bindings/${encodeURIComponent(id)}/run`, payload),
+    // A manual run records executions the same way useRunScheduledTaskNow does
+    // (its sibling invalidates ['executions'] on success), so the Activity list,
+    // the Dashboard "Recent Executions" card and the command palette must not
+    // keep serving the pre-run cache for the whole 2-minute staleTime.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['executions'] })
+    },
   })
 }
 
