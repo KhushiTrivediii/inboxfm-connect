@@ -126,6 +126,14 @@ export default function ConnectionDetailPage() {
   }
 
   const pieceDisplayName = piece?.displayName ?? connection.pieceName
+  // The in-flight result (if any) is fresher than what the GET returned, so it
+  // wins; otherwise fall back to the persisted verdict so last-tested info
+  // survives reloads and navigation.
+  const lastTestedAt = testResult?.testedAt ?? connection.testedAt ?? null
+  const lastTestFailed = testResult
+    ? !testResult.ok
+    : connection.testedStatus === 'ERROR'
+  const lastTestMessage = testResult?.message ?? connection.testedMessage ?? null
 
   return (
     <div className="space-y-6">
@@ -200,11 +208,11 @@ export default function ConnectionDetailPage() {
               <ConnectionStatusBadge status={testResult?.status ?? connection.status} />
             </DetailRow>
             <DetailRow label="Last tested">
-              {testResult ? formatDate(testResult.testedAt) : '—'}
+              {lastTestedAt ? formatDate(lastTestedAt) : '—'}
             </DetailRow>
-            {testResult && !testResult.ok && (
+            {lastTestFailed && (
               <DetailRow label="Test result">
-                <span className="text-destructive">{testResult.message ?? 'The connection could not be refreshed.'}</span>
+                <span className="text-destructive">{lastTestMessage ?? 'The connection failed its last health check.'}</span>
               </DetailRow>
             )}
             <DetailRow label="Created">{formatDate(connection.created)}</DetailRow>

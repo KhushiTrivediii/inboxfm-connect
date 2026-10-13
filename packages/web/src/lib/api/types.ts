@@ -152,6 +152,10 @@ export interface AppConnection {
   status: AppConnectionStatus
   externalId?: string
   projectIds: string[]
+  /** Health-check bookkeeping from POST /connections/:id/test; null until first test. */
+  testedAt?: string | null
+  testedStatus?: AppConnectionStatus | null
+  testedMessage?: string | null
 }
 
 export interface TestConnectionResult {
