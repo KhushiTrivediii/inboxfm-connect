@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { apId, PlatformId } from '@inboxfm-connect/core-utils'
 import { OtpModel, OtpState, OtpType } from '@inboxfm-connect/shared'
 import dayjs from 'dayjs'
@@ -54,7 +55,7 @@ export const otpService = (log: FastifyBaseLogger) => ({
         })
         const otpIsPending = otp.state === OtpState.PENDING
         const otpIsNotExpired = dayjs().diff(otp.updated, 'milliseconds') < TEN_MINUTES
-        const otpMatches = otp.value === value
+        const otpMatches = matchesOtpValue(otp.value, value)
         const verdict = otpIsNotExpired && otpMatches && otpIsPending
         if (verdict) {
             await repo().update(otp.id, {
@@ -65,6 +66,18 @@ export const otpService = (log: FastifyBaseLogger) => ({
         return verdict
     },
 })
+
+// Constant-time OTP comparison, same shape as the admin API-key and AppSumo
+// token compares (admin-platform.controller.ts #369, appsumo.module.ts #463):
+// the OTP is a single-use bearer credential for password reset / email
+// verification, so a plain `===` leaks a prefix-based timing signal on the
+// route an attacker scripts against. The length check first avoids
+// timingSafeEqual's throw — length is not secret material.
+function matchesOtpValue(storedValue: string, providedValue: string): boolean {
+    const storedBuf = Buffer.from(storedValue)
+    const providedBuf = Buffer.from(providedValue)
+    return storedBuf.length === providedBuf.length && timingSafeEqual(storedBuf, providedBuf)
+}
 
 type CreateParams = {
     platformId: PlatformId | null
