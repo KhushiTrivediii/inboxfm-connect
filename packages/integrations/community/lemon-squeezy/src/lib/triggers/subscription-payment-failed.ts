@@ -1,6 +1,6 @@
 import { TriggerStrategy, createTrigger } from '@inboxfm-connect/pieces-framework';
 import { lemonSqueezyAuth } from '../common/auth';
-import { subscribeWebhook, unsubscribeWebhook, createStoreDropdownProperty, generateWebhookSecret, createWebhookTriggerKey } from '../common/webhook';
+import { subscribeWebhook, unsubscribeWebhook, createStoreDropdownProperty, generateWebhookSecret, createWebhookTriggerKey, verifyLemonSqueezyWebhookRequest } from '../common/webhook';
 
 export const subscriptionPaymentFailedTrigger = createTrigger({
   auth: lemonSqueezyAuth,
@@ -39,6 +39,7 @@ export const subscriptionPaymentFailedTrigger = createTrigger({
     }
   },
   async run(context) {
+    await verifyLemonSqueezyWebhookRequest(context, 'subscription_payment_failed');
     return [context.payload.body];
   },
   sampleData: {
