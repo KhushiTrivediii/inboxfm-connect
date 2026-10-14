@@ -30,9 +30,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 RUN export ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
-      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.1/bun-linux-x64-baseline.zip -o bun.zip; \
+      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.3/bun-linux-x64-baseline.zip -o bun.zip; \
     elif [ "$ARCH" = "aarch64" ]; then \
-      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.1/bun-linux-aarch64.zip -o bun.zip; \
+      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.3/bun-linux-aarch64.zip -o bun.zip; \
     fi
 
 RUN unzip bun.zip \

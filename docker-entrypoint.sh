@@ -22,30 +22,20 @@ if [ -z "$AP_WORKER_TOKEN" ] && [ -n "$AP_JWT_SECRET" ]; then
 fi
 
 # Build PM2 ecosystem config
-APPS=""
-
-if [ "$AP_CONTAINER_TYPE" = "APP" ] || [ "$AP_CONTAINER_TYPE" = "WORKER_AND_APP" ]; then
-    APPS="${APPS}
-    {
-        name: 'inboxfm-connect-app',
-        script: 'packages/server/api/dist/src/bootstrap.js',
-        node_args: '--enable-source-maps',
-        instances: 1,
-        exec_mode: 'fork',
-        env: { AP_CONTAINER_TYPE: 'APP' }
-    },"
-fi
-
-if [ "$AP_CONTAINER_TYPE" = "WORKER" ] || [ "$AP_CONTAINER_TYPE" = "WORKER_AND_APP" ]; then
-    APPS="${APPS}
-    {
-        name: 'inboxfm-connect-worker',
-        script: 'packages/server/worker/dist/src/bootstrap.js',
-        node_args: '--enable-source-maps',
-        instances: 1,
-        exec_mode: 'fork'
-    },"
-fi
+# There is no standalone worker package in this repository (the historical
+# packages/server/worker was removed upstream): the unified image runs the API
+# bootstrap for every AP_CONTAINER_TYPE, and the process decides app/worker
+# behavior internally (packages/server/api/src/app/server.ts gates modules on
+# system.isApp()/isWorker()). WORKER_AND_APP keeps both roles in ONE process —
+# two processes would both listen on ${AP_PORT} and crash with EADDRINUSE — so
+# exactly one PM2 app is started, inheriting the exported AP_CONTAINER_TYPE.
+APPS="{
+    name: 'inboxfm-connect',
+    script: 'packages/server/api/dist/src/bootstrap.js',
+    node_args: '--enable-source-maps',
+    instances: 1,
+    exec_mode: 'fork'
+}"
 
 cat > /tmp/ecosystem.config.js << ENDOFFILE
 module.exports = {

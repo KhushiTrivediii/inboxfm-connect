@@ -65,30 +65,21 @@ processes a smaller batch of items.
 ### Files & flow run logs
 
 Files emitted by actions or triggers are persisted to the database or S3 so a
-flow can retry from a later step. The log-size limit covers the combined inputs
-and outputs of every step in a single run.
+flow can retry from a later step.
 
 | Limit | Cloud | Env var | Self-hosted default |
 |---|---|---|---|
 | Step file size | 10 MB | `AP_MAX_FILE_SIZE_MB` | `25` |
-| Flow run log size (combined inputs + outputs, includes sliced payloads) | 25 MB | `AP_MAX_FLOW_RUN_LOG_SIZE_MB` | `50` |
-| Step output slice threshold | 32 KB | `AP_FLOW_RUN_LOG_SLICE_THRESHOLD_KB` | `32` |
-| Step input truncate threshold | 2 KB | `AP_FLOW_RUN_LOG_INPUT_TRUNCATE_THRESHOLD_KB` | `2` |
 
-**How it works**
-
-- **Input** — values above `AP_FLOW_RUN_LOG_INPUT_TRUNCATE_THRESHOLD_KB` are
-  replaced with a placeholder in the log; the step still receives the full
-  value at runtime.
-- **Output** — outputs above `AP_FLOW_RUN_LOG_SLICE_THRESHOLD_KB` are offloaded
-  to object storage and replaced with a reference in the log; the payload is
-  re-hydrated on demand.
-- **Total** — the cumulative size of inputs and outputs (counting the
-  **original** size of offloaded outputs) is capped by
-  `AP_MAX_FLOW_RUN_LOG_SIZE_MB`. Runs that exceed it end with status
-  `LOG_SIZE_EXCEEDED` — regardless of how many outputs were offloaded to object
-  storage. Lowering `AP_FLOW_RUN_LOG_SLICE_THRESHOLD_KB` will **not** buy more
-  log headroom; only raising `AP_MAX_FLOW_RUN_LOG_SIZE_MB` does.
+<Warning>
+This codebase does **not** cap the combined size of a run's step inputs and
+outputs. `AP_MAX_FLOW_RUN_LOG_SIZE_MB` is read by the API and passed to the
+sandbox, but no execution path checks it; step inputs are never truncated; and
+step outputs are never offloaded to object storage — they are stored inline in
+the run log. A run therefore never ends with the `LOG_SIZE_EXCEEDED` status
+here. Bound oversized step payloads with `AP_MAX_FILE_SIZE_MB` (enforced per
+uploaded file) and your instance's memory limits instead.
+</Warning>
 
 ---
 

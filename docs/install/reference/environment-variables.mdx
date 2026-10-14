@@ -144,7 +144,6 @@ run timeouts, and the network egress posture for user code. Read
 |---|---|---|
 | `AP_EXECUTION_MODE` | Sandbox strategy: `UNSANDBOXED`, `SANDBOX_PROCESS`, `SANDBOX_CODE_ONLY`, or `SANDBOX_CODE_AND_PROCESS`. | `UNSANDBOXED` |
 | `AP_CONTAINER_TYPE` | Which services run in the container: `APP` (API only), `WORKER` (worker only), or `WORKER_AND_APP` (both). | `WORKER_AND_APP` |
-| `AP_WORKER_CONCURRENCY` | Concurrent jobs a worker processes at once. Each job uses one sandbox instance. | `5` |
 | `AP_SANDBOX_MEMORY_LIMIT` | Maximum memory (KB) a single sandboxed engine process can use. Each process runs at most one execution at a time. | `1048576` |
 | `AP_SANDBOX_PROPAGATED_ENV_VARS` | Comma-separated environment variables propagated into sandboxed code. For pieces, keep everything in the authentication object so it works across instances. | `None` |
 | `AP_FLOW_TIMEOUT_SECONDS` | Maximum runtime for a single flow run, in seconds. | `600` |
@@ -168,9 +167,7 @@ run data is kept. The **Cloud** values and how these interact are covered in
 | `AP_PAUSED_FLOW_TIMEOUT_DAYS` | Maximum pause duration for a paused flow, in days. Cannot exceed `AP_EXECUTION_DATA_RETENTION_DAYS`. | `30` |
 | `AP_ISSUE_ARCHIVE_DAYS` | Issues not updated for this many days are automatically archived. | `7` |
 | `AP_MAX_FILE_SIZE_MB` | Maximum size (MB) for files uploaded in steps or triggers. Larger files are rejected. | `25` |
-| `AP_MAX_FLOW_RUN_LOG_SIZE_MB` | Maximum combined size (MB) of all step inputs and outputs in a single run. Exceeding it ends the run with `LOG_SIZE_EXCEEDED`. | `50` |
-| `AP_FLOW_RUN_LOG_SLICE_THRESHOLD_KB` | Step outputs larger than this (KB) are offloaded to object storage instead of inlined in the run log. | `32` |
-| `AP_FLOW_RUN_LOG_INPUT_TRUNCATE_THRESHOLD_KB` | Step inputs larger than this (KB) are replaced with a placeholder in the run log; the step still receives the full value at runtime. | `2` |
+| `AP_MAX_FLOW_RUN_LOG_SIZE_MB` | Declared cap (MB) for the combined size of a run's step inputs and outputs. Currently **unenforced**: no execution path in this codebase checks it, and a run never ends with `LOG_SIZE_EXCEEDED`. See [Limits → Files & flow run logs](/install/reference/limits#files-flow-run-logs). | `50` |
 | `AP_MAX_WEBHOOK_PAYLOAD_SIZE_MB` | Maximum incoming webhook payload size (MB). Larger payloads are rejected with HTTP 413. | `25` |
 | `AP_WEBHOOK_PAYLOAD_INLINE_THRESHOLD_KB` | Webhook payloads below this (KB) are stored inline in Redis; larger ones are offloaded to file storage to protect Redis memory. | `512` |
 | `AP_WEBHOOK_TIMEOUT_SECONDS` | Default timeout for synchronous webhooks. Maximum 15 minutes; note Cloudflare caps it at 30 seconds. | `30` |
