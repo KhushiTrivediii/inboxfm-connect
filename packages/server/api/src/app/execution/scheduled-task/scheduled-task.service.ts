@@ -10,7 +10,6 @@ import {
     UpdateScheduledTaskRequest,
 } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
-import { MoreThan } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
 import { getScheduledTaskTickLockKey } from '../../database/redis/keys'
 import { distributedStore } from '../../database/redis-connections'
@@ -23,14 +22,6 @@ import { ScheduledTaskEntity, ScheduledTaskSchema } from './scheduled-task-entit
  * the initialized one.
  */
 const scheduledTaskRepo = repoFactory<ScheduledTaskSchema>(ScheduledTaskEntity)
-
-/**
- * Boot-path re-registration reads enabled tasks in keyset batches
- * (`id > cursor, take`) instead of one unbounded cross-tenant `findBy` —
- * a multi-tenant DB must not pin every enabled row in memory on every
- * replica restart. 500 follows the MAX_PAGE_SIZE pagination convention.
- */
-const RE_REGISTER_BATCH_SIZE = 500
 
 export const scheduledTaskService = {
     async create({ request, projectId, platformId }: CreateParams): Promise<ScheduledTask> {
@@ -157,58 +148,40 @@ export const scheduledTaskService = {
     },
 
     async reRegisterEnabledSchedules({ log }: { log: FastifyBaseLogger }): Promise<{ registered: number, skipped: number, total: number }> {
-        // Semantics preserved from the unbatched version: every enabled task
-        // still registers, a per-task registration failure skips only that
-        // task, and a query failure logs and yields the counts so far. The
-        // keyset cursor is `id`, which the per-task `nextRunAt` update never
-        // touches, so batching cannot skip or repeat a row.
-        let registered = 0
-        let skipped = 0
-        let total = 0
-        let cursor: string | null = null
+        let tasks: ScheduledTaskSchema[] = []
         try {
-            while (true) {
-                const tasks: ScheduledTaskSchema[] = await scheduledTaskRepo().find({
-                    where: {
-                        status: ScheduledTaskStatus.ENABLED,
-                        ...(isNil(cursor) ? {} : { id: MoreThan(cursor) }),
-                    },
-                    order: { id: 'ASC' },
-                    take: RE_REGISTER_BATCH_SIZE,
-                })
-                for (const task of tasks) {
-                    try {
-                        if (!cronParser.validateCronExpression(task.cronExpression)) {
-                            log.warn({ task: { id: task.id } }, '[scheduledTaskService#reRegisterEnabledSchedules] Skipping schedule with invalid cron expression')
-                            skipped += 1
-                            continue
-                        }
-                        if (task.timezone && !isValidTimezone(task.timezone)) {
-                            log.warn({ task: { id: task.id } }, '[scheduledTaskService#reRegisterEnabledSchedules] Skipping schedule with invalid timezone')
-                            skipped += 1
-                            continue
-                        }
-                        const nextRunAt = computeNextRunAt({ cronExpression: task.cronExpression, timezone: task.timezone })
-                        await scheduledTaskRepo().update({ id: task.id }, { nextRunAt })
-                        await syncSchedule(task)
-                        registered += 1
-                    }
-                    catch (error) {
-                        log.warn({ error, task: { id: task.id } }, '[scheduledTaskService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
-                        skipped += 1
-                    }
-                }
-                total += tasks.length
-                if (tasks.length < RE_REGISTER_BATCH_SIZE) {
-                    break
-                }
-                cursor = tasks[tasks.length - 1].id
-            }
+            tasks = await scheduledTaskRepo().findBy({ status: ScheduledTaskStatus.ENABLED })
         }
         catch (error) {
             log.error({ error }, '[scheduledTaskService#reRegisterEnabledSchedules] Failed to query enabled tasks from database')
+            return { registered: 0, skipped: 0, total: 0 }
         }
-        return { registered, skipped, total }
+
+        let registered = 0
+        let skipped = 0
+        for (const task of tasks) {
+            try {
+                if (!cronParser.validateCronExpression(task.cronExpression)) {
+                    log.warn({ task: { id: task.id } }, '[scheduledTaskService#reRegisterEnabledSchedules] Skipping schedule with invalid cron expression')
+                    skipped += 1
+                    continue
+                }
+                if (task.timezone && !isValidTimezone(task.timezone)) {
+                    log.warn({ task: { id: task.id } }, '[scheduledTaskService#reRegisterEnabledSchedules] Skipping schedule with invalid timezone')
+                    skipped += 1
+                    continue
+                }
+                const nextRunAt = computeNextRunAt({ cronExpression: task.cronExpression, timezone: task.timezone })
+                await scheduledTaskRepo().update({ id: task.id }, { nextRunAt })
+                await syncSchedule(task)
+                registered += 1
+            }
+            catch (error) {
+                log.warn({ error, task: { id: task.id } }, '[scheduledTaskService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
+                skipped += 1
+            }
+        }
+        return { registered, skipped, total: tasks.length }
     },
 }
 
