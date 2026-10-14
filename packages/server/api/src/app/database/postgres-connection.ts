@@ -12,6 +12,7 @@ import { AddPositionToField1790153790769 } from './migration/postgres/1790153790
 import { AddAgentEntity1790153850000 } from './migration/postgres/1790153850000-AddAgentEntity'
 import { AddMcpOAuthTokenLineage1790154000000 } from './migration/postgres/1790154000000-AddMcpOAuthTokenLineage'
 import { AddConnectionHealthCheckColumns1791869626000 } from './migration/postgres/1791869626000-AddConnectionHealthCheckColumns'
+import { FixPlatformAnalyticsReportCachedAtType1791985230890 } from './migration/postgres/1791985230890-FixPlatformAnalyticsReportCachedAtType'
 
 const getSslConfig = (): boolean | TlsOptions => {
     const useSsl = system.get(AppSystemProp.POSTGRES_USE_SSL)
@@ -55,6 +56,7 @@ export const getMigrations = (): (new () => Migration)[] => {
         AddAgentEntity1790153850000,
         AddMcpOAuthTokenLineage1790154000000,
         AddConnectionHealthCheckColumns1791869626000,
+        FixPlatformAnalyticsReportCachedAtType1791985230890,
     ]
     return migrations
 }
