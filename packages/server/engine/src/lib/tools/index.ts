@@ -1,6 +1,6 @@
 import { isNil, isObject, isString } from '@inboxfm-connect/core-utils'
-import { Action, DropdownOption, ExecutePropsResult, PieceProperty, PropertyType } from '@inboxfm-connect/pieces-framework'
-import { AgentPieceTool, EngineResponseStatus, ExecuteToolOperation, ExecuteToolResponse, ExecutionToolStatus, FieldControlMode } from '@inboxfm-connect/shared'
+import { Action, DropdownOption, ExecutePropsResult, IntegrationProperty, PropertyType } from '@inboxfm-connect/pieces-framework'
+import { AgentPieceTool, EngineResponseStatus, ExecuteToolOperation, ExecuteToolResponse, ExecutionToolStatus, FieldControlMode, PredefinedInputsStructure } from '@inboxfm-connect/shared'
 import { generateText, JSONParseError, LanguageModel, NoObjectGeneratedError, Output, Tool, zodSchema } from 'ai'
 import { z } from 'zod'
 import { EngineConstants } from '../handler/context/engine-constants'
@@ -47,7 +47,7 @@ async function resolveProperties(
     instruction: string,
     action: Action,
     model: LanguageModel,
-    operation: ExecuteToolOperation,
+    operation: ExecuteToolOperationWithModel,
 ): Promise<Record<string, unknown>> {
     const auth = normalizeAgentToolAuth(operation.predefinedInput?.auth)
     const predefinedInputsFields = operation.predefinedInput?.fields || {}
@@ -225,11 +225,15 @@ ${propertyDetailsSection}
 `
 }
 
-type ExecuteToolOperationWithModel = ExecuteToolOperation & {
+// Agent tool runs resolve their input from the instruction inside `execute`, so the
+// operation carries the resolution inputs instead of the already-resolved `input`.
+type ExecuteToolOperationWithModel = Omit<ExecuteToolOperation, 'input'> & {
     model: LanguageModel
+    instruction: string
+    predefinedInput?: PredefinedInputsStructure
 }
 
-async function propertyToSchema(propertyName: string, property: PieceProperty, operation: ExecuteToolOperation, resolvedInput: Record<string, unknown>): Promise<z.ZodTypeAny> {
+async function propertyToSchema(propertyName: string, property: IntegrationProperty, operation: ExecuteToolOperationWithModel, resolvedInput: Record<string, unknown>): Promise<z.ZodTypeAny> {
     let schema: z.ZodTypeAny
 
     switch (property.type) {
@@ -292,7 +296,7 @@ async function propertyToSchema(propertyName: string, property: PieceProperty, o
     return property.required ? schema : schema.nullable()
 }
 
-async function buildObjectSchemaFromProperties(properties: Record<string, PieceProperty>, operation: ExecuteToolOperation, resolvedInput: Record<string, unknown>): Promise<z.ZodTypeAny> {
+async function buildObjectSchemaFromProperties(properties: Record<string, IntegrationProperty>, operation: ExecuteToolOperationWithModel, resolvedInput: Record<string, unknown>): Promise<z.ZodTypeAny> {
     const entries = Object.entries(properties)
     const schemas = await Promise.all(entries.map(([key, value]) =>
         propertyToSchema(key, value, operation, resolvedInput),
@@ -304,7 +308,7 @@ async function buildObjectSchemaFromProperties(properties: Record<string, PieceP
     return z.object(schemaMap).loose()
 }
 
-async function buildDynamicSchema(propertyName: string, operation: ExecuteToolOperation, resolvedInput: Record<string, unknown>): Promise<z.ZodTypeAny> {
+async function buildDynamicSchema(propertyName: string, operation: ExecuteToolOperationWithModel, resolvedInput: Record<string, unknown>): Promise<z.ZodTypeAny> {
     const response = await pieceHelper.executeProps({
         ...operation,
         propertyName,
@@ -324,7 +328,7 @@ type PropertyDetail = {
     defaultValue?: unknown
 }
 
-async function buildPropertyDetail(propertyName: string, property: PieceProperty, operation: ExecuteToolOperation, input: Record<string, unknown>): Promise<PropertyDetail | null> {
+async function buildPropertyDetail(propertyName: string, property: IntegrationProperty, operation: ExecuteToolOperationWithModel, input: Record<string, unknown>): Promise<PropertyDetail | null> {
     const baseDetail: PropertyDetail = {
         name: propertyName,
         type: property.type,
@@ -348,7 +352,7 @@ async function buildPropertyDetail(propertyName: string, property: PieceProperty
     return baseDetail
 }
 
-async function loadOptions(propertyName: string, property: PieceProperty, operation: ExecuteToolOperation, input: Record<string, unknown>): Promise<DropdownOption<unknown>[]> {
+async function loadOptions(propertyName: string, property: IntegrationProperty, operation: ExecuteToolOperationWithModel, input: Record<string, unknown>): Promise<DropdownOption<unknown>[]> {
     if (property.type === PropertyType.STATIC_DROPDOWN || property.type === PropertyType.STATIC_MULTI_SELECT_DROPDOWN) {
         const staticProperty = property as { options: { options: DropdownOption<unknown>[] } }
         return staticProperty.options.options
