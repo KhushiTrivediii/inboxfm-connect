@@ -6,21 +6,6 @@ export AP_PORT="${AP_PORT:-80}"
 echo "AP_CONTAINER_TYPE: $AP_CONTAINER_TYPE"
 echo "AP_PORT: $AP_PORT"
 
-# Auto-generate worker token if not set and JWT secret is available
-if [ -z "$AP_WORKER_TOKEN" ] && [ -n "$AP_JWT_SECRET" ]; then
-    echo "Auto-generating AP_WORKER_TOKEN..."
-    export AP_WORKER_TOKEN=$(node -e "
-        const jwt = require('jsonwebtoken');
-        const crypto = require('crypto');
-        const token = jwt.sign(
-            { id: crypto.randomUUID(), type: 'WORKER' },
-            process.env.AP_JWT_SECRET,
-            { expiresIn: '100y', keyid: '1', algorithm: 'HS256', issuer: 'activepieces' }
-        );
-        process.stdout.write(token);
-    ")
-fi
-
 # Build PM2 ecosystem config
 # There is no standalone worker package in this repository (the historical
 # packages/server/worker was removed upstream): the unified image runs the API

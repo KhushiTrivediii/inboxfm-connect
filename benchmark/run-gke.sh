@@ -36,14 +36,12 @@ fi
 echo "=== Getting cluster credentials ($CLUSTER / $ZONE) ==="
 gcloud container clusters get-credentials "$CLUSTER" --zone "$ZONE" --quiet
 
-echo "=== Minting worker token + injecting into manifest ==="
-# The JWT secret is sync'd between the signed worker token and the cluster's AP_JWT_SECRET. Override via
-# env for a non-default secret; the fallback is a throwaway value for this ephemeral, torn-down cluster.
-# Short-lived (1 day) — a benchmark run is minutes, so there is no reason to mint a long-lived token.
+echo "=== Preparing manifest ==="
+# The JWT secret must match the cluster's AP_JWT_SECRET. Override via env for a
+# non-default secret; the fallback is a throwaway value for this ephemeral, torn-down cluster.
 JWT_SECRET="${AP_JWT_SECRET:-benchmark-$(openssl rand -hex 12)}"
-TOKEN=$(JWT_SECRET="$JWT_SECRET" node -e "const jwt=require('jsonwebtoken'),crypto=require('crypto');process.stdout.write(jwt.sign({id:crypto.randomUUID(),type:'WORKER'},process.env.JWT_SECRET,{expiresIn:'1d',keyid:'1',algorithm:'HS256',issuer:'activepieces'}))")
 MANIFEST=$(mktemp)
-sed -e "s|__AP_WORKER_TOKEN__|${TOKEN}|" -e "s|__WORKER_CPU__|${WORKER_CPU}|g" -e "s|__WORKER_REPLICAS__|${WORKER_REPLICAS}|" \
+sed -e "s|__WORKER_CPU__|${WORKER_CPU}|g" -e "s|__WORKER_REPLICAS__|${WORKER_REPLICAS}|" \
     -e "s|__AP_JWT_SECRET__|${JWT_SECRET}|" \
     -e "s|__REUSE_SANDBOX__|${REUSE_SANDBOX}|" \
     -e "s|__APP_REPLICAS__|${APP_REPLICAS}|" -e "s|__APP_CPU__|${APP_CPU}|" \

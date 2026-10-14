@@ -228,7 +228,6 @@ inboxfmConnectEnvVariables:
     - AP_ENCRYPTION_KEY
     - AP_JWT_SECRET
     - AP_API_KEY
-    - AP_WORKER_TOKEN
     - AP_GOOGLE_CLIENT_ID
     - AP_GOOGLE_CLIENT_SECRET
     - AP_FIREBASE_HASH_PARAMETERS
@@ -244,7 +243,6 @@ inboxfmConnectEnvVariables:
   inboxfm-connect-telemetry-secrets:
     - AP_TELEMETRY_ENABLED
     - AP_OTEL_ENABLED
-    - AP_FEATUREBASE_API_KEY
   inboxfm-connect-limits-secrets:
     - AP_DEFAULT_CONCURRENT_JOBS_LIMIT
     - AP_PROJECT_RATE_LIMITER_ENABLED
@@ -261,8 +259,6 @@ inboxfmConnectEnvVariables:
     - AP_APP_WEBHOOK_SECRETS
     - AP_SECRET_MANAGER_API_KEY
     - AP_OPENROUTER_PROVISION_KEY
-    - AP_TEMPLATES_API_KEY
-    - AP_TEMPLATE_MANAGER_API_KEY
   inboxfm-connect-db-secrets:
     - AP_POSTGRES_DATABASE
     - AP_POSTGRES_HOST

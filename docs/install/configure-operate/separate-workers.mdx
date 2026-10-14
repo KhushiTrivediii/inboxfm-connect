@@ -24,8 +24,9 @@ deployment: a `npm run workers token` CLI command minting an
 `AP_WORKER_TOKEN`, workers pulling jobs from the app's queues, and an
 "Infra → Workers" page in the admin console. None of that exists in this fork:
 
-- No code reads `AP_WORKER_TOKEN`. The `workers token` CLI command still
-  exists, but nothing consumes the token it prints.
+- No code reads `AP_WORKER_TOKEN` — nothing in this fork ever did. The
+  vestigial `workers token` CLI command and the entrypoint auto-mint that
+  produced it have been removed.
 - There is no queue-consuming worker process — the `packages/server/worker`
   package was removed from the tree, and with it the job-pulling loop this
   page used to configure.
