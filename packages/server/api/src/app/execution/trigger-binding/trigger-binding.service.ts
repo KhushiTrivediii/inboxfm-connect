@@ -17,6 +17,7 @@ import {
     WorkerJobType,
 } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
+import { MoreThan } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
 import { getTriggerBindingTickLockKey } from '../../database/redis/keys'
 import { distributedStore } from '../../database/redis-connections'
@@ -32,6 +33,14 @@ import { TriggerBindingEntity, TriggerBindingSchema } from './trigger-binding-en
  * the initialized one.
  */
 const triggerBindingRepo = repoFactory<TriggerBindingSchema>(TriggerBindingEntity)
+
+/**
+ * Boot-path re-registration reads enabled bindings in keyset batches
+ * (`id > cursor, take`) instead of one unbounded cross-tenant `findBy` —
+ * a multi-tenant DB must not pin every enabled row in memory on every
+ * replica restart. 500 follows the MAX_PAGE_SIZE pagination convention.
+ */
+const RE_REGISTER_BATCH_SIZE = 500
 
 export const triggerBindingService = {
     async create({ request, projectId, platformId }: CreateParams): Promise<TriggerBinding> {
@@ -232,28 +241,44 @@ export const triggerBindingService = {
     },
 
     async reRegisterEnabledSchedules({ log }: { log: FastifyBaseLogger }): Promise<{ registered: number, skipped: number, total: number }> {
-        let bindings: TriggerBindingSchema[] = []
+        // Semantics preserved from the unbatched version: every enabled binding
+        // still registers, a per-binding registration failure skips only that
+        // binding, and a query failure logs and yields the counts so far.
+        let registered = 0
+        let skipped = 0
+        let total = 0
+        let cursor: string | null = null
         try {
-            bindings = await triggerBindingRepo().findBy({ status: TriggerBindingStatus.ENABLED })
+            while (true) {
+                const bindings: TriggerBindingSchema[] = await triggerBindingRepo().find({
+                    where: {
+                        status: TriggerBindingStatus.ENABLED,
+                        ...(isNil(cursor) ? {} : { id: MoreThan(cursor) }),
+                    },
+                    order: { id: 'ASC' },
+                    take: RE_REGISTER_BATCH_SIZE,
+                })
+                for (const binding of bindings) {
+                    try {
+                        await syncTriggerSchedule(binding)
+                        registered += 1
+                    }
+                    catch (error) {
+                        log.warn({ error, binding: { id: binding.id } }, '[triggerBindingService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
+                        skipped += 1
+                    }
+                }
+                total += bindings.length
+                if (bindings.length < RE_REGISTER_BATCH_SIZE) {
+                    break
+                }
+                cursor = bindings[bindings.length - 1].id
+            }
         }
         catch (error) {
             log.error({ error }, '[triggerBindingService#reRegisterEnabledSchedules] Failed to query enabled trigger bindings from database')
-            return { registered: 0, skipped: 0, total: 0 }
         }
-
-        let registered = 0
-        let skipped = 0
-        for (const binding of bindings) {
-            try {
-                await syncTriggerSchedule(binding)
-                registered += 1
-            }
-            catch (error) {
-                log.warn({ error, binding: { id: binding.id } }, '[triggerBindingService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
-                skipped += 1
-            }
-        }
-        return { registered, skipped, total: bindings.length }
+        return { registered, skipped, total }
     },
 }
 
