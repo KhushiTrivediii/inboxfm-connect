@@ -1,10 +1,10 @@
 import { SeekPage } from '@inboxfm-connect/core-utils'
-import { FlowsContext, ListFlowsContextParams } from '@inboxfm-connect/pieces-framework'
-import { FetchError, PopulatedFlow } from '@inboxfm-connect/shared'
+import { FlowsContext, ListFlowsContextParams, PopulatedFlowSummary } from '@inboxfm-connect/pieces-framework'
+import { FetchError } from '@inboxfm-connect/shared'
 
 export const createFlowsContext = ({ engineToken, internalApiUrl, flowId, flowVersionId }: CreateFlowsServiceParams): FlowsContext => {
     return {
-        async list(params: ListFlowsContextParams): Promise<SeekPage<PopulatedFlow>> {
+        async list(params?: ListFlowsContextParams): Promise<SeekPage<PopulatedFlowSummary>> {
             const queryParams = new URLSearchParams()
             if (params?.externalIds) {
                 queryParams.set('externalIds', params.externalIds.join(','))
