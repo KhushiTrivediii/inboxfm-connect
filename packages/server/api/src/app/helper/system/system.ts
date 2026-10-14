@@ -41,7 +41,6 @@ const systemPropDefaultValues: Partial<Record<SystemProp, string>> = {
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_ENABLED]: 'true',
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_MAX_ATTEMPTS]: '5',
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_WINDOW_SECONDS]: '900',
-    [AppSystemProp.WORKERS]: '1',
     // Header used to extract the client IP behind reverse proxies (e.g. 'x-real-ip').
     // Note: When deployed behind a reverse proxy, the proxy MUST overwrite or sanitize
     // this header to prevent untrusted clients from spoofing client IPs or draining rate-limit buckets.
@@ -73,9 +72,6 @@ const systemPropDefaultValues: Partial<Record<SystemProp, string>> = {
     [AppSystemProp.SANDBOX_MEMORY_LIMIT]: '1048576',
     [AppSystemProp.FLOW_TIMEOUT_SECONDS]: '600',
     [AppSystemProp.TRIGGER_TIMEOUT_SECONDS]: '60',
-    [AppSystemProp.RUNS_METADATA_UPDATE_CONCURRENCY]: '2',
-    [AppSystemProp.TRIGGER_HOOKS_TIMEOUT_SECONDS]: '180',
-    [AppSystemProp.EVENT_DESTINATION_TIMEOUT_SECONDS]: '10',
     [AppSystemProp.REDIS_FAILED_JOB_RETENTION_DAYS]: '30',
     [AppSystemProp.REDIS_FAILED_JOB_RETENTION_MAX_COUNT]: '100000',
     [AppSystemProp.TELEMETRY_ENABLED]: 'true',

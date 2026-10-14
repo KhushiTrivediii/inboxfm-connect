@@ -244,7 +244,6 @@ inboxfmConnectEnvVariables:
   inboxfm-connect-telemetry-secrets:
     - AP_TELEMETRY_ENABLED
     - AP_OTEL_ENABLED
-    - AP_FEATUREBASE_API_KEY
   inboxfm-connect-limits-secrets:
     - AP_DEFAULT_CONCURRENT_JOBS_LIMIT
     - AP_PROJECT_RATE_LIMITER_ENABLED
@@ -261,8 +260,6 @@ inboxfmConnectEnvVariables:
     - AP_APP_WEBHOOK_SECRETS
     - AP_SECRET_MANAGER_API_KEY
     - AP_OPENROUTER_PROVISION_KEY
-    - AP_TEMPLATES_API_KEY
-    - AP_TEMPLATE_MANAGER_API_KEY
   inboxfm-connect-db-secrets:
     - AP_POSTGRES_DATABASE
     - AP_POSTGRES_HOST
