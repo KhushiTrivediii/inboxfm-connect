@@ -17,6 +17,7 @@ import {
     WorkerJobType,
 } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
+import { MoreThan } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
 import { getTriggerBindingTickLockKey } from '../../database/redis/keys'
 import { distributedStore } from '../../database/redis-connections'
@@ -32,6 +33,22 @@ import { TriggerBindingEntity, TriggerBindingSchema } from './trigger-binding-en
  * the initialized one.
  */
 const triggerBindingRepo = repoFactory<TriggerBindingSchema>(TriggerBindingEntity)
+
+/**
+ * Boot-path re-registration reads enabled bindings in keyset batches
+ * (`id > cursor, take`) instead of one unbounded cross-tenant `findBy`, so a
+ * replica restart pins at most one batch in memory rather than the global
+ * enabled-row count. 500 follows the MAX_PAGE_SIZE pagination convention
+ * (see tables/record/record.service.ts).
+ */
+const RE_REGISTER_BATCH_SIZE = 500
+
+/**
+ * Sentinel primary key for the pre-scan DB reachability probe in
+ * `reRegisterEnabledSchedules`: it is longer than the 21-char `apId()`
+ * column, so it can never match a row.
+ */
+const DB_AVAILABILITY_PROBE_ID = 'boot-scan-db-availability-probe'
 
 export const triggerBindingService = {
     async create({ request, projectId, platformId }: CreateParams): Promise<TriggerBinding> {
@@ -243,28 +260,62 @@ export const triggerBindingService = {
     },
 
     async reRegisterEnabledSchedules({ log }: { log: FastifyBaseLogger }): Promise<{ registered: number, skipped: number, total: number }> {
-        let bindings: TriggerBindingSchema[] = []
+        // Reachability probe before registering anything: it matches no row (the
+        // sentinel id cannot exist) and only fails when the database itself does.
+        // It preserves the single-query failure envelope of the unbatched version
+        // — a DB that is down at scan start logs the same error once and
+        // registers nothing — which a batched scan that dies mid-loop could no
+        // longer guarantee on its own.
         try {
-            bindings = await triggerBindingRepo().findBy({ status: TriggerBindingStatus.ENABLED })
+            await triggerBindingRepo().findBy({ status: TriggerBindingStatus.ENABLED, id: DB_AVAILABILITY_PROBE_ID })
         }
         catch (error) {
             log.error({ error }, '[triggerBindingService#reRegisterEnabledSchedules] Failed to query enabled trigger bindings from database')
             return { registered: 0, skipped: 0, total: 0 }
         }
 
+        // Semantics preserved from the unbatched version: every enabled binding
+        // still registers, a per-binding registration failure skips only that
+        // binding (same warn log), and a query failure logs the same error once
+        // and yields the counts so far — {0, 0, 0} when the very first batch
+        // fails, exactly like the single-query version. The keyset cursor is
+        // `id`, which registration never rewrites, so batching cannot skip or
+        // repeat a row.
         let registered = 0
         let skipped = 0
-        for (const binding of bindings) {
-            try {
-                await syncTriggerSchedule(binding)
-                registered += 1
-            }
-            catch (error) {
-                log.warn({ error, binding: { id: binding.id } }, '[triggerBindingService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
-                skipped += 1
+        let total = 0
+        let cursor: string | null = null
+        try {
+            while (true) {
+                const bindings: TriggerBindingSchema[] = await triggerBindingRepo().find({
+                    where: {
+                        status: TriggerBindingStatus.ENABLED,
+                        ...(isNil(cursor) ? {} : { id: MoreThan(cursor) }),
+                    },
+                    order: { id: 'ASC' },
+                    take: RE_REGISTER_BATCH_SIZE,
+                })
+                for (const binding of bindings) {
+                    try {
+                        await syncTriggerSchedule(binding)
+                        registered += 1
+                    }
+                    catch (error) {
+                        log.warn({ error, binding: { id: binding.id } }, '[triggerBindingService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
+                        skipped += 1
+                    }
+                }
+                total += bindings.length
+                if (bindings.length < RE_REGISTER_BATCH_SIZE) {
+                    break
+                }
+                cursor = bindings[bindings.length - 1].id
             }
         }
-        return { registered, skipped, total: bindings.length }
+        catch (error) {
+            log.error({ error }, '[triggerBindingService#reRegisterEnabledSchedules] Failed to query enabled trigger bindings from database')
+        }
+        return { registered, skipped, total }
     },
 }
 
