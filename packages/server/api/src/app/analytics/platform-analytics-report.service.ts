@@ -78,6 +78,24 @@ async function listUsers(platformId: PlatformId): Promise<UserWithMetaInformatio
         relations: {
             identity: true,
         },
+        // Whole-platform refresh (result cached ~5 min): fetch only the columns
+        // the report maps instead of every user and identity column - identity
+        // rows carry password hashes, tokenVersion, imageUrl and other unmapped
+        // data that dominated the transfer on a large platform. Same query
+        // shape, same mapped output.
+        select: {
+            id: true,
+            status: true,
+            platformRole: true,
+            lastActiveDate: true,
+            created: true,
+            updated: true,
+            identity: {
+                email: true,
+                firstName: true,
+                lastName: true,
+            },
+        },
     })
     return users.map((user) => {
         return {

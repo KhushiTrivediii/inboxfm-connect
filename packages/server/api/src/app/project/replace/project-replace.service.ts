@@ -36,12 +36,12 @@ import {
 import { FastifyBaseLogger } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
 import semver from 'semver'
-import { ArrayContains } from 'typeorm'
+import { ArrayContains, In } from 'typeorm'
 import { AgentEntity, AgentSchema } from '../../agents/agent.entity'
 import { agentService } from '../../agents/agent.service'
 import { AIProviderEntity, AIProviderSchema } from '../../ai/ai-provider-entity'
 import { appConnectionService } from '../../app-connection/app-connection-service/app-connection-service'
-import { ConnectionEntity } from '../../app-connection/app-connection.entity'
+import { ConnectionEntity, ConnectionSchema } from '../../app-connection/app-connection.entity'
 import { repoFactory } from '../../core/db/repo-factory'
 import { databaseConnection } from '../../database/database-connection'
 import { distributedLock } from '../../database/redis-connections'
@@ -455,17 +455,32 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
         const requiredPiecesMap = new Map<string, string>()
         const requiredConnectionsMap = new Map<string, string>()
 
+        // One batched lookup for every referenced connection instead of one
+        // findOne per binding: identical filters (platform + project membership),
+        // identical results - ids are the primary key, so In() returns each
+        // referenced connection at most once - in a single round trip.
+        const referencedConnectionIds = Array.from(new Set(
+            triggerBindings.map((tb) => tb.connectionId).filter((id): id is string => id != null),
+        ))
+        const connectionsById = new Map<string, ConnectionSchema>()
+        if (referencedConnectionIds.length > 0) {
+            const connections = await connectionRepo().find({
+                where: {
+                    id: In(referencedConnectionIds),
+                    platformId,
+                    projectIds: ArrayContains([projectId]),
+                },
+            })
+            for (const conn of connections) {
+                connectionsById.set(conn.id, conn)
+            }
+        }
+
         for (const tb of triggerBindings) {
             requiredPiecesMap.set(`${tb.pieceName}::${tb.pieceVersion}`, tb.pieceVersion)
             let connExternalId: string | null = null
             if (tb.connectionId) {
-                const conn = await connectionRepo().findOne({
-                    where: {
-                        id: tb.connectionId,
-                        platformId,
-                        projectIds: ArrayContains([projectId]),
-                    },
-                })
+                const conn = connectionsById.get(tb.connectionId)
                 if (conn && conn.externalId) {
                     connExternalId = conn.externalId
                     requiredConnectionsMap.set(conn.externalId, conn.pieceName)
@@ -687,9 +702,17 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
 
     async computeDestinationStateHash(projectId: string, platformId?: string): Promise<string> {
         const tables = await tableRepo().find({ where: { projectId } })
+        // One batched fields query instead of one getAll per table:
+        // getAllByTableIds orders each table's fields by position ASC exactly
+        // like getAll, and the hash sorts the mapped fields by externalId
+        // afterwards, so the normalized state is byte-identical.
+        const fieldsByTable = await fieldService.getAllByTableIds({
+            projectId,
+            tableIds: tables.map((t) => t.id),
+        })
         const tablesWithFields = []
         for (const t of tables) {
-            const fields: Field[] = await fieldService.getAll({ projectId, tableId: t.id })
+            const fields: Field[] = fieldsByTable.get(t.id) ?? []
             tablesWithFields.push({
                 name: t.name,
                 externalId: t.externalId,
