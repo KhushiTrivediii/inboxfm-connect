@@ -93,10 +93,11 @@ export type CodeArtifact = {
     flowVersionState: FlowVersionState
 }
 
-// Structural subset of WorkerSettingsResponse used by the local-pool runtime tree.
-// Field names intentionally match WorkerSettingsResponse so workerSettings.getSettings is
-// directly assignable to () => SandboxSettings without wrapping.
-// ENVIRONMENT and EXECUTION_MODE are strings (matching the Zod schema) — comparisons
+// Settings shape consumed by the local-pool runtime tree; the two runtime builders in
+// the api package (execute.controller.ts, user-interaction-watcher.ts) each return
+// exactly this shape. (The old full worker settings schema was removed with the
+// upstream worker package — nothing constructs it anymore.)
+// ENVIRONMENT and EXECUTION_MODE are strings — comparisons
 // against ApEnvironment / ExecutionMode enum values still work because enum values are strings.
 export type SandboxSettings = {
     EXECUTION_MODE: string
