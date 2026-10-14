@@ -239,11 +239,13 @@ is a no-op, same as before this feature existed.
 
 | Variable | Description | Default |
 |---|---|---|
-| `AP_API_RATE_LIMIT_AUTHN_ENABLED` | Enable IP-based rate limiting on authentication routes (both tiers below). | `true` |
+| `AP_API_RATE_LIMIT_AUTHN_ENABLED` | Enable IP-based rate limiting on authentication routes (all tiers below, including the MCP OAuth tiers). | `true` |
 | `AP_API_RATE_LIMIT_AUTHN_MAX` | Requests per window, per IP, for the general authentication tier (`switch-platform`). | `50` |
 | `AP_API_RATE_LIMIT_AUTHN_WINDOW` | Window for `AP_API_RATE_LIMIT_AUTHN_MAX`, e.g. `1 minute`. | `1 minute` |
-| `AP_API_RATE_LIMIT_AUTHN_ABUSE_MAX` | Requests per window, per IP, for the stricter tier applied to `sign-up`, `sign-in`, and the OTP/password-reset routes (`POST /v1/otp`, `verify-email`, `reset-password`) — the routes a credential-stuffing or account-creation script would actually hit. | `10` |
+| `AP_API_RATE_LIMIT_AUTHN_ABUSE_MAX` | Requests per window, per IP, for the stricter tier applied to `sign-up`, `sign-in`, the OTP/password-reset routes (`POST /v1/otp`, `verify-email`, `reset-password`), and the MCP OAuth `token`/`revoke` endpoints — the routes a credential-stuffing or account-creation script would actually hit. For MCP, 10/min/IP stays far above a legitimate client's refresh cadence. | `10` |
 | `AP_API_RATE_LIMIT_AUTHN_ABUSE_WINDOW` | Window for `AP_API_RATE_LIMIT_AUTHN_ABUSE_MAX`. | `1 minute` |
+| `AP_API_RATE_LIMIT_AUTHN_MCP_REGISTER_MAX` | Requests per window, per IP, for the MCP OAuth dynamic-registration endpoint (`POST /register`, RFC 7591). It authenticates no secret but writes one DB row per request, so this looser ceiling bounds row creation while leaving legitimate one-time client registrations ample headroom. | `20` |
+| `AP_API_RATE_LIMIT_AUTHN_MCP_REGISTER_WINDOW` | Window for `AP_API_RATE_LIMIT_AUTHN_MCP_REGISTER_MAX`. | `1 minute` |
 | `AP_API_SIGN_IN_EMAIL_THROTTLE_ENABLED` | Throttle failed sign-in attempts **per email address**, independent of IP — blunts credential stuffing against one account spread across many IPs/a botnet. | `true` |
 | `AP_API_SIGN_IN_EMAIL_THROTTLE_MAX_ATTEMPTS` | Failed sign-in attempts allowed for one email before it's blocked, regardless of source IP. A successful sign-in resets the counter immediately. | `5` |
 | `AP_API_SIGN_IN_EMAIL_THROTTLE_WINDOW_SECONDS` | Rolling window (seconds) for `AP_API_SIGN_IN_EMAIL_THROTTLE_MAX_ATTEMPTS`. | `900` (15 minutes) |

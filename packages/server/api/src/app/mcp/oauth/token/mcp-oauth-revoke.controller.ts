@@ -2,6 +2,7 @@ import { isNil } from '@inboxfm-connect/core-utils'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { securityAccess } from '../../../core/security/authorization/fastify-security'
+import { authAbuseRateLimitOptions } from '../../../core/security/rate-limit'
 import { mcpOAuthClientService } from '../client/mcp-oauth-client.service'
 import { mcpOAuthTokenService } from './mcp-oauth-token.service'
 
@@ -31,7 +32,13 @@ export const mcpOAuthRevokeController: FastifyPluginAsyncZod = async (app) => {
 }
 
 const RevokeRequest = {
-    config: { security: securityAccess.public() },
+    config: {
+        security: securityAccess.public(),
+        // Validates client secrets like the token endpoint, so it gets the same
+        // tighter tier (see core/security/rate-limit.ts) — an attacker scripting
+        // revocation attempts hits the same ceiling.
+        rateLimit: authAbuseRateLimitOptions,
+    },
     schema: {
         hide: true,
         body: z.object({

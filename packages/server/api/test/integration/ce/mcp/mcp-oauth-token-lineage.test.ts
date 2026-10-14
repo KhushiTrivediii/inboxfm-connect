@@ -8,6 +8,18 @@ import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/
 
 let app: FastifyInstance | null = null
 
+// The token endpoint is rate-limited per client IP (MCP OAuth abuse tier,
+// 10/min/IP). Each test in this file rotates and replays enough refresh
+// tokens that a file-wide cumulative count would cross the threshold on a
+// shared IP, so every test runs under its own client IP — the same
+// per-test-IP convention as mcp-oauth-rate-limit.test.ts.
+let testIpSuffix = 1
+let currentTestIp = '198.51.100.1'
+beforeEach(() => {
+    testIpSuffix += 1
+    currentTestIp = `198.51.100.${testIpSuffix}`
+})
+
 beforeAll(async () => {
     app = await setupTestEnvironment()
 })
@@ -55,6 +67,7 @@ async function refresh(rawToken: string, clientId: string): Promise<{ status: nu
     const response = await app?.inject({
         method: 'POST',
         url: '/token',
+        headers: { 'x-real-ip': currentTestIp },
         payload: {
             grant_type: 'refresh_token',
             client_id: clientId,

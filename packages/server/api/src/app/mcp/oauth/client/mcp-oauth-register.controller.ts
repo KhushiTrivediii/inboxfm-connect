@@ -1,6 +1,7 @@
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { securityAccess } from '../../../core/security/authorization/fastify-security'
+import { mcpOAuthRegisterRateLimitOptions } from '../../../core/security/rate-limit'
 import { mcpOAuthClientService } from './mcp-oauth-client.service'
 
 // RFC 8252 (OAuth for native apps, BCP) §7.3 and the OAuth Security BCP both reject
@@ -56,7 +57,14 @@ export const mcpOAuthRegisterController: FastifyPluginAsyncZod = async (app) => 
 }
 
 const RegisterRequest = {
-    config: { security: securityAccess.public() },
+    config: {
+        security: securityAccess.public(),
+        // RFC 7591 dynamic registration writes one DB row per unauthenticated
+        // request. The dedicated, looser tier (see core/security/rate-limit.ts)
+        // bounds that row creation without constraining legitimate one-time
+        // client registrations.
+        rateLimit: mcpOAuthRegisterRateLimitOptions,
+    },
     schema: {
         hide: true,
         body: z.object({

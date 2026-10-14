@@ -23,7 +23,6 @@ import { connectProxyModule } from './connect-proxy/connect-proxy.module'
 import { connectSessionModule } from './connect-sessions/connect-session.module'
 import { oidcModule } from './core/security/oidc/oidc.module'
 import { publicIngressRateLimitMiddleware } from './core/security/public-ingress-rate-limit-middleware'
-import { rateLimitModule } from './core/security/rate-limit'
 import { authenticationMiddleware } from './core/security/v2/authn/authentication-middleware'
 import { apiKeyRateLimitMiddleware } from './core/security/v2/authz/api-key-rate-limit-middleware'
 import { authorizationMiddleware } from './core/security/v2/authz/authorization-middleware'
@@ -144,7 +143,6 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     })
 
 
-    await app.register(rateLimitModule)
     app.addHook('onResponse', async (request, reply) => {
         // eslint-disable-next-line                                                                                                                                                                                                                     
         reply.header('x-request-id', request.id)

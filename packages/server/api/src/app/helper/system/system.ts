@@ -23,6 +23,17 @@ const systemPropDefaultValues: Partial<Record<SystemProp, string>> = {
     // flag that registers the underlying @fastify/rate-limit plugin.
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_MAX]: '10',
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_WINDOW]: '1 minute',
+    // Looser tier for the RFC 7591 MCP OAuth dynamic-registration endpoint
+    // (POST /register — see mcp-oauth-register.controller.ts). Unlike the
+    // token/revoke endpoints, register authenticates no secret, so the
+    // concern is not brute force but the unbounded one-DB-row-per-request
+    // creation it allows. A ceiling of 20/min/IP bounds that to ~28.8k
+    // rows/day per IP while staying far above legitimate use — MCP clients
+    // register once at setup, so even a bursty shared-NAT onboarding has
+    // ample headroom. Gated by the same AP_API_RATE_LIMIT_AUTHN_ENABLED flag
+    // as the other authn-surface tiers.
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_MAX]: '20',
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_WINDOW]: '1 minute',
     // IP-scoped tier for routes that synchronously run piece code or fan out to
     // upstream AI/search providers inside the API process (execute, executions
     // list/create, knowledge-search, AI providers). 60/min/IP stays far above dashboard
