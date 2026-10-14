@@ -1,5 +1,5 @@
 import { isNil, isObject } from '@inboxfm-connect/core-utils'
-import { getAuthPropertyForValue, InputPropertyMap, PieceAuthProperty, PieceProperty, PiecePropertyMap, PropertyType, StaticPropsValue } from '@inboxfm-connect/pieces-framework'
+import { getAuthPropertyForValue, InputPropertyMap, IntegrationProperty, PieceAuthProperty, PiecePropertyMap, PropertyType, StaticPropsValue } from '@inboxfm-connect/pieces-framework'
 import { AppConnectionValue, AUTHENTICATION_PROPERTY_NAME, PropertySettings } from '@inboxfm-connect/shared'
 import { processors } from './processors'
 import { arrayZipperProcessor } from './processors/array-zipper'
@@ -107,7 +107,7 @@ export const propsProcessor = {
     },
 }
 
-const validateProperty = (property: PieceProperty, value: unknown, originalValue: unknown): string[] => {
+const validateProperty = (property: IntegrationProperty, value: unknown, originalValue: unknown): string[] => {
     if (property.type === PropertyType.JSON) {
         if (!property.required && originalValue === '') {
             return []
