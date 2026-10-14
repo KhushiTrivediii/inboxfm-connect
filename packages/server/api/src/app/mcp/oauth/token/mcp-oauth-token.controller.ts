@@ -4,6 +4,7 @@ import { FastifyBaseLogger, FastifyReply } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { securityAccess } from '../../../core/security/authorization/fastify-security'
+import { authAbuseRateLimitOptions } from '../../../core/security/rate-limit'
 import { mcpOAuthClientService } from '../client/mcp-oauth-client.service'
 import { mcpOAuthCodeService } from '../code/mcp-oauth-code.service'
 import { mcpOAuthTokenService, OAuthTokenError } from './mcp-oauth-token.service'
@@ -136,7 +137,14 @@ const tokenRequestSchema = z.object({
 })
 
 const TokenRequest = {
-    config: { security: securityAccess.public() },
+    config: {
+        security: securityAccess.public(),
+        // This endpoint authenticates client_secret_post secrets and consumes
+        // one-time authorization codes — the same tighter tier as sign-up /
+        // sign-in (see core/security/rate-limit.ts). 10/min/IP is far above a
+        // legitimate client's refresh cadence.
+        rateLimit: authAbuseRateLimitOptions,
+    },
     schema: {
         hide: true,
         body: tokenRequestSchema,

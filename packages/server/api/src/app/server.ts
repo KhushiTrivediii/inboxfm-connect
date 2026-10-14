@@ -16,6 +16,7 @@ import qs from 'qs'
 import { Socket } from 'socket.io'
 import { getAdapter, setupApp } from './app'
 import { oidcDiscoveryController } from './core/security/oidc/oidc-discovery.controller'
+import { rateLimitModule } from './core/security/rate-limit'
 import { websocketService } from './core/websockets.service'
 import { healthModule } from './health/health.module'
 import { embedSecurity } from './helper/embed-security'
@@ -37,6 +38,13 @@ export const setupServer = async (): Promise<FastifyInstance> => {
     // MCP OAuth endpoints at domain root (required by MCP spec)
     // OIDC discovery endpoints at domain root (required by OIDC spec)
     if (system.isApp()) {
+        // The rate-limit plugin must be registered here, at the root scope,
+        // BEFORE the MCP OAuth routes below: they live at the domain root
+        // (POST /token, /revoke, /register), outside the /api prefix, so a
+        // plugin registered inside setupApp's /api scope (child scope) could
+        // never reach them. Root-scope hooks also propagate to the /api
+        // child scope, so the existing authn/sync tiers keep working.
+        await app.register(rateLimitModule)
         await app.register(mcpOAuthRootModule)
         await app.register(mcpOAuthHttpController, { prefix: '/mcp' })
         await app.register(mcpPlatformHttpController, { prefix: '/mcp/platform' })
