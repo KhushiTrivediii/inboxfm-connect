@@ -101,6 +101,8 @@ const systemPropValidators: {
     [AppSystemProp.API_RATE_LIMIT_AUTHN_WINDOW]: stringValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_MAX]: numberValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_WINDOW]: stringValidator,
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_MAX]: numberValidator,
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_WINDOW]: stringValidator,
     [AppSystemProp.API_RATE_LIMIT_SYNC_ENABLED]: booleanValidator,
     [AppSystemProp.API_RATE_LIMIT_SYNC_MAX]: positiveIntegerValidator,
     [AppSystemProp.API_RATE_LIMIT_SYNC_WINDOW]: stringValidator,
