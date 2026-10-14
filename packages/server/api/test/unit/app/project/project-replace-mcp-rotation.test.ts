@@ -52,6 +52,7 @@ vi.mock('../../../../src/app/mcp/mcp-service', () => ({
 vi.mock('../../../../src/app/tables/field/field.service', () => ({
     fieldService: {
         getAll: vi.fn().mockResolvedValue([]),
+        getAllByTableIds: vi.fn().mockResolvedValue(new Map()),
     },
 }))
 
