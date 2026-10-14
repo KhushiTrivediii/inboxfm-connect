@@ -1,6 +1,6 @@
 import { TriggerStrategy, createTrigger } from '@inboxfm-connect/pieces-framework';
 import { lemonSqueezyAuth } from '../common/auth';
-import { subscribeWebhook, unsubscribeWebhook, createStoreDropdownProperty, generateWebhookSecret, createWebhookTriggerKey } from '../common/webhook';
+import { subscribeWebhook, unsubscribeWebhook, createStoreDropdownProperty, generateWebhookSecret, createWebhookTriggerKey, verifyLemonSqueezyWebhookRequest } from '../common/webhook';
 
 export const orderRefundedTrigger = createTrigger({
   auth: lemonSqueezyAuth,
@@ -39,6 +39,7 @@ export const orderRefundedTrigger = createTrigger({
     }
   },
   async run(context) {
+    await verifyLemonSqueezyWebhookRequest(context, 'order_refunded');
     return [context.payload.body];
   },
   sampleData: {
