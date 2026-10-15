@@ -41,7 +41,7 @@ export const updateOOO = createAction({
     }),
     user_id: Property.ShortText({
       displayName: 'User ID',
-      description: 'ID of the user for the time off request (required for creating new request)',
+      description: 'ID of the user for the time off request (required to cancel the original request and to create the new one)',
       required: true,
     }),
     activity_type_id: Property.ShortText({
@@ -60,7 +60,8 @@ export const updateOOO = createAction({
       await assembledCommon.makeRequest(
         context.auth.secret_text,
         HttpMethod.POST,
-        `/time_off/${OOO_id}/cancel`
+        `/time_off/${OOO_id}/cancel`,
+        { user_id }
       );
       
       // create new time off request with updated details
