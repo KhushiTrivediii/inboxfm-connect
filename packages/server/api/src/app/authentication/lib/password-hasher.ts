@@ -1,6 +1,6 @@
-import { assertNotNullOrUndefined } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, assertNotNullOrUndefined, ErrorCode } from '@inboxfm-connect/core-utils'
 import bcrypt from 'bcrypt'
-import { FirebaseScrypt } from 'firebase-scrypt'
+import { FirebaseScrypt, FirebaseScryptOptions } from 'firebase-scrypt'
 import { system } from '../../helper/system/system'
 import { AppSystemProp } from '../../helper/system/system-props'
 const SALT_ROUNDS = 10
@@ -36,9 +36,22 @@ async function compareScrypt(
     salt: string,
     hashedPassword: string,
 ): Promise<boolean> {
-    const firebaseParameter = JSON.parse(
-        system.getOrThrow(AppSystemProp.FIREBASE_HASH_PARAMETERS),
-    )
+    // FIREBASE_HASH_PARAMETERS is operator-supplied env config parsed on the
+    // legacy-scrypt sign-in path — a malformed value must surface as a
+    // named configuration error, not a raw SyntaxError 500.
+    const firebaseHashParameters = system.getOrThrow(AppSystemProp.FIREBASE_HASH_PARAMETERS)
+    let firebaseParameter: FirebaseScryptOptions
+    try {
+        firebaseParameter = JSON.parse(firebaseHashParameters)
+    }
+    catch (error) {
+        throw new ActivepiecesError({
+            code: ErrorCode.VALIDATION,
+            params: {
+                message: `AP_FIREBASE_HASH_PARAMETERS is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+            },
+        })
+    }
     const firebaseScrypt = new FirebaseScrypt(firebaseParameter)
     return firebaseScrypt.verify(password, salt, hashedPassword)
 }

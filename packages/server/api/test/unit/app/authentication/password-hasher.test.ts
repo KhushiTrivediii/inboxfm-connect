@@ -1,4 +1,5 @@
 import bcrypt from 'bcrypt'
+import { ActivepiecesError, ErrorCode } from '@inboxfm-connect/core-utils'
 import { passwordHasher } from '../../../../src/app/authentication/lib/password-hasher'
 
 const SCRYPT_SEPARATOR = '~'
@@ -89,6 +90,34 @@ describe('Password Hasher', () => {
                 `$scrypt$${hashedPassword}${SCRYPT_SEPARATOR}${salt}`,
             )
             expect(result).toBe(false)
+        })
+
+        it('should throw a named config error, not a raw SyntaxError, when FIREBASE_HASH_PARAMETERS is malformed', async () => {
+            const original = process.env.AP_FIREBASE_HASH_PARAMETERS
+            process.env.AP_FIREBASE_HASH_PARAMETERS = '{not-valid-json'
+            let caught: unknown
+            try {
+                // A raw SyntaxError here would surface as an opaque 500 on every
+                // legacy-scrypt sign-in; the house error names the misconfigured prop.
+                try {
+                    await passwordHasher.compare(plainTextPassword, `$scrypt$${hashedPassword}${SCRYPT_SEPARATOR}${salt}`)
+                }
+                catch (error) {
+                    caught = error
+                }
+            }
+            finally {
+                if (original === undefined) {
+                    delete process.env.AP_FIREBASE_HASH_PARAMETERS
+                }
+                else {
+                    process.env.AP_FIREBASE_HASH_PARAMETERS = original
+                }
+            }
+            expect(caught).toBeInstanceOf(ActivepiecesError)
+            const apError = caught as ActivepiecesError
+            expect(apError.error.code).toBe(ErrorCode.VALIDATION)
+            expect(JSON.stringify(apError.error.params)).toContain('AP_FIREBASE_HASH_PARAMETERS')
         })
     })
 })
