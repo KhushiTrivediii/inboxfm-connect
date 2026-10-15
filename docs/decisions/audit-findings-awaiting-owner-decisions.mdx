@@ -1,0 +1,490 @@
+---
+title: "Audit findings awaiting owner decisions"
+description: "Curated queue of report-only findings from the 17 code-audit rounds that need a product or design owner rather than a mechanical fix, each with evidence and a recommended default."
+---
+
+# Audit findings awaiting owner decisions
+
+Across the 17 audit rounds, every finding was either fixed on a branch with a conventional
+commit or recorded as **report-only** with evidence. The report-only set splits into two
+kinds: small hardening notes that sit below the fix bar, and findings that cannot be fixed
+mechanically because they encode a product or design choice — a wire format the vendor docs
+do not settle, a breaking connection change, a convention that pins stored data. This page is
+the curated queue for the second kind.
+
+Each entry names the finding, why it needs an owner, the evidence report (file names refer to
+the per-wave audit reports, preserved in the audit workspace and in each wave's PR history),
+and a **recommended default** the owner can accept or override. When an owner decides:
+implement per the decision, record the accepted outcome as a numbered entry in `docs/adr/`,
+and strike the item here.
+
+## Already resolved while this queue was curated
+
+- **App credentials stored plaintext at rest** (`report-w5-security.md`, Finding 3) — resolved
+  by #598: encrypt `app-credential` settings at rest with back-compat reads.
+- **Conjur TLS verification disabled** (`report-w5-security.md`, Finding 5) — resolved by #601:
+  verify Conjur TLS by default with an explicit opt-out.
+- **segment success-before-flush, surveymonkey page-1 dropdown, monday blanket-catch
+  enrichment** (`report-c2-community7.md`, §Report-only) — all three fixed in the round-7
+  leftovers pass (`report-d1-leftovers.md`, commits `bc6a85726b`, `a08e007ebc`, `4c39e5a0c1`).
+
+## Security trade-offs
+
+### At-rest encryption is unauthenticated AES-256-CBC
+
+Evidence: `report-e13-core.md` §F6.
+
+`encryptUtils` (`server/api/src/app/helper/encryption.ts`) encrypts with AES-256-CBC and a
+fresh random IV per record, but with **no authentication** — no HMAC, no AEAD — so ciphertext
+is malleable. Two adjacent defects: the key is read with `Buffer.from(secret, 'binary')`
+(latin1 bytes), so a 64-character hex key supplied with binary intent becomes 64 bytes and
+`createCipheriv` throws at first use; and `encryptString` guards a missing key while
+`decryptString`/`decryptObject` dereference `secret!` and crash with a bare `TypeError` on a
+keyless non-memory deployment.
+
+Why an owner: swapping the cipher changes at-rest compatibility for every encrypted column
+(app connections, app credentials since #598, connect OAuth apps), and the key-encoding policy
+is a deployment-facing contract.
+
+Default: keep CBC reads for existing rows; write new ciphertext as AES-256-GCM (or
+encrypt-then-MAC) with back-compat reads, mirroring #598's read-fallback pattern; document
+the key encoding (32 ASCII characters) or accept and decode 64-char hex; make the decrypt
+path fail symmetrically with a named error instead of a bare `TypeError`.
+
+### MCP OAuth public endpoints carry no rate limiting
+
+Evidence: `report-w5-security.md`, Finding 4.
+
+`POST /v1/mcp/oauth/token` (verifies client secrets, consumes auth codes), `POST .../revoke`
+(validates client secrets), and `POST .../register` (RFC 7591, unauthenticated row creation)
+are all public and unthrottled. The repo's tighter auth-abuse tier
+(`authAbuseRateLimitOptions`, 10/min/IP) is deliberately scoped to sign-up/sign-in/password
+routes only. Mitigations exist (32-byte secrets, 48-byte single-use codes with PKCE S256,
+hashed rotating refresh tokens), and the register endpoint's unbounded row creation is
+DoS-adjacent, which `SECURITY.md` declares out of scope.
+
+Why an owner: this extends an existing rate-limit policy to a new route family — a
+product-level availability/compatibility call (MCP clients refresh at their own cadence), not
+a provable vulnerability.
+
+Default: apply `authAbuseRateLimitOptions` to token and revoke (10/min/IP is far above any
+legitimate refresh cadence) and a looser tier on register; or accept and document the
+exemption.
+
+### Webhook-delivery verification is per-provider folklore
+
+Evidence: `report-b4-community6.md` §FOUND—NOT-FIXED (figma), with the lemon-squeezy
+round-5 precedent cited there.
+
+figma `trigger/new-comment.ts` provisions a per-enable `passcode` and registers it with the
+webhook, but `run()` never verifies incoming deliveries against it — anyone who learns the
+callback URL can forge events. The same class was report-only for lemon-squeezy in round 5
+and was later fixed there by adding verification across 18 triggers, which was itself an
+owner-scoped change. Each provider is currently decided ad hoc.
+
+Why an owner: "which providers get verification" is a support/compatibility matrix decision,
+and "how legacy instances migrate" is a rollout design — enabling strict verification
+invalidates webhooks registered by instances upgrading from versions that never stored or
+checked a secret.
+
+Default: adopt a written policy — every webhook trigger verifies a registration-time shared
+secret whenever the provider offers one (HMAC signature header, `clientState` echo, or a
+random token embedded in the callback URL); land it per provider with a re-registration or
+version-gated migration for instances whose stored webhook predates the secret; treat
+providers with no verification mechanism as documented exceptions.
+
+### microsoft-copilot webhook subscriptions silently expire
+
+Evidence: `report-b4-community6.md` §FOUND—NOT-FIXED.
+
+The `new-channel-message` trigger uses a static `clientState`, and Graph subscriptions
+expire in ≤24h with no renewal path: long-lived triggers stop receiving events with no
+failure signal. Enablement itself is clean (creation errors propagate).
+
+Why an owner: renewal is a lifecycle design (where the renewal loop lives — poll hook,
+scheduler, or onEnable refresh — and whether `clientState` rotates), which is engine/product
+work beyond a piece-level fix.
+
+Default: renew subscriptions on each poll with an expiry margin and rotate `clientState` on
+re-enable; alternatively declare ≤24h subscription lifetime unsupported for long-lived
+triggers and remove the trigger.
+
+### `userIdentityService.update()` accepts a password without rotating `tokenVersion`
+
+Evidence: `report-w5-security.md`, Finding 7.
+
+The generic `update()` hashes `params.password` when present but does not bump `tokenVersion`,
+unlike `updatePassword()`, which revokes every session. No live caller passes a password
+today (SCIM sets names, users-controller sets images), so nothing is exploitable now; any
+future caller wiring a password change through `update()` would silently keep old sessions
+alive.
+
+Why an owner: changing a shared service signature (or dropping `password` from
+`UpdateParams`) is an API-shape decision with latent-consumer risk, not a provable bug.
+
+Default: rotate `tokenVersion` inside `update()` whenever a password is written — cheap,
+fail-safe, and preserves the signature.
+
+### Platform-wide analytics readable by any platform member
+
+Evidence: `report-e10-authorization.md`, §False alarms/observations.
+
+`GET /v1/platform-analytics` is `publicPlatform(USER)` + `assertUserIsNotEmbedded`: any
+platform member reads the platform-wide report (run counts). Platform-scoped rather than
+project-scoped, so no cross-tenant leak — but who may see instance-wide usage is a product
+decision.
+
+Default: keep platform-member visibility (it mirrors `/v1/projects` visibility) or gate to
+admin/operator, whichever matches the console's permission philosophy.
+
+### `ee/oauth-apps` list is readable by any platform member
+
+Evidence: `report-e10-authorization.md`, §False alarms/observations.
+
+`GET /v1/ee/oauth-apps` is `publicPlatform(USER)` and lists raw entity rows, while its
+siblings (`POST`, `DELETE`) are `platformAdminOnly`. The zod response schema strips
+`clientSecret`, so only client ids leak — a hardening candidate, not a hole.
+
+Default: make the list `platformAdminOnly` for consistency with its siblings.
+
+### Unauthenticated piece catalog with a client-supplied project filter
+
+Evidence: `report-e10-authorization.md`, §False alarms/observations.
+
+`GET /v1/integrations` accepts `?projectId=` to personalize the EE platform piece filter, and
+tokenless requests degrade to the platform-less OFFICIAL-pieces view. No tenant rows and no
+secrets — a catalog-visibility quirk.
+
+Default: derive the project filter from the token instead of the query param; low priority,
+fix opportunistically.
+
+### Public connect page must echo fields the server ignores
+
+Evidence: `report-e15-ui-contract.md` §6 (Issue 1 fixed the frontend side in `f19fb815fe`).
+
+`UpsertAppConnectionRequestBody` requires `projectId` and `externalId` in every union branch,
+so the public connect redemption has to echo session-derived values that
+`connect-session.controller.ts` then ignores (the session row wins). The frontend now sends
+them, but the contract remains awkward for any other client.
+
+Why an owner: loosening a shared zod schema (or adding a session-route-specific schema) is an
+API-contract change with external consumers.
+
+Default: add a dedicated redemption schema with both fields optional; the server already
+re-derives them from the session.
+
+### OAuth `scope: []` on digital-ocean and netlify; gitea workflow-run payload shape
+
+Evidence: `report-e14-community9.md` §Reported, items 1–3.
+
+digital-ocean and netlify OAuth both declare `scope: []`. If the vendors' legacy defaults
+(read / `user`) apply, OAuth connections get 403s on write actions; if empty scope means
+no scope, they fail everywhere. Neither vendor's current docs state the default. Separately,
+gitea's `workflow-run` trigger filters `action === 'completed'` on a payload shape Gitea does
+not document — the trigger may never fire.
+
+Why an owner: the fix is blocked on a fact (vendor default scope / a live payload capture),
+and the remedy — declaring explicit scopes, which forces re-consent for existing connections —
+is a compatibility decision.
+
+Default: verify against live vendors; then declare explicit scopes matching each piece's
+actions and accept the re-consent, or document PAT-only support.
+
+## API redesigns and wire formats
+
+### wedof send-file: broken dynamic props on a wrong wire format
+
+Evidence: `report-a4-community5.md` §multipart sweep, `report-b1-cleanup.md` §NOT FIXED
+(wedof), and the customgpt residual in `report-b4-community6.md` §B4.
+
+Wedof's own docs pin the `UploadFile` wire form: multipart with a binary `file` part, a
+string `typeId`, and `fileToDownload` (URL) as the alternative. The action instead sends a
+plain-object body labeled `multipart/form-data` (JSON bytes on the wire), embeds the raw
+`ApFile` object, and reads the document type as `String(propsValue.typeId['undefined'])` — the
+DynamicProperties value dict is keyed by field id, so this always yields the literal string
+`"undefined"`. The "fileUrl" variant maps to nothing in the documented schema. The action
+has never worked, so no user can depend on the current shape.
+
+Why an owner: a provable fix is blocked on UX design — the prop structure must be rebuilt
+(static `typeId` select fed by the API, a real file prop or a URL prop, one action per
+documented variant), and the docs do not settle the URL-variant mapping. This is the
+precedent family that customgpt's `update-agent` `file` prop also sits in.
+
+Default: rebuild the action against the documented schema — multipart binary part for
+`file`, dynamic-prop-driven `typeId`, `fileToDownload` for the URL variant — and apply the
+same pattern to customgpt's `file` prop (its SDK uses a separate multipart upload flow);
+since neither action ever parsed, no back-compat window is needed.
+
+### customgpt update-agent embeds a raw `ApFile` in a JSON body
+
+Evidence: `report-b4-community6.md` §B4 residual.
+
+The JSON-vs-multipart label bug was fixed (`bee665d308`), but `body.file = propsValue.file`
+still serializes the raw `ApFile` object into the JSON body. CustomGPT's documented
+file-attach flow is a different, multipart endpoint (per their SDK samples). No one could
+have depended on the old behavior (it never parsed).
+
+Default: route the file prop through the documented multipart upload flow or drop it until
+CustomGPT documents the wire form.
+
+### insightly auth cannot validate: the API is pod-scoped, the auth is not
+
+Evidence: `report-d1-leftovers.md` §4 (insightly blocked), `report-c2-community7.md`
+(Class-B note: pieces without `validate`).
+
+Insightly's API lives on pod-scoped hosts (`api.na1.insightly.com` answers `401`; the global
+`api.insightly.com` answers `404` — it serves no API routes). The piece's `pod` is a
+per-action prop and its auth is SecretText (API key only), so any `validate()` would have to
+guess a pod and would false-reject every account on another pod. The round-7 pass added
+`validate` to four sibling pieces and deliberately blocked insightly.
+
+Why an owner: the proper fix migrates the auth to CustomAuth with a pod field — a **breaking
+connection change** for every existing insightly connection.
+
+Default: migrate SecretText → CustomAuth (`pod` + API key) with back-compat reads of
+existing connections, then validate against `GET /v3.1/Users/Me` on the pod host.
+
+### microsoft-outlook forward-email attachment handling is aspirational
+
+Evidence: `report-e12-toppieces.md` U4.
+
+`forward-email` copies `message.attachments` from a plain GET (not `$expand`ed, so almost
+certainly `undefined`) and reads `response.id` from the `/forward` call, which returns **204
+No Content**. Forwarding without attachments still works.
+
+Why an owner: the correct fix is a design change — `$expand` the source message plus a
+re-upload strategy, or forward by `driveItemId` — not a one-line patch, and Graph's
+forward-with-attachments semantics need product intent.
+
+Default: drop the dead attachment copy and document attachments-forwarding as unsupported, or
+implement the `$expand` + re-upload flow.
+
+### drip and customer-io actions return the raw HTTP envelope
+
+Evidence: `report-d2-community8.md` §FOUND—NOT-FIXED.
+
+`drip` `upsert-subscriber` and `customer-io` `create_event` return `{status, body, headers}`
+instead of `response.body`. Data is reachable under `.body`, so flows built against the
+envelope work.
+
+Why an owner: changing an action's output shape breaks existing flows — a compat decision.
+
+Default: keep the shape; document it in the actions' schemas, or add the unpacked body
+alongside the envelope in a minor-version bump.
+
+### discord sits on API v9 while one action uses v10
+
+Evidence: `report-e12-toppieces.md` U2.
+
+The whole piece targets v9 (still "Available" per Discord's versioning docs);
+`send-message-with-bot` alone uses v10. Not broken, but the tree-wide v9→v10 migration is a
+behavior change.
+
+Default: schedule a tree-wide v10 bump as its own change with a changelog note, not piecemeal.
+
+### asana create-task sends a timestamp where the user typed a date
+
+Evidence: `report-e12-toppieces.md` U8.
+
+`create-task` sends `due_at` (full timestamp) even when the input is a date; Asana accepts
+both `due_on` (date) and `due_at` (timestamp), so it works. The prop's own comment flags
+switching to `due_on` as a future minor-version change.
+
+Default: switch date-typed input to `due_on` behind a minor-version bump (timestamp input
+keeps `due_at`), as the prop comment already anticipates.
+
+### microsoft-outlook new-email-in-folder keys on the wrong timestamp
+
+Evidence: `report-e12-toppieces.md` U5.
+
+The trigger filters on `createdDateTime`; messages **moved** into the folder were created
+earlier, so the semantic edge (arrival-in-folder time) is `receivedDateTime`. Not
+doc-provable as a break — only moved messages are affected.
+
+Default: switch to `receivedDateTime` when a trigger-semantics pass next touches Outlook, and
+note the moved-message behavior change.
+
+## Pagination philosophy: the accepted list-cap tier
+
+Evidence: `report-d2-community8.md` (§Class C and §FOUND—NOT-FIXED),
+`report-e14-community9.md` §Reported item 4, `report-e12-toppieces.md` U6/U7/U9,
+`report-c2-community7.md` §Report-only (the originating surveymonkey case), fixed in
+`report-d1-leftovers.md` §2.
+
+Three rounds converged on a de-facto tier for "this fetch silently stops after one page"
+findings. It is currently practice, not policy — an owner should ratify or amend it:
+
+| Tier | Rule | Where it came from |
+|---|---|---|
+| **Fixed as bugs** | An action whose contract says "list all" must actually page | bigcommerce ×5, shopify ×3, attio `list-tasks` (`report-d2-community8.md`); gitlab project dropdown, gitea dropdowns (`report-e14-community9.md`); surveymonkey dropdown (`report-d1-leftovers.md`) |
+| **Accepted cap** | Dropdown refreshers may cap — the user can search or type to refine; a capped dropdown is an inconvenience, not data loss | The surveymonkey precedent (`report-d2-community8.md`): activecampaign (20), getresponse (single 1000-item page), paperform (100), clicdata/coupa/folk/intercom/kapso/podio/service-now/simplyprint/skyprep/what-converts/wistia/zoho-mail (50–100), stripe dropdowns (100), systeme-io (50, disclosed), netlify sites (50), vercel deployments (100), amazon-sns topics, amazon-ses identities, digital-ocean droplets/images (200), cursor agents (100), apify actor/task dropdowns (1000), notion databases (100), asana workspaces/projects, microsoft-onedrive trigger path (200/poll) |
+| **Owner call** | Disclosed caps, trigger miss-windows, and unbounded state need a stated position | flipando `get-all-apps` (cap 20, disclosed in `aiMetadata`, vendor pagination undocumented) and apify `waitForFinish` dataset fetch (truncates at SDK default — `report-b4-community6.md`) — truncation is visible in the output; coralogix `newIncident` seeds/dedupes from the first 100 incidents **and grows its seen-id set unboundedly** (`report-e14-community9.md`) |
+
+Default: ratify the tier as written — dropdown caps acceptable, "list all" action claims must
+page, trigger miss-windows documented per piece — and separately decide the three owner-call
+rows: leave flipando/apify truncation as disclosed behavior, fix coralogix's unbounded
+seen-id growth (that one is a slow leak, not a cap).
+
+## Convention changes
+
+### Formula date functions disagree on timezone
+
+Evidence: `report-e13-core.md` §F5.
+
+`start_of_day`/`end_of_day`/`is_same_day` parse with `dayjs.utc()` (a deliberate, commented
+switch for determinism), but the ISO-returning siblings — `add_days`, `subtract_days`,
+`add_hours`, `add_minutes`, `start_of_month`, `end_of_month`, `to_date` — still parse
+host-local. For a naive input like `"2024-01-01"`, `add_days` returns a different instant per
+server timezone, so stored flow output depends on deployment geography. A pinned test only
+passes on all hosts *because* of the local-parse → local-format round trip.
+
+Why an owner: switching the family to UTC is a semantic change — it flips the pinned test on
+any non-UTC CI host and changes stored outputs for existing flows. This is the local-vs-UTC
+naive-date convention for the whole formula language.
+
+Default: align the family on `dayjs.utc()` in a dedicated change with a doc update and a
+changelog note (get_month/get_day_of_week render via a fixed locale and share the caveat at
+day boundaries); alternatively formalize host-local as intended and revert the three UTC
+functions — but pick one convention.
+
+### Engine object processors are silent on `JSON.parse` failure — by design
+
+Evidence: `report-d5-server-hunt.md`, §Investigated and clean (JSON.parse).
+
+The engine's `json.ts`/`object.ts` variable processors return `undefined` on parse failure —
+guarded but silent. Changing that (throwing, or resolving empty) alters engine resolution
+semantics for every flow that references an unparsable variable, which is a behavior
+decision, not a hardening patch.
+
+Default: keep silent-`undefined` as the documented resolution semantics (an unparsable value
+resolves like a missing one); write the rule down in the engine conventions so future audits
+stop re-flagging it.
+
+### The engine package is never type-checked by CI
+
+Evidence: `report-e11-engine.md` §6 (and `report-w7-engine-tsc.md` / `report-h5-engine.md`
+before it). Open PR **#582**.
+
+Standalone `tsc` on the engine fails with **42 errors** at the current base; the build is
+esbuild-only, the package defines no `typecheck` script, so `turbo run typecheck` skips it and
+vitest transforms via esbuild too — the suite stays green while the compiler fails. The gap
+already produced real bugs (the `Bearer undefined` store-token fix in `report-e11-engine.md`
+finding 1 was compiler-visible as TS2353).
+
+Why an owner: wiring typecheck into CI turns a long-red package green only if someone owns
+the remaining error budget and the CI cost; PR #582 does the work and needs a review
+decision.
+
+Default: land #582 (clears the remaining errors, wires typecheck into CI, residual owned by
+#576) and keep the typecheck task mandatory for the engine.
+
+### Dead core exports need a deprecation pass
+
+Evidence: `report-e13-core.md` §F7 and §F8.
+
+These `core-utils`/`shared` exports have no in-repo consumers outside tests:
+`setAtPath`, `stringifyNullOrUndefined`, `isManualPieceTrigger`, `deepMergeAndCast`,
+`mapsAreSame`, `validateIndexBound` (which additionally returns `-1` for `limit: 0`, outside
+its documented range), plus `getPieceMajorAndMinorVersion` (dead, and throws
+`Invalid comparator` on non-semver input like `'latest'`).
+
+Why an owner: they are exported package API — deleting from a shared lib is a semver-visible
+break for out-of-tree consumers, so removal needs a version decision, not a cleanup commit.
+
+Default: mark all seven `@deprecated` with an in-repo removal milestone now, delete at the
+next major; wrap or drop `getPieceMajorAndMinorVersion` first (it is a landmine, not just
+dead).
+
+### `runCodeModule` and UNSANDBOXED mode keep the no-timeout contract
+
+Evidence: `report-e11-engine.md` §5.
+
+User-code steps (`runCodeModule`) have no per-run timeout — but zero production callers exist
+in this tree, and the sandbox parent-kill bounds any hang. In UNSANDBOXED mode a busy loop
+blocks the engine's event loop until the same parent kill. Expression evaluation got a 5s
+timeout (fixed in `report-e11-engine.md` finding 3); these paths deliberately did not.
+
+Default: document the parent-kill bound as the contract for user code and UNSANDBOXED
+deployments; revisit only if `runCodeModule` gains a production caller.
+
+### Headless waitpoint stubs stay until waitpoints return
+
+Evidence: `report-e11-engine.md` §4 (prior wave h5 R1/R2).
+
+`executeTool`'s `createWaitpoint`/`waitForWaitpoint` return `{ id: 'dummy', ... }` stubs and
+fail with `PauseUnsupportedInHeadlessModeError` — there is no waitpoint execution path in this
+engine anymore.
+
+Default: keep the stubs (they fail loudly with a named error) and delete them together with
+whatever replaces the pause UX; do not "fix" them piecemeal.
+
+### i18n is wired but unused
+
+Evidence: `report-e15-ui-contract.md` §5.
+
+The app configures i18next with natural-key English (2,943 keys), but only the layout
+components call `t()` — roughly 6k page strings are hardcoded English. Missing keys fall back
+to the key itself, so rendering is identical either way.
+
+Why an owner: the migration is large, purely mechanical, and invisible to users — whether to
+invest in it (or unwind the partial wiring) is a product commitment, not a fix.
+
+Default: either commit to a full `t()` migration as a background task for new code
+(new strings must use `t()`), or drop the partial wiring and revisit when a second locale is
+actually shipped.
+
+### Dropdown error-swallowing masks auth failures
+
+Evidence: `report-e14-community9.md` §Reported item 5.
+
+amazon-ses dropdown helpers catch API errors and return empty options with a
+`console.warn` — an invalid API key presents as "No verified identities found." This is the
+deliberate graceful-degradation shape the engine's props-error branch also produces
+("reconnect or refresh the page"), which is wrong advice for a bad credential.
+
+Default: pick one convention for all dropdowns: fail the props call loudly (the engine's
+error branch) for auth-class errors and degrade silently only for empty/shape cases; fix
+amazon-ses as the pattern exemplar.
+
+## Below-the-bar notes (fix on touch)
+
+Small, mechanical residues the audits deliberately left; no decision needed, defaults noted
+for whoever next touches the file.
+
+| Finding | Evidence | Default |
+|---|---|---|
+| zerobounce `validate-email` and kizeo-forms `get-all-list-items` interpolate user strings into URLs unencoded (raw-URL sites bypass the shared client's encoding) | `report-b4-community6.md` | wrap in `encodeURIComponent` on next touch |
+| MCP OAuth compares the SHA-256 **digest** with `===` — attacker controls the preimage, not the digest; consistent with SQL-equality hash lookups | `report-w5-security.md`, Finding 6 | no fix; note for the constant-time-compare convention |
+| klaviyo's 429 branch discards the vendor body (Retry-After scope lost) | `report-d2-community8.md` | fold the body into the message like the fixed 5xx branch |
+| mailjet `send-email` re-checks `status !== 200` after a client that already throws on non-2xx — dead code | `report-d2-community8.md` | remove on next touch |
+| slack `get-channel-history` runs a second `conversations.history` call and discards the first response | `report-e12-toppieces.md` U1 | collapse to one call on next touch |
+| discord channel dropdown lists every channel type incl. categories/voice | `report-e12-toppieces.md` U3 | filter to text-capable types |
+| `unique()` dedupes via `JSON.stringify` — key-order sensitive, throws on circulars (no object-dedup consumer today) | `report-e13-core.md` §F9 | canonical key-sort if an object-dedup consumer ever appears |
+| `kebabCase`/`camelCase` lowercase uppercase runs (`ABCTest` → `abctest`) — lodash-parity gaps, no current caller passes such input | `report-e13-core.md` §F10 | parity-fix if a consumer appears |
+| `formErrors` exists as two identical literals (core-utils and shared) | `report-e13-core.md` §F10 | re-export from core-utils |
+| server `decodeCursor` splits on `_` — safe with today's base64 inner cursor, silent truncation on any format change | `report-e13-core.md` §F10 | version or delimit the cursor format before changing it |
+| `groupBy` puts a `__proto__` key on the prototype (invisible to `Object.keys`) — keys are code-controlled in the only consumer | `report-e13-core.md` §F10 | deny prototype keys if the consumer set grows |
+| `key={index}` on removable array-property rows keeps stale row state in `DynamicOptionsSelect` | `report-e15-ui-contract.md` §4 | stable key when that prop family is touched |
+| dashboard shows raw `status` where activity uses `statusLabel` (CREATED → "Recorded") | `report-e15-ui-contract.md` §5 | align on `statusLabel` |
+| google-calendar `new-event-matching-search` concatenates repeated `eventTypes` into one param value — the shared client encodes the `&`, so 2+ selections never filter | `report-d1-leftovers.md` §5 | mechanical fix, lands after open #587 (the file family is PR-owned) |
+
+## How to triage future audit rounds
+
+The fix bar that produced this queue, so the next round classifies the same way:
+
+1. **Fix on the branch** only what is doc-provable (the vendor's current docs contradict the
+   code) or mechanism-proven against in-repo contracts (the engine/shared helper behavior,
+   verified by reading it). One conventional commit per fix, `tsc` clean on the package.
+2. **Report-only with evidence** everything else — but split it: (a) *below-the-bar
+   hardening* (mechanical, zero behavior change) — append to the table above with a default;
+   (b) *owner decisions* — add an entry here with the four required fields: finding, why it
+   needs an owner (the exact thing that makes it not mechanical), the evidence pointer, and a
+   recommended default. If you cannot state why it is not mechanical, it is a fix, not a
+   decision.
+3. **Check ownership first**: pull the open-PR file lists before touching anything; a
+   finding inside an owned file is deferred to that PR, not re-fixed.
+4. **Re-check this page before re-flagging**: several waves re-found items the prior wave had
+   already classified (the engine typecheck gap was flagged in three waves). Search here
+   first.
+5. When a decision lands, it graduates: the implementation ships as a normal fix PR, the
+   rationale is recorded in `docs/adr/`, and the entry is struck from this page.
