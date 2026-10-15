@@ -98,10 +98,19 @@ const userInteractionWatcherImpl = {
         if (result.status !== 'OK') {
             throw new ActivepiecesError({
                 code: ErrorCode.ENGINE_OPERATION_FAILURE,
-                params: { message: result.error || `Execution failed with status: ${result.status}` },
+                params: {
+                    message: result.error || `Execution failed with status: ${result.status}`,
+                    status: result.status,
+                },
             })
         }
 
+        // Contract: resolves to the operation's BARE result, not the EngineResponse
+        // envelope — the envelope's status is checked here, at the single seam.
+        // Callers must type the result as the inner payload (e.g.
+        // ExecuteValidateAuthResponse); typing it as EngineResponse<T> re-reads a
+        // status that no longer exists and misclassifies every success as a
+        // failure (#548).
         return result.response as T
     },
 }

@@ -46,26 +46,21 @@ describe('POST /v1/integrations — archive metadata cannot poison the global ca
         // archive's metadata() can return arbitrary keys, and extractPieceFromModule
         // only checks constructor.name before trusting it.
         const { userInteractionWatcher } = await import('../../../../src/app/helper/user-interaction/user-interaction-watcher')
-        const { EngineResponseStatus } = await import('@inboxfm-connect/shared')
         const watcherSpy = vi.spyOn(userInteractionWatcher, 'submitAndWaitForResponse').mockResolvedValue({
-            status: EngineResponseStatus.OK,
             // Crafted-archive metadata: every override key present.
-            response: {
-                name: 'poison-catalog-piece',
-                displayName: 'Poison Catalog Piece',
-                logoUrl: 'https://example.com/logo.png',
-                version: '1.0.0',
-                minimumSupportedRelease: '0.0.0',
-                maximumSupportedRelease: '999.999.999',
-                actions: {},
-                triggers: {},
-                authors: [],
-                // ---- server-pinned keys the archive must NOT control ----
-                platformId: null,
-                pieceType: PieceType.OFFICIAL,
-                packageType: PackageType.REGISTRY,
-            },
-            error: undefined,
+            name: 'poison-catalog-piece',
+            displayName: 'Poison Catalog Piece',
+            logoUrl: 'https://example.com/logo.png',
+            version: '1.0.0',
+            minimumSupportedRelease: '0.0.0',
+            maximumSupportedRelease: '999.999.999',
+            actions: {},
+            triggers: {},
+            authors: [],
+            // ---- server-pinned keys the archive must NOT control ----
+            platformId: null,
+            pieceType: PieceType.OFFICIAL,
+            packageType: PackageType.REGISTRY,
         })
 
         try {
@@ -102,24 +97,19 @@ describe('POST /v1/integrations — archive metadata cannot poison the global ca
         const otherCtx = await createTestContext(app!)
 
         const { userInteractionWatcher } = await import('../../../../src/app/helper/user-interaction/user-interaction-watcher')
-        const { EngineResponseStatus } = await import('@inboxfm-connect/shared')
         const watcherSpy = vi.spyOn(userInteractionWatcher, 'submitAndWaitForResponse').mockResolvedValue({
-            status: EngineResponseStatus.OK,
-            response: {
-                name: 'registry-variant-piece',
-                displayName: 'Registry Variant Piece',
-                logoUrl: 'https://example.com/logo.png',
-                version: '2.0.0',
-                minimumSupportedRelease: '0.0.0',
-                maximumSupportedRelease: '999.999.999',
-                actions: {},
-                triggers: {},
-                authors: [],
-                platformId: null,
-                pieceType: PieceType.OFFICIAL,
-                packageType: PackageType.REGISTRY,
-            },
-            error: undefined,
+            name: 'registry-variant-piece',
+            displayName: 'Registry Variant Piece',
+            logoUrl: 'https://example.com/logo.png',
+            version: '2.0.0',
+            minimumSupportedRelease: '0.0.0',
+            maximumSupportedRelease: '999.999.999',
+            actions: {},
+            triggers: {},
+            authors: [],
+            platformId: null,
+            pieceType: PieceType.OFFICIAL,
+            packageType: PackageType.REGISTRY,
         })
 
         try {

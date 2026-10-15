@@ -335,6 +335,7 @@ ErrorCode.ENGINE_OPERATION_FAILURE,
     message: string
     context?: unknown
     code?: string
+    status?: string
 }
 >
 

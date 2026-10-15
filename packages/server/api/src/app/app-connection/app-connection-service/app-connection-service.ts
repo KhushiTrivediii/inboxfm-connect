@@ -1,5 +1,5 @@
 import { ActivepiecesError, apId, Cursor, ErrorCode, isNil, Metadata, PlatformId, ProjectId, SeekPage, spreadIfDefined, unique } from '@inboxfm-connect/core-utils'
-import { ApEdition, ApEnvironment, AppConnection, AppConnectionId, AppConnectionOwners, AppConnectionScope, AppConnectionStatus, AppConnectionType, AppConnectionValue, AppConnectionWithoutSensitiveData, EngineResponse, EngineResponseStatus, ExecuteValidateAuthResponse, MAX_PLATFORM_APP_CONNECTION_OWNERS, OAuth2GrantType, PlatformAppConnectionOwner, PlatformAppConnectionOwnersResponse, PlatformAppConnectionProjectInfo, PlatformAppConnectionsListItem, PlatformRole, UpsertAppConnectionRequestBody, User, UserIdentity, UserWithMetaInformation, WorkerJobType } from '@inboxfm-connect/shared'
+import { ApEdition, ApEnvironment, AppConnection, AppConnectionId, AppConnectionOwners, AppConnectionScope, AppConnectionStatus, AppConnectionType, AppConnectionValue, AppConnectionWithoutSensitiveData, ExecuteValidateAuthResponse, MAX_PLATFORM_APP_CONNECTION_OWNERS, OAuth2GrantType, PlatformAppConnectionOwner, PlatformAppConnectionOwnersResponse, PlatformAppConnectionProjectInfo, PlatformAppConnectionsListItem, PlatformRole, UpsertAppConnectionRequestBody, User, UserIdentity, UserWithMetaInformation, WorkerJobType } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import semver from 'semver'
 import { ArrayContains, Equal, FindOperator, FindOptionsWhere, ILike, In } from 'typeorm'
@@ -708,7 +708,7 @@ const engineValidateAuth = async (
         platformId,
     })
 
-    const engineResponse = await userInteractionWatcher.submitAndWaitForResponse<EngineResponse<ExecuteValidateAuthResponse>>({
+    const validateAuthResult = await userInteractionWatcher.submitAndWaitForResponse<ExecuteValidateAuthResponse>({
         piece: await getPiecePackageWithoutArchive(log, platformId, {
             pieceName,
             pieceVersion: pieceMetadata.version,
@@ -718,22 +718,6 @@ const engineValidateAuth = async (
         auth,
         jobType: WorkerJobType.EXECUTE_VALIDATION,
     }, log)
-
-    if (engineResponse.status !== EngineResponseStatus.OK) {
-        log.error(
-            { engineResponse },
-            'Engine validate auth failed',
-        )
-        throw new ActivepiecesError({
-            code: ErrorCode.ENGINE_OPERATION_FAILURE,
-            params: {
-                message: 'Failed to run engine validate auth',
-                context: engineResponse,
-            },
-        })
-    }
-
-    const validateAuthResult = engineResponse.response
 
     if (!validateAuthResult.valid) {
         throw new ActivepiecesError({
