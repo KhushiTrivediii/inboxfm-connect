@@ -157,7 +157,12 @@ export const AppConnectionOwners = z.object({
 })
 
 export type AppConnectionOwners = z.infer<typeof AppConnectionOwners>
-/**i.e props: {projectId: "123"} and value: "{{projectId}}" will return "123" */
+/**
+ * Resolves single-brace `{key}` placeholders in `value` from `props`, e.g.
+ * props: {projectId: "123"} and value: "projects/{projectId}/flows" -> "projects/123/flows".
+ * Note: `{{key}}` mustache-style tokens are NOT supported — only the literal
+ * single-brace form is replaced.
+ */
 export const resolveValueFromProps = (props: Record<string, unknown> | undefined, value: string): string => {
     let resolvedScope = value
     if (!props) {

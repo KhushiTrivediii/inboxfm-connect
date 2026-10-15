@@ -173,6 +173,35 @@ describe('applyFunctionToValuesSync', () => {
         expect(applyFunctionToValuesSync(999, (s) => s.toUpperCase())).toBe(999)
         expect(applyFunctionToValuesSync(false, (s) => s.toUpperCase())).toBe(false)
     })
+
+    it('should pass non-plain objects through untouched instead of destroying them', () => {
+        // Only plain objects are traversable via Object.entries. Builtins like
+        // Date have none, so the old recursion turned a Date into `{}` and a
+        // Buffer into an index-keyed byte map. They must pass through as-is.
+        const date = new Date('2024-06-15T10:30:00.000Z')
+        const buffer = Buffer.from('binary-data')
+        const map = new Map([['key', 'value']])
+        const set = new Set(['a', 'b'])
+        const regexp = /pattern/
+        const input = { when: date, blob: buffer, mapping: map, unique: set, matcher: regexp, plain: 'x' }
+        const result = applyFunctionToValuesSync<typeof input>(input, (s) => s.toUpperCase())
+        expect(result.when).toBe(date)
+        expect(result.blob).toBe(buffer)
+        expect(result.mapping).toBe(map)
+        expect(result.unique).toBe(set)
+        expect(result.matcher).toBe(regexp)
+        expect(result.plain).toBe('X')
+    })
+
+    it('should still recurse into nested plain objects and arrays around non-plain objects', () => {
+        const date = new Date('2024-06-15T10:30:00.000Z')
+        const input = { nested: { when: date, label: 'keep' }, list: [{ note: 'x' }, date] }
+        const result = applyFunctionToValuesSync<typeof input>(input, (s) => s.toUpperCase())
+        expect(result.nested.when).toBe(date)
+        expect(result.nested.label).toBe('KEEP')
+        expect(result.list[0].note).toBe('X')
+        expect(result.list[1]).toBe(date)
+    })
 })
 
 describe('applyFunctionToValues', () => {
@@ -195,6 +224,16 @@ describe('applyFunctionToValues', () => {
         expect(await applyFunctionToValues(null, async (s) => s)).toBeNull()
         expect(await applyFunctionToValues(undefined, async (s) => s)).toBeUndefined()
         expect(await applyFunctionToValues(42, async (s) => s)).toBe(42)
+    })
+
+    it('should pass non-plain objects through untouched asynchronously', async () => {
+        const date = new Date('2024-06-15T10:30:00.000Z')
+        const buffer = Buffer.from('binary-data')
+        const input = { when: date, blob: buffer, plain: 'x' }
+        const result = await applyFunctionToValues<typeof input>(input, async (s) => Promise.resolve(s.toUpperCase()))
+        expect(result.when).toBe(date)
+        expect(result.blob).toBe(buffer)
+        expect(result.plain).toBe('X')
     })
 })
 
