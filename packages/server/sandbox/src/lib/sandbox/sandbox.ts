@@ -275,8 +275,17 @@ export function createSandbox(
                 timeout = setTimeout(async () => {
                     killedByTimeout = true
                     log.debug({ sandbox: { id: sandboxId } }, 'Killing sandbox by timeout')
-                    if (!isNil(executeProcess)) {
-                        await killProcess(executeProcess, log)
+                    // Timer callbacks are fire-and-forget: an unguarded
+                    // rejection here (killProcess throws synchronously when the
+                    // child has no pid) becomes an unhandledRejection that
+                    // crashes the worker process instead of failing the run.
+                    try {
+                        if (!isNil(executeProcess)) {
+                            await killProcess(executeProcess, log)
+                        }
+                    }
+                    catch (error) {
+                        log.error({ sandbox: { id: sandboxId }, error: String(error) }, 'Failed to kill sandbox on timeout')
                     }
                 }, executeOptions.timeoutInSeconds * 1000)
 

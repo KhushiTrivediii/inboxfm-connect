@@ -66,8 +66,16 @@ function registerMcpEndpoint(app: Parameters<FastifyPluginAsyncZod>[0], scope: M
                     sessionIdGenerator: undefined,
                 })
                 reply.raw.on('close', async () => {
-                    await transport.close()
-                    await server.close()
+                    // raw-stream 'close' handlers are not awaited by Node, so an
+                    // async body must guard itself or a transport/server close
+                    // failure becomes an unhandledRejection.
+                    try {
+                        await transport.close()
+                        await server.close()
+                    }
+                    catch (error) {
+                        req.log.error({ error }, '[MCP] Failed to close external-user MCP transport on response close')
+                    }
                 })
                 await server.connect(transport)
                 await transport.handleRequest(req.raw, reply.raw, req.body)
@@ -92,8 +100,14 @@ function registerMcpEndpoint(app: Parameters<FastifyPluginAsyncZod>[0], scope: M
         })
 
         reply.raw.on('close', async () => {
-            await transport.close()
-            await server.close()
+            // Guarded for the same reason as the external-user branch above.
+            try {
+                await transport.close()
+                await server.close()
+            }
+            catch (error) {
+                req.log.error({ error }, '[MCP] Failed to close MCP transport on response close')
+            }
         })
 
         await server.connect(transport)
