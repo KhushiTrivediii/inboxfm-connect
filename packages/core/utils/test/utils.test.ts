@@ -56,6 +56,14 @@ describe('chunk', () => {
         chunk(input, 2)
         expect(input).toEqual([1, 2, 3])
     })
+
+    it('should return empty array for non-positive chunk size instead of hanging', () => {
+        // A size of 0 (or negative) never advances the loop index, which used to
+        // spin forever. The shared util must stay total for any numeric input.
+        expect(chunk([1, 2, 3], 0)).toEqual([])
+        expect(chunk([1, 2, 3], -1)).toEqual([])
+        expect(chunk([1, 2, 3], Number.NaN)).toEqual([])
+    })
 })
 
 describe('partition', () => {

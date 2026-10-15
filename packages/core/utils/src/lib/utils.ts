@@ -146,6 +146,12 @@ export function pickBy<T extends Record<string, unknown>>(
 
 export function chunk<T>(records: T[], size: number) {
     const chunks: T[][] = []
+    // Guard against a non-positive or non-finite size: the loop below advances
+    // by `size`, so 0 would spin forever (blocking the event loop) and a
+    // negative size walks the index backwards, also forever.
+    if (!Number.isFinite(size) || size < 1) {
+        return chunks
+    }
     for (let i = 0; i < records.length; i += size) {
         chunks.push(records.slice(i, i + size))
     }
