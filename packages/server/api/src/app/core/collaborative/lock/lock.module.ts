@@ -70,14 +70,22 @@ function registerLockDisconnectHandler({ socket, userId, projectId, app }: Regis
     socket.once('disconnect', async () => {
         const lockedResourceId = socket.data.lockedResourceId
         if (typeof lockedResourceId === 'string') {
-            const released = await lockService(app.log).release({
-                resourceId: lockedResourceId,
-                userId,
-            })
-            if (released) {
-                websocketService.to(projectId).emit(WebsocketClientEvent.RESOURCE_UNLOCKED, {
+            // Same guard as the presence disconnect handler: socket.io ignores
+            // handler rejections, so a lock-service failure during disconnect
+            // would surface as an unhandledRejection and crash the API process.
+            try {
+                const released = await lockService(app.log).release({
                     resourceId: lockedResourceId,
+                    userId,
                 })
+                if (released) {
+                    websocketService.to(projectId).emit(WebsocketClientEvent.RESOURCE_UNLOCKED, {
+                        resourceId: lockedResourceId,
+                    })
+                }
+            }
+            catch (error) {
+                app.log.error({ error, resourceId: lockedResourceId }, '[DISCONNECT] Failed to release lock')
             }
         }
     })

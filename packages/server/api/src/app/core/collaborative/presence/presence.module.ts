@@ -67,15 +67,24 @@ function registerPresenceDisconnectHandler({ socket, userId, projectId, app }: R
     socket.once('disconnect', async () => {
         const presenceResourceId = socket.data.presenceResourceId
         if (typeof presenceResourceId === 'string') {
-            await presenceService(app.log).leave({
-                resourceId: presenceResourceId,
-                userId,
-            })
-            const users = await presenceService(app.log).getActiveUsers({ resourceId: presenceResourceId })
-            websocketService.to(projectId).emit(WebsocketClientEvent.PRESENCE_UPDATED, {
-                resourceId: presenceResourceId,
-                users,
-            })
+            // socket.io does not await or catch handler rejections, so an
+            // async disconnect handler must guard itself or a single
+            // presence-service failure (Redis/DB error) becomes an
+            // unhandledRejection that takes down the whole API process.
+            try {
+                await presenceService(app.log).leave({
+                    resourceId: presenceResourceId,
+                    userId,
+                })
+                const users = await presenceService(app.log).getActiveUsers({ resourceId: presenceResourceId })
+                websocketService.to(projectId).emit(WebsocketClientEvent.PRESENCE_UPDATED, {
+                    resourceId: presenceResourceId,
+                    users,
+                })
+            }
+            catch (error) {
+                app.log.error({ error, resourceId: presenceResourceId }, '[DISCONNECT] Failed to leave presence')
+            }
         }
     })
 }
