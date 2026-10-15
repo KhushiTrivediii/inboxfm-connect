@@ -99,6 +99,85 @@ function authorizationUrlRequests(requests: StubRequestRecord[]): StubRequestRec
   )
 }
 
+const SECRET_SESSION = {
+  projectId: 'proj_connect',
+  externalUserId: 'user_42',
+  allowedPieceNames: ['slack'],
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+}
+
+/**
+ * `POST /v1/connect-sessions/:token/connections` validates its body against
+ * `UpsertAppConnectionRequestBody`, which requires `projectId` and `externalId`
+ * in every union branch even though the server replaces both with the session
+ * row's values. These tests pin that the redemption body carries the session's
+ * own identity — without those keys every public connect redemption 400s at
+ * validation, before the handler ever runs.
+ */
+function secretRedemptionRoutes() {
+  return stubApi([
+    {
+      match: (url) => url.pathname === `/api/v1/connect-sessions/${SESSION_TOKEN}`,
+      respond: () => ({ status: 200, body: SECRET_SESSION }),
+    },
+    {
+      match: (url) => url.pathname === '/api/v1/integrations/slack',
+      respond: () => ({
+        status: 200,
+        body: {
+          name: 'slack',
+          displayName: 'Slack',
+          logoUrl: '',
+          description: 'Team communication and messaging.',
+          version: '0.2.1',
+          auth: { type: 'SECRET_TEXT', description: 'Create a Slack bot user token.' },
+          actions: {},
+          triggers: {},
+        },
+      }),
+    },
+    {
+      match: (url, method) =>
+        url.pathname === `/api/v1/connect-sessions/${SESSION_TOKEN}/connections` && method === 'POST',
+      respond: () => ({
+        status: 201,
+        body: {
+          id: 'conn_1',
+          created: new Date().toISOString(),
+          updated: new Date().toISOString(),
+          displayName: 'Slack connection',
+          pieceName: 'slack',
+          pieceVersion: '0.2.1',
+          type: 'SECRET_TEXT',
+          status: 'ACTIVE',
+          externalId: SECRET_SESSION.externalUserId,
+          projectIds: [SECRET_SESSION.projectId],
+        },
+      }),
+    },
+  ])
+}
+
+function redemptionRequests(requests: StubRequestRecord[]): StubRequestRecord[] {
+  return requests.filter(
+    (request) =>
+      request.url.endsWith(`/connect-sessions/${SESSION_TOKEN}/connections`) && request.method === 'POST',
+  )
+}
+
+async function submitSecretForm(container: HTMLElement): Promise<void> {
+  await waitFor(() => container.querySelector<HTMLInputElement>('#connect-secret-value') !== null)
+  await setInputValue(container, '#connect-secret-value', 'xoxb-live-secret')
+
+  const submit = Array.from(container.querySelectorAll('button')).find((button) =>
+    button.textContent?.includes('Connect'),
+  )
+  expect(submit).toBeTruthy()
+  await act(async () => {
+    submit?.click()
+  })
+}
+
 describe('public connect page', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -130,5 +209,33 @@ describe('public connect page', () => {
       pieceName: PIECE_NAME,
       props: { domain: 'https://acme.example' },
     })
+  }, 15000)
+
+  it('sends the session projectId and externalUserId in the redemption body', async () => {
+    const { requests } = secretRedemptionRoutes()
+    const container = renderConnectPage()
+
+    await submitSecretForm(container)
+    await waitFor(() => redemptionRequests(requests).length === 1)
+
+    expect(redemptionRequests(requests)[0]?.body).toMatchObject({
+      projectId: SECRET_SESSION.projectId,
+      externalId: SECRET_SESSION.externalUserId,
+      type: 'SECRET_TEXT',
+      pieceName: 'slack',
+      pieceVersion: '0.2.1',
+      value: { type: 'SECRET_TEXT', secret_text: 'xoxb-live-secret' },
+    })
+  }, 15000)
+
+  it('shows the success screen once the redemption is accepted', async () => {
+    const { requests } = secretRedemptionRoutes()
+    const container = renderConnectPage()
+
+    await submitSecretForm(container)
+    await waitFor(() => redemptionRequests(requests).length === 1)
+
+    await waitFor(() => container.textContent?.includes('Slack connection connected') === true)
+    expect(redemptionRequests(requests).length).toBe(1)
   }, 15000)
 })
