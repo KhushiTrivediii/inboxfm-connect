@@ -62,18 +62,17 @@ vi.mock('../../../../src/app/helper/promise-handler', () => ({
 }))
 
 // The engine round-trip that reads a piece's metadata out of the uploaded archive.
+// Contract: the watcher checks the EngineResponse envelope and resolves the BARE
+// operation result (#548) — mocks must model the bare payload, not the envelope.
 vi.mock('../../../../src/app/helper/user-interaction/user-interaction-watcher', () => ({
     userInteractionWatcher: {
         submitAndWaitForResponse: async () => ({
-            status: 'OK',
-            response: {
-                name: 'my-piece',
-                version: '1.0.0',
-                description: 'a piece',
-                category: PieceCategory.UTILITY,
-                author: 'someone',
-                tags: [],
-            },
+            name: 'my-piece',
+            version: '1.0.0',
+            description: 'a piece',
+            category: PieceCategory.UTILITY,
+            author: 'someone',
+            tags: [],
         }),
     },
 }))
