@@ -1,6 +1,7 @@
 import {
     camelCase,
     chunk,
+    debounce,
     deepMergeAndCast,
     ensureTrailingSlash,
     insertAt,
@@ -128,6 +129,50 @@ describe('unique', () => {
 
     it('should return empty array for empty input', () => {
         expect(unique([])).toEqual([])
+    })
+})
+
+describe('debounce', () => {
+    beforeEach(() => {
+        vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+        vi.useRealTimers()
+    })
+
+    it('should debounce repeated calls with the same key, firing once with the latest args', () => {
+        const calls: string[] = []
+        const debounced = debounce((...args: string[]) => calls.push(args.join('')), 100)
+        debounced('a', 'first')
+        debounced('a', 'second')
+        vi.advanceTimersByTime(150)
+        expect(calls).toEqual(['second'])
+    })
+
+    it('should keep pending timers for different keys independent', () => {
+        const calls: string[] = []
+        const debounced = debounce((...args: string[]) => calls.push(args.join('')), 100)
+        debounced('a', 'one')
+        debounced('b', 'two')
+        vi.advanceTimersByTime(150)
+        expect(calls).toHaveLength(2)
+        expect(calls).toContain('one')
+        expect(calls).toContain('two')
+    })
+
+    it('should not fire a superseded same-key call when keys interleave', () => {
+        // 'a' is called, then 'b', then 'a' again. The first 'a' call was
+        // superseded by the third call, so only the latest 'a' args may fire.
+        const calls: string[] = []
+        const debounced = debounce((...args: string[]) => calls.push(args.join('')), 100)
+        debounced('a', 'a1')
+        debounced('b', 'b1')
+        debounced('a', 'a2')
+        vi.advanceTimersByTime(150)
+        expect(calls).toContain('a2')
+        expect(calls).toContain('b1')
+        expect(calls).not.toContain('a1')
     })
 })
 

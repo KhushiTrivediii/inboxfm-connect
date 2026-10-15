@@ -51,17 +51,22 @@ export function insertAt<T>(array: T[], index: number, item: T): T[] {
 }
 
 export function debounce<T>(func: (...args: T[]) => void, wait: number): (key?: string, ...args: T[]) => void {
-    let timeout: NodeJS.Timeout
-    let currentKey: string | undefined
+    // One pending timer per key. A single shared timer variable cannot express
+    // "restart only the pending call for THIS key": after a different key is
+    // scheduled, the previous key's timer is no longer reachable for clearing,
+    // so returning to that key fires both the superseded and the latest call.
+    const pendingTimers = new Map<string, NodeJS.Timeout>()
     return function (key?: string, ...args: T[]) {
-        const later = () => {
+        const timerKey = key ?? ''
+        const existingTimer = pendingTimers.get(timerKey)
+        if (existingTimer) {
+            clearTimeout(existingTimer)
+        }
+        const timeout = setTimeout(() => {
+            pendingTimers.delete(timerKey)
             func(...args)
-        }
-        if (currentKey === key) {
-            clearTimeout(timeout)
-        }
-        currentKey = key
-        timeout = setTimeout(later, wait)
+        }, wait)
+        pendingTimers.set(timerKey, timeout)
     }
 }
 
