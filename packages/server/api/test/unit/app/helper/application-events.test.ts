@@ -107,11 +107,13 @@ describe('application-events listener rejection containment', () => {
 
         await flushMicrotasks()
 
+        // Listeners are module-global and push-only, so the rejecting listeners
+        // registered by the two tests above are ALSO dispatched here — and must
+        // be contained by the seam rather than escape as unhandled rejections.
         expect(received).toHaveLength(1)
         expect(received[0]?.action).toBe(ApplicationEventName.CONNECTION_UPSERTED)
         expect(workerReceived).toHaveLength(1)
         expect(workerReceived[0]?.action).toBe(ApplicationEventName.CONNECTION_DELETED)
-        expect(log.error).not.toHaveBeenCalled()
         expect(unhandled).toEqual([])
     })
 })
