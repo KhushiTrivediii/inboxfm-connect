@@ -60,6 +60,19 @@ export function sanitizeObjectForPostgresql<T>(input: T): T {
         return str
     })
 }
+// Only plain objects (Object.prototype or null prototype) are safe to rebuild
+// via Object.entries/fromEntries. Class instances and builtins (Date, Buffer,
+// Map, Set, RegExp, ...) carry behavior that lives outside own enumerable
+// properties — recursing into them silently destroys them (a Date becomes {},
+// a Buffer becomes an index-keyed byte map), so they must pass through as-is.
+const isPlainObject = (obj: unknown): obj is Record<string, unknown> => {
+    if (typeof obj !== 'object' || obj === null) {
+        return false
+    }
+    const prototype = Object.getPrototypeOf(obj)
+    return prototype === Object.prototype || prototype === null
+}
+
 export function applyFunctionToValuesSync<T>(obj: unknown, apply: (str: string) => unknown): T {
     if (isNil(obj)) {
         return obj as T
@@ -70,7 +83,7 @@ export function applyFunctionToValuesSync<T>(obj: unknown, apply: (str: string) 
     else if (Array.isArray(obj)) {
         return obj.map(item => applyFunctionToValuesSync(item, apply)) as unknown as T
     }
-    else if (isObject(obj)) {
+    else if (isPlainObject(obj)) {
         return Object.fromEntries(
             Object.entries(obj).map(([key, value]) => [key, applyFunctionToValuesSync(value, apply)]),
         ) as T
@@ -90,7 +103,7 @@ export async function applyFunctionToValues<T>(obj: unknown, apply: (str: string
         const newArray = await Promise.all(obj.map(item => applyFunctionToValues(item, apply)))
         return newArray as unknown as T
     }
-    else if (isObject(obj)) {
+    else if (isPlainObject(obj)) {
         // Use Object.fromEntries and map entries asynchronously
         const newEntries = await Promise.all(
             Object.entries(obj).map(async ([key, value]) => [key, await applyFunctionToValues(value, apply)]),
