@@ -1,0 +1,20 @@
+flow: hello-world
+version: 1
+description: Minimal manual FlowScript flow
+trigger:
+  kind: manual
+inputSchema:
+  name:
+    type: string
+steps:
+  - id: greeting
+    kind: transform
+    config:
+      value:
+        message: "Hello from FlowScript"
+        name:
+          $ref: input.name
+    dependsOn: []
+output:
+  greeting:
+    $ref: steps.greeting
