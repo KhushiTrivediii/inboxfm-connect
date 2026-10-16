@@ -76,12 +76,12 @@ export function validateFlowIR(value: unknown): { valid: true; flow: FlowIR } | 
 }
 
 export function getSafeExecutionEnv(sourceEnv: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
-  const safeEnv: Record<string, string | undefined> = {}
+  const safeEnv: Record<string, string | undefined> = Object.create(null)
   for (const [key, value] of Object.entries(sourceEnv)) {
     if (key.startsWith('FLOWSCRIPT_ENV_')) {
       safeEnv[key] = value
       const strippedKey = key.slice('FLOWSCRIPT_ENV_'.length)
-      if (strippedKey && !(strippedKey in safeEnv)) {
+      if (strippedKey && !Object.prototype.hasOwnProperty.call(safeEnv, strippedKey)) {
         safeEnv[strippedKey] = value
       }
     } else if (key === 'NODE_ENV' || key === 'TZ') {

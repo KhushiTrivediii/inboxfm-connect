@@ -15,7 +15,7 @@ describe('ConnectFlowIntegrationExecutor', () => {
       if (name === 'gmail') {
         return {
           name: 'gmail',
-          version: '1.0.0',
+          version: '1.2.0',
           actions: {
             sendEmail: {
               name: 'sendEmail',
@@ -34,12 +34,13 @@ describe('ConnectFlowIntegrationExecutor', () => {
 
   const mockConnectionLookup: AppConnectionLookupLike = {
     getConnection: vi.fn(async ({ connectionId, projectId, pieceName }) => {
-      if (connectionId === 'conn_valid' && projectId === 'proj_1' && pieceName === 'gmail') {
+      if (connectionId === 'conn_valid' && projectId === 'proj_1') {
         return {
           id: 'conn_valid',
           projectId: 'proj_1',
           platformId: 'plat_1',
-          pieceName: 'gmail',
+          pieceName,
+          pieceVersion: '1.2.0',
         }
       }
       return null
@@ -78,6 +79,7 @@ describe('ConnectFlowIntegrationExecutor', () => {
       input: { to: 'test@example.com', subject: 'Hello' },
       runId: 'run_1',
       stepId: 'step_send',
+      idempotencyKey: 'idemp_key_123',
     })
 
     expect(result).toEqual({ messageId: 'msg_999', recipient: 'test@example.com', status: 'sent' })
@@ -88,7 +90,30 @@ describe('ConnectFlowIntegrationExecutor', () => {
         connectionId: 'conn_valid',
         projectId: 'proj_1',
         platformId: 'plat_1',
+        idempotencyKey: 'idemp_key_123',
         input: { to: 'test@example.com', subject: 'Hello' },
+      }),
+    )
+  })
+
+  it('uses connection pinned pieceVersion for metadata verification', async () => {
+    const executor = createExecutor()
+    await executor.execute({
+      projectId: 'proj_1',
+      platformId: 'plat_1',
+      integrationName: 'gmail',
+      actionName: 'sendEmail',
+      connectionId: 'conn_valid',
+      input: { to: 'test@example.com' },
+      runId: 'run_1',
+      stepId: 'step_1',
+    })
+
+    expect(mockPieceMetadata.getPiece).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'gmail',
+        version: '1.2.0',
+        platformId: 'plat_1',
       }),
     )
   })
@@ -151,6 +176,26 @@ describe('ConnectFlowIntegrationExecutor', () => {
         message: expect.stringContaining(`Direct credential or auth property "${key}" is forbidden`),
       })
     }
+  })
+
+  it('strictly rejects nested credentials in action inputs', async () => {
+    const executor = createExecutor()
+
+    await expect(
+      executor.execute({
+        projectId: 'proj_1',
+        platformId: 'plat_1',
+        integrationName: 'gmail',
+        actionName: 'sendEmail',
+        connectionId: 'conn_valid',
+        input: { to: 'test@example.com', options: { customConfig: { apiKey: 'secret_123' } } },
+        runId: 'run_1',
+        stepId: 'step_1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      message: expect.stringContaining('Direct credential or auth property "apiKey" is forbidden'),
+    })
   })
 
   it('rejects unknown integration names with INTEGRATION_NOT_FOUND', async () => {
@@ -302,10 +347,21 @@ describe('classifyProviderError', () => {
     })
   })
 
-  it('classifies connection not found', () => {
+  it('classifies connection not found vs resource not found correctly', () => {
     expect(classifyProviderError(new Error('entity_not_found: App connection does not exist'))).toEqual({
       code: 'CONNECTION_NOT_FOUND',
       message: 'entity_not_found: App connection does not exist',
+      retryable: false,
+    })
+    expect(classifyProviderError(new Error('connection not found in project'))).toEqual({
+      code: 'CONNECTION_NOT_FOUND',
+      message: 'connection not found in project',
+      retryable: false,
+    })
+    // Upstream resource 404 is classified as PROVIDER_ERROR
+    expect(classifyProviderError(new Error('Upstream provider returned 404: Customer not found'))).toEqual({
+      code: 'PROVIDER_ERROR',
+      message: 'Upstream provider returned 404: Customer not found',
       retryable: false,
     })
   })

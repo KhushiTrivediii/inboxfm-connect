@@ -219,6 +219,36 @@ output:
     }
   })
 
+  it('returns a failed result preserving completed steps if output resolution fails', async () => {
+    const outputFailSource = `flow: output-fail
+version: 1
+trigger:
+  kind: manual
+inputSchema: {}
+steps:
+  - id: step_one
+    kind: transform
+    config:
+      value:
+        status: ok
+    dependsOn: []
+output:
+  badEnv:
+    $env: NON_EXISTENT_ENV_VAR
+`
+    const compiled = compileFlowSource(outputFailSource)
+    expect(compiled.ok).toBe(true)
+    if (!compiled.ok) return
+
+    const result = await executeFlowIR(compiled.ir)
+    expect(result.status).toBe('failed')
+    // Step one succeeded and is preserved in steps
+    expect(result.steps).toHaveLength(1)
+    expect(result.steps[0].id).toBe('step_one')
+    expect(result.steps[0].status).toBe('succeeded')
+    expect((result as { error?: string }).error).toContain('Missing environment variable "NON_EXISTENT_ENV_VAR"')
+  })
+
   it('enforces the maximum step count', async () => {
     const compiled = compileFlowSource(source)
     expect(compiled.ok).toBe(true)

@@ -69,6 +69,7 @@ export type AppConnectionLookupLike = {
     projectId: string
     platformId: string
     pieceName: string
+    pieceVersion?: string
     externalId?: string
   } | null>
 }
@@ -81,6 +82,7 @@ export type HeadlessRuntimeLike = {
     input: Record<string, unknown>
     projectId: string
     platformId: string
+    idempotencyKey?: string
     internalApiUrl?: string
     publicApiUrl?: string
   }): Promise<unknown>
@@ -113,14 +115,36 @@ const SENSITIVE_KEY_PATTERNS = [
 const FORBIDDEN_INPUT_CREDENTIAL_KEYS = new Set([
   'auth',
   'access_token',
-  'accessToken',
+  'accesstoken',
   'token',
   'secret',
   'password',
   'api_key',
-  'apiKey',
+  'apikey',
   'credentials',
+  'private_key',
+  'privatekey',
 ])
+
+function findForbiddenCredentialKey(obj: unknown): string | null {
+  if (!obj || typeof obj !== 'object') return null
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const found = findForbiddenCredentialKey(item)
+      if (found) return found
+    }
+    return null
+  }
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    const normalized = key.toLowerCase().replace(/[-_]/g, '')
+    if (FORBIDDEN_INPUT_CREDENTIAL_KEYS.has(key) || FORBIDDEN_INPUT_CREDENTIAL_KEYS.has(normalized)) {
+      return key
+    }
+    const nested = findForbiddenCredentialKey(value)
+    if (nested) return nested
+  }
+  return null
+}
 
 export function redactSensitiveData(value: unknown): unknown {
   if (value === null || value === undefined) return value
@@ -175,8 +199,11 @@ export function classifyProviderError(error: unknown): { code: IntegrationErrorC
   if (status === 408 || lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout')) {
     return { code: 'TIMEOUT', message: rawMessage, retryable: true }
   }
-  if (status === 404 || lower.includes('not found') || lower.includes('entity_not_found')) {
+  if (lower.includes('connection not found') || lower.includes('entity_not_found') || lower.includes('app_connection_not_found')) {
     return { code: 'CONNECTION_NOT_FOUND', message: rawMessage, retryable: false }
+  }
+  if (status === 404 || lower.includes('not found')) {
+    return { code: 'PROVIDER_ERROR', message: rawMessage, retryable: false }
   }
 
   return { code: 'ENGINE_OPERATION_FAILURE', message: rawMessage, retryable: false }
@@ -216,19 +243,37 @@ export class ConnectFlowIntegrationExecutor implements FlowIntegrationExecutor {
       throw new FlowIntegrationError('VALIDATION_ERROR', 'Connection ID is required for integration action execution', { stepId, runId, retryable: false })
     }
 
-    // 2. Reject credentials in input
-    for (const key of Object.keys(actionInput)) {
-      if (FORBIDDEN_INPUT_CREDENTIAL_KEYS.has(key)) {
-        throw new FlowIntegrationError(
-          'VALIDATION_ERROR',
-          `Direct credential or auth property "${key}" is forbidden in FlowScript input for "${integrationName}.${actionName}". Use a configured connectionId instead.`,
-          { integrationName, actionName, connectionId, stepId, runId, retryable: false },
-        )
-      }
+    // 2. Reject credentials in input (including nested objects)
+    const forbiddenKey = findForbiddenCredentialKey(actionInput)
+    if (forbiddenKey) {
+      throw new FlowIntegrationError(
+        'VALIDATION_ERROR',
+        `Direct credential or auth property "${forbiddenKey}" is forbidden in FlowScript input for "${integrationName}.${actionName}". Use a configured connectionId instead.`,
+        { integrationName, actionName, connectionId, stepId, runId, retryable: false },
+      )
     }
 
-    // 3. Metadata verification
-    const piece = await this.options.pieceMetadata.getPiece({ name: integrationName, platformId })
+    // 3. Validate connection ownership and platform/project scoping
+    const connection = await this.options.connectionLookup.getConnection({
+      connectionId,
+      projectId,
+      platformId,
+      pieceName: integrationName,
+    })
+    if (!connection) {
+      throw new FlowIntegrationError(
+        'CONNECTION_NOT_FOUND',
+        `Connection "${connectionId}" not found for piece "${integrationName}" in project "${projectId}"`,
+        { connectionId, projectId, platformId, integrationName, stepId, runId, retryable: false },
+      )
+    }
+
+    // 4. Metadata verification (pinned to connection's pieceVersion when present)
+    const piece = await this.options.pieceMetadata.getPiece({
+      name: integrationName,
+      version: connection.pieceVersion,
+      platformId,
+    })
     if (!piece) {
       throw new FlowIntegrationError(
         'INTEGRATION_NOT_FOUND',
@@ -244,21 +289,6 @@ export class ConnectFlowIntegrationExecutor implements FlowIntegrationExecutor {
         'ACTION_NOT_FOUND',
         `Action "${actionName}" was not found on integration "${integrationName}". Available actions: ${available || '(none)'}`,
         { integrationName, actionName, stepId, runId, retryable: false },
-      )
-    }
-
-    // 4. Validate connection ownership and platform/project scoping
-    const connection = await this.options.connectionLookup.getConnection({
-      connectionId,
-      projectId,
-      platformId,
-      pieceName: integrationName,
-    })
-    if (!connection) {
-      throw new FlowIntegrationError(
-        'CONNECTION_NOT_FOUND',
-        `Connection "${connectionId}" not found for piece "${integrationName}" in project "${projectId}"`,
-        { connectionId, projectId, platformId, integrationName, stepId, runId, retryable: false },
       )
     }
 
@@ -295,6 +325,7 @@ export class ConnectFlowIntegrationExecutor implements FlowIntegrationExecutor {
         input: actionInput,
         projectId,
         platformId,
+        idempotencyKey,
         internalApiUrl: this.options.internalApiUrl,
         publicApiUrl: this.options.publicApiUrl,
       })

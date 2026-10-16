@@ -3,7 +3,12 @@ import { redactSensitiveData, type FlowIntegrationExecutor } from './adapter.js'
 
 export type StepContext = { input: Record<string, unknown>; trigger: Record<string, unknown>; outputs: Record<string, unknown>; env: Record<string, string | undefined> }
 export type IntegrationExecutor = (config: Record<string, unknown>, context: StepContext) => Promise<unknown>
-export type RunResult = { status: 'succeeded' | 'failed'; output?: unknown; steps: Array<{ id: string; status: 'succeeded' | 'skipped' | 'failed'; output?: unknown; error?: string; durationMs: number }> }
+export type RunResult = {
+  status: 'succeeded' | 'failed'
+  output?: unknown
+  error?: string
+  steps: Array<{ id: string; status: 'succeeded' | 'skipped' | 'failed'; output?: unknown; error?: string; durationMs: number }>
+}
 
 function resolvePath(value: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((current, key) => {
@@ -116,6 +121,12 @@ export async function executeFlowIR(
       return { status: 'failed', steps }
     }
   }
-  const finalOutput = ir.output ? resolveValue(ir.output, context()) : outputs
-  return { status: 'succeeded', output: redactSensitiveData(finalOutput), steps }
+  try {
+    const finalOutput = ir.output ? resolveValue(ir.output, context()) : outputs
+    return { status: 'succeeded', output: redactSensitiveData(finalOutput), steps }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Output resolution failed'
+    const sanitizedError = redactSensitiveData(message) as string
+    return { status: 'failed', steps, error: sanitizedError }
+  }
 }
