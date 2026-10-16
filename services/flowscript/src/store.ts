@@ -1,5 +1,5 @@
 import pg from 'pg'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { FlowIR } from './compiler.js'
 
 const { Pool } = pg
@@ -68,12 +68,13 @@ export async function publishFlow(projectId: string, source: string, ir: FlowIR,
     const version = Math.max(ir.version, (latest.rows[0]?.version ?? 0) + 1)
     const id = randomUUID()
     const versionedIr = { ...ir, version }
+    const versionedHash = createHash('sha256').update(JSON.stringify(versionedIr)).digest('hex')
     await client.query(
       'INSERT INTO flowscript_versions (id, project_id, flow_name, version, source_text, ir, ir_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [id, projectId, ir.name, version, source, JSON.stringify(versionedIr), hash],
+      [id, projectId, ir.name, version, source, JSON.stringify(versionedIr), versionedHash],
     )
     await client.query('COMMIT')
-    return { id, projectId, name: ir.name, version, hash }
+    return { id, projectId, name: ir.name, version, hash: versionedHash }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
