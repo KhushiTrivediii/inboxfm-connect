@@ -133,9 +133,13 @@ function canonicalize(value: unknown): string {
 
 // Catalog heals usually only change actions/triggers, never displayName or
 // description — comparing those two fields alone leaves healed entries stuck.
+// logoUrl and categories participate too: the update branch writes them, so
+// the drift check must detect changes in every field it refreshes.
 function hasCatalogDrift({ existing, incoming }: HasCatalogDriftParams): boolean {
     return existing.displayName !== incoming.displayName
         || existing.description !== incoming.description
+        || existing.logoUrl !== incoming.logoUrl
+        || canonicalize(existing.categories) !== canonicalize(incoming.categories)
         || canonicalize(existing.actions) !== canonicalize(incoming.actions)
         || canonicalize(existing.triggers) !== canonicalize(incoming.triggers)
 }
