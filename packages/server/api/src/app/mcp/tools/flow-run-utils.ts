@@ -76,6 +76,10 @@ export async function executeAdhocAction({
     // be paired with this piece's name at execute time — the engine would fetch a
     // bundle version that exists nowhere (the Frankenstein pair).
     const normalizedPieceName = localPieceCatalog.normalizePieceName(pieceName)
+    // Canonicalize to the catalog's scoped name: a short input ("resend") must both match
+    // connection rows AND provision the scoped package — HeadlessRuntime receives the
+    // canonical name, never the caller's shorthand.
+    const canonicalPieceName = localPieceCatalog.findLocalPiece({ name: pieceName })?.name ?? pieceName
     const projectConnections = await appConnectionsRepo().find({
         where: {
             projectIds: ArrayContains([projectId]),
@@ -99,7 +103,7 @@ export async function executeAdhocAction({
 
     const publicUrl = system.get(AppSystemProp.FRONTEND_URL) || 'http://localhost:3000'
     const result = await runtime.execute({
-        integration: pieceName,
+        integration: canonicalPieceName,
         tool: actionName,
         connectionId: connection.id,
         input,

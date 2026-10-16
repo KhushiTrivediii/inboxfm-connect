@@ -86,7 +86,10 @@ describe('executeAdhocAction connection resolution', () => {
     it('resolves a short piece name to scoped connection rows', async () => {
         await run({ pieceName: 'resend' })
 
-        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'conn-resend' }))
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+            integration: '@inboxfm-connect/piece-resend',
+            connectionId: 'conn-resend',
+        }))
     })
 
     it('auto-picks the piece connection when no externalId is passed', async () => {
