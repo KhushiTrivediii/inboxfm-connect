@@ -20,6 +20,8 @@ async function main() {
         const result = await executeFlowIR(job.ir as FlowIR, {
           input: job.input,
           trigger: { kind: job.trigger_kind, source: 'hosted-worker' },
+          projectId: job.project_id,
+          runId: job.id,
         })
         await finishRun(job.id, result)
       } catch (error) {

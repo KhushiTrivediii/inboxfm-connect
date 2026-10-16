@@ -75,6 +75,22 @@ export function validateFlowIR(value: unknown): { valid: true; flow: FlowIR } | 
   return { valid: true, flow: parsed.data }
 }
 
+export function getSafeExecutionEnv(sourceEnv: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
+  const safeEnv: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(sourceEnv)) {
+    if (key.startsWith('FLOWSCRIPT_ENV_')) {
+      safeEnv[key] = value
+      const strippedKey = key.slice('FLOWSCRIPT_ENV_'.length)
+      if (strippedKey && !(strippedKey in safeEnv)) {
+        safeEnv[strippedKey] = value
+      }
+    } else if (key === 'NODE_ENV' || key === 'TZ') {
+      safeEnv[key] = value
+    }
+  }
+  return safeEnv
+}
+
 export function buildServer(): FastifyInstance {
   const app = Fastify({ logger: { level: env.FLOWSCRIPT_LOG_LEVEL } })
 
@@ -113,7 +129,12 @@ export function buildServer(): FastifyInstance {
     if (!inputValidation.ok) {
       return reply.code(400).send({ error: 'Invalid execution input', diagnostics: inputValidation.diagnostics })
     }
-    const result = await executeFlowIR(validated.flow as unknown as import('./compiler.js').FlowIR, { input: body.data.input, trigger: body.data.trigger })
+    const safeEnv = getSafeExecutionEnv()
+    const result = await executeFlowIR(validated.flow as unknown as import('./compiler.js').FlowIR, {
+      input: body.data.input,
+      trigger: body.data.trigger,
+      env: safeEnv,
+    })
     return result.status === 'succeeded' ? result : reply.code(422).send(result)
   })
 
@@ -142,7 +163,7 @@ export function buildServer(): FastifyInstance {
     const body = z.object({ versionId: z.string().uuid(), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body)
     if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid deployment request' })
     try {
-      return await deployFlow(projectId, body.data.versionId, body.data.environment)
+      return await deployFlow(projectId, params.data.name, body.data.versionId, body.data.environment)
     } catch (error) {
       return reply.code(404).send({ error: error instanceof Error ? error.message : 'Deployment failed' })
     }

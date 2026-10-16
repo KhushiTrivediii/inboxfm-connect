@@ -24,25 +24,43 @@ Persisted statuses are queued, running, succeeded, failed and cancelled. Complet
 - Integration steps must use a trusted adapter mapping declarations to existing Connect piece metadata and runtime execution.
 - Timeouts do not necessarily cancel underlying side effects. Propagate cancellation only where the executor supports it.
 
-## Proposed integration adapter contract
+## Connect integration adapter contract
 
-    interface FlowIntegrationExecutor {
-      execute(input: {
-        projectId: string
-        platformId: string
-        integrationName: string
-        actionName: string
-        connectionId: string
-        input: Record<string, unknown>
-        runId: string
-        stepId: string
-        idempotencyKey: string
-      }): Promise<unknown>
-    }
+The FlowScript service integrates with existing Connect piece actions through `ConnectFlowIntegrationExecutor` implementing `FlowIntegrationExecutor` (`services/flowscript/src/adapter.ts`):
 
-This is a proposed boundary, not an existing exported interface. Before implementing, inspect the exact HeadlessRuntime constructor, API execution service, worker job contracts and connection lookup contracts. Avoid instantiating a second runtime with guessed configuration.
+```typescript
+export interface FlowIntegrationExecutor {
+  execute(input: {
+    projectId: string
+    platformId: string
+    integrationName: string
+    actionName: string
+    connectionId: string
+    input: Record<string, unknown>
+    runId: string
+    stepId: string
+    idempotencyKey?: string
+  }): Promise<unknown>
+}
+```
 
-The adapter must validate integration/action metadata, verify connection ownership, use existing connection resolver/runtime, reject raw credentials, validate action inputs, enforce limits, redact secrets, classify provider errors and pass idempotency keys where supported.
+### Execution pipeline & security checks:
+
+1. **Parameter presence check**: Requires `projectId`, `platformId`, `integrationName`, `actionName`, and `connectionId`.
+2. **Credential isolation**: Strictly forbids raw credential keys in step input (`auth`, `apiKey`, `accessToken`, `token`, `secret`, `password`, `credentials`). All authentication must resolve via a managed connection.
+3. **Pre-flight metadata verification**: Validates that `integrationName` exists in installed piece metadata and that `actionName` is declared in its actions map.
+4. **Connection authorization & scoping**: Checks connection ownership by matching `connectionId`, `platformId`, `pieceName`, and `projectId`. Rejects missing or cross-project connection access with `CONNECTION_NOT_FOUND`.
+5. **Action input schema validation**: Asserts that required properties declared in piece action props are provided.
+6. **Sandboxed runtime execution**: Dispatches to Connect's existing `HeadlessRuntime.execute` using `EngineOperationType.EXECUTE_TOOL`.
+7. **Secret redaction**: Recursively redacts sensitive keys (`token`, `secret`, `password`, `credential`, `apiKey`, `auth`, `bearer`, etc.) from step outputs, logs, and error messages (`redactSensitiveData`).
+8. **Provider error classification**: Maps provider and runtime exceptions into structured error classes (`FlowIntegrationError`):
+   - `RATE_LIMITED` (HTTP 429, retryable: true)
+   - `AUTHENTICATION_EXPIRED` (HTTP 401/403, retryable: false)
+   - `PROVIDER_ERROR` (HTTP 502/503/504, retryable: true)
+   - `TIMEOUT` (HTTP 408/ETIMEDOUT, retryable: true)
+   - `CONNECTION_NOT_FOUND` (HTTP 404/entity_not_found, retryable: false)
+   - `ENGINE_OPERATION_FAILURE` (default/unclassified, retryable: false)
+
 
 ## Failure semantics
 
