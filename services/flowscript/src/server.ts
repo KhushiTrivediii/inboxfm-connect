@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { compileFlowSource } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
+import { closeStore, createRun, deployFlow, finishRun, getDeployedFlow, getRun, initializeStore, listRuns, publishFlow } from './store.js'
 
 const envSchema = z.object({
   FLOWSCRIPT_HOST: z.string().default('0.0.0.0'),
@@ -109,6 +110,77 @@ export function buildServer(): FastifyInstance {
     return result.status === 'succeeded' ? result : reply.code(422).send(result)
   })
 
+  // These routes are intended for the private service network. The API gateway
+  // must authenticate callers and inject a verified project ID before exposure.
+  const projectIdFrom = (request: { headers: Record<string, string | string[] | undefined> }) => {
+    const value = request.headers['x-project-id']
+    return typeof value === 'string' && value.length > 0 && value.length <= 128 ? value : null
+  }
+
+  app.post('/v1/flows/publish', async (request, reply) => {
+    const projectId = projectIdFrom(request)
+    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const body = z.object({ source: z.string().min(1).max(1_000_000) }).safeParse(request.body)
+    if (!body.success) return reply.code(400).send({ error: 'Expected { source: string }', issues: body.error.issues })
+    const compiled = compileFlowSource(body.data.source)
+    if (!compiled.ok) return reply.code(422).send({ valid: false, diagnostics: compiled.diagnostics })
+    const version = await publishFlow(projectId, body.data.source, compiled.ir, compiled.hash)
+    return reply.code(201).send(version)
+  })
+
+  app.post('/v1/flows/:name/deploy', async (request, reply) => {
+    const projectId = projectIdFrom(request)
+    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    const body = z.object({ versionId: z.string().uuid(), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body)
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid deployment request' })
+    try {
+      return await deployFlow(projectId, body.data.versionId, body.data.environment)
+    } catch (error) {
+      return reply.code(404).send({ error: error instanceof Error ? error.message : 'Deployment failed' })
+    }
+  })
+
+  app.post('/v1/flows/:name/run', async (request, reply) => {
+    const projectId = projectIdFrom(request)
+    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    const body = z.object({ input: z.record(z.string(), z.unknown()).default({}), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body ?? {})
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid run request' })
+    const deployed = await getDeployedFlow(projectId, params.data.name, body.data.environment)
+    if (!deployed) return reply.code(404).send({ error: 'No active deployment for this flow and environment' })
+    if (deployed.ir.steps.some(step => step.kind === 'integration')) {
+      return reply.code(501).send({ error: 'Integration execution is not wired to the trusted Connect runtime yet; no run was started.' })
+    }
+    const runId = await createRun({ projectId, flowName: params.data.name, environment: body.data.environment, versionId: deployed.id, input: body.data.input, triggerKind: 'manual' })
+    try {
+      const result = await executeFlowIR(deployed.ir, { input: body.data.input, trigger: { source: 'api', kind: 'manual' } })
+      await finishRun(runId, result)
+      return reply.code(result.status === 'succeeded' ? 200 : 422).send({ runId, ...result })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Execution failed'
+      await finishRun(runId, { status: 'failed', steps: [], error: message })
+      return reply.code(500).send({ runId, status: 'failed', error: message })
+    }
+  })
+
+  app.get('/v1/runs', async (request, reply) => {
+    const projectId = projectIdFrom(request)
+    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const query = z.object({ flow: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query)
+    if (!query.success) return reply.code(400).send({ error: 'Invalid query parameters' })
+    return { runs: await listRuns(projectId, query.data.flow, query.data.limit) }
+  })
+
+  app.get('/v1/runs/:id', async (request, reply) => {
+    const projectId = projectIdFrom(request)
+    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+    if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
+    const run = await getRun(projectId, params.data.id)
+    return run ? run : reply.code(404).send({ error: 'Run not found' })
+  })
+
   app.post('/v1/ir/validate', async (request, reply) => {
     const result = validateFlowIR(request.body)
     if (!result.valid) {
@@ -121,9 +193,13 @@ export function buildServer(): FastifyInstance {
 }
 
 const app = buildServer()
-app.listen({ host: env.FLOWSCRIPT_HOST, port: env.FLOWSCRIPT_PORT })
+initializeStore()
+  .then(() => app.listen({ host: env.FLOWSCRIPT_HOST, port: env.FLOWSCRIPT_PORT }))
   .then(address => app.log.info({ address }, 'FlowScript service listening'))
   .catch(error => {
     app.log.error({ error }, 'Failed to start FlowScript service')
     process.exitCode = 1
   })
+
+process.once('SIGTERM', () => { void closeStore().finally(() => process.exit(0)) })
+process.once('SIGINT', () => { void closeStore().finally(() => process.exit(0)) })
