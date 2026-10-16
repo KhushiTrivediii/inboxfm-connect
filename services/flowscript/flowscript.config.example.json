@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "serviceUrl": "http://localhost:8081",
+  "project": "local",
+  "environment": "development",
+  "flows": [
+    "flows/**/*.flow"
+  ]
+}
