@@ -77,6 +77,23 @@ services:
     build:
       context: ./services/flowscript
       dockerfile: Dockerfile
+  flowscript-worker:
+    image: inboxfm-flowscript:local
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    env_file: .env
+    environment:
+      - AP_POSTGRES_HOST=postgres
+      - AP_POSTGRES_PORT=5432
+      - FLOWSCRIPT_DB_POOL_SIZE=5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - inboxfm-connect
+    build:
+      context: ./services/flowscript
+      dockerfile: Dockerfile
   worker:
     image: inboxfm-connect:local
     # container_name is incompatible with deploy.replicas (a fixed name cannot
