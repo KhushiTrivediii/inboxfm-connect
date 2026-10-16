@@ -77,10 +77,12 @@ export async function executeAdhocAction({
     // bundle version that exists nowhere (the Frankenstein pair).
     const normalizedPieceName = localPieceCatalog.normalizePieceName(pieceName)
     const projectConnections = await appConnectionsRepo().find({
-        projectIds: ArrayContains([projectId]),
+        where: {
+            projectIds: ArrayContains([projectId]),
+        },
     })
 
-    const belongsToRequestedPiece = (candidate: AppConnectionSchema) =>
+    const belongsToRequestedPiece = (candidate: { pieceName: string }) =>
         localPieceCatalog.normalizePieceName(candidate.pieceName) === normalizedPieceName
 
     const connection = (connectionExternalId
