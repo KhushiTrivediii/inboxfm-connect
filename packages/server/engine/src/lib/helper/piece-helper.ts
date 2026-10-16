@@ -256,6 +256,15 @@ export const pieceHelper = {
             connections: {
                 get: async () => null,
             },
+            // The flow-run context wires flows; the headless context must honour the same
+            // PieceContext contract or any piece reading context.flows.current crashes
+            // (#618). Placeholder ids mirror the store/run headless convention.
+            flows: createFlowsContext({
+                engineToken: params.engineToken,
+                internalApiUrl: params.internalApiUrl,
+                flowId: 'headless',
+                flowVersionId: 'headless',
+            }),
             run: {
                 id: 'headless',
                 stop: () => {},
