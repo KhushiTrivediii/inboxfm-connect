@@ -7,6 +7,7 @@ import { appConnectionService, appConnectionsRepo } from '../../app-connection/a
 import { AppConnectionSchema } from '../../app-connection/app-connection.entity'
 import { system } from '../../helper/system/system'
 import { AppSystemProp } from '../../helper/system/system-props'
+import { localPieceCatalog } from '../../pieces/metadata/local-piece-catalog'
 import { projectService } from '../../project/project-service'
 
 const runtimeLog = apLogger.create({ bindings: {} })
@@ -70,45 +71,41 @@ export async function executeAdhocAction({
     log: FastifyBaseLogger
 }): Promise<McpToolResult> {
     const project = await projectService(log).getOneOrThrow(projectId)
-    
-    let connectionId: string | undefined
-    if (connectionExternalId) {
-        const connection = await appConnectionsRepo().findOneBy({
+
+    // Resolution is strictly piece-scoped: a connection from another piece must never
+    // be paired with this piece's name at execute time — the engine would fetch a
+    // bundle version that exists nowhere (the Frankenstein pair).
+    const normalizedPieceName = localPieceCatalog.normalizePieceName(pieceName)
+    // Canonicalize to the catalog's scoped name: a short input ("resend") must both match
+    // connection rows AND provision the scoped package — HeadlessRuntime receives the
+    // canonical name, never the caller's shorthand.
+    const canonicalPieceName = localPieceCatalog.findLocalPiece({ name: pieceName })?.name ?? pieceName
+    const projectConnections = await appConnectionsRepo().find({
+        where: {
             projectIds: ArrayContains([projectId]),
-            externalId: connectionExternalId,
-        })
-        if (connection) {
-            connectionId = connection.id
-        }
-    }
-    if (!connectionId) {
-        // Find any connection in the project for this piece
-        const connection = await appConnectionsRepo().findOneBy({
-            projectIds: ArrayContains([projectId]),
-            pieceName,
-        })
-        if (connection) {
-            connectionId = connection.id
-        }
-    }
-    if (!connectionId) {
-        // Find any connection in the project
-        const connection = await appConnectionsRepo().findOneBy({
-            projectIds: ArrayContains([projectId]),
-        })
-        if (connection) {
-            connectionId = connection.id
-        }
-    }
-    if (!connectionId) {
-        throw new Error('A connection must be created first before executing a tool.')
+        },
+    })
+
+    const belongsToRequestedPiece = (candidate: { pieceName: string }) =>
+        localPieceCatalog.normalizePieceName(candidate.pieceName) === normalizedPieceName
+
+    const connection = (connectionExternalId
+        ? projectConnections.find((candidate) => candidate.externalId === connectionExternalId && belongsToRequestedPiece(candidate))
+        : undefined) ?? projectConnections.find(belongsToRequestedPiece)
+
+    if (!connection) {
+        throw new Error(
+            projectConnections.length === 0
+                ? 'A connection must be created first before executing a tool.'
+                : `No connection found for integration "${pieceName}" in this project. Existing connections: ${projectConnections.map((candidate) => `${candidate.externalId} (${candidate.pieceName})`).join(', ')}. Create a connection for this integration, or pass connectionExternalId of a connection that belongs to it.`,
+        )
     }
 
     const publicUrl = system.get(AppSystemProp.FRONTEND_URL) || 'http://localhost:3000'
     const result = await runtime.execute({
-        integration: pieceName,
+        integration: canonicalPieceName,
         tool: actionName,
-        connectionId,
+        connectionId: connection.id,
         input,
         projectId,
         platformId: project.platformId,
