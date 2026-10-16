@@ -23,7 +23,7 @@ export const flipando = createPiece({
     runAppGenerator,
     createCustomApiCallAction({
       auth: flipandoAuth,
-      baseUrl: () => 'https://api.flipando.com/v1',
+      baseUrl: () => 'https://flipando-backend.herokuapp.com/api/v1',
       authMapping: async (auth) => {
         return {
           Authorization: `Bearer ${auth.secret_text}`,
