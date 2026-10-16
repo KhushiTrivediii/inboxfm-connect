@@ -1,4 +1,4 @@
-import { closeStore, claimQueuedRun, finishRun, initializeStore } from './store.js'
+import { closeStore, claimQueuedRun, enqueueDueSchedule, finishRun, initializeStore } from './store.js'
 import { executeFlowIR } from './runtime.js'
 import type { FlowIR } from './compiler.js'
 
@@ -10,6 +10,7 @@ async function main() {
   console.log(JSON.stringify({ service: 'flowscript-worker', status: 'ready' }))
   while (!stopping) {
     try {
+      await enqueueDueSchedule()
       const job = await claimQueuedRun()
       if (!job) {
         await sleep(750)
