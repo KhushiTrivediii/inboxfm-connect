@@ -51,4 +51,26 @@ describe('pieceHelper.executeTool headless context contract', () => {
             listType: 'function',
         })
     })
+
+    it('builds a well-formed flows.list URL from an internal URL without a trailing slash', async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+        runMock.mockImplementation(async (ctx: { flows: { list: (params: unknown) => Promise<unknown> } }) => {
+            await ctx.flows.list({})
+            return { calledUrl: fetchMock.mock.calls[0][0] }
+        })
+
+        try {
+            const response = await pieceHelper.executeTool({
+                params: { ...params, internalApiUrl: 'http://localhost:3100/api' },
+                devPieces: [],
+            })
+
+            expect(response.status).toBe('OK')
+            expect(response.response).toEqual({ calledUrl: 'http://localhost:3100/api/v1/engine/populated-flows?' })
+        }
+        finally {
+            vi.unstubAllGlobals()
+        }
+    })
 })
