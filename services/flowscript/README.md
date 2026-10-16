@@ -21,7 +21,8 @@ This is an executable first slice, not yet the complete hosted platform.
 - Integration actions are intentionally refused unless a trusted InboxFM Connect executor is injected. This service does not execute arbitrary user code and does not yet bridge to the existing connection/runtime APIs.
 - Filter evaluation currently supports a literal boolean `config.when`; a richer expression language must use a dedicated safe evaluator, never `eval`.
 - API compile/run endpoints are internal service endpoints and are not a substitute for tenant authentication/authorization. Do not expose them publicly until authenticated API gateway integration is implemented.
-- Durable schedule/webhook dispatch, durable queue workers, authenticated API gateway integration, and the trusted existing-runtime adapter are still pending.
+- The worker polls durable queued runs and dispatches persisted cron triggers. The public webhook gateway is not exposed by Nginx yet; the endpoint is internal until gateway authentication/rate limiting is added.
+- Integration-app webhook handshakes, polling/cursors, trigger disable/rotation APIs, retry/dead-letter handling, cancellation, quotas, deployment reconciliation, authenticated API gateway integration, and the trusted existing-runtime adapter are still pending.
 - A successful `flow run` for a pure transform does not mean hosted schedules/webhooks or integration execution are implemented.
 
 ## Source format
@@ -84,7 +85,10 @@ Use `--input path.json` to pass structured input. Local run refuses integration 
 - `POST /v1/ir/execute-local` for pure local flows only
 - `POST /v1/flows/publish` with a trusted `x-project-id` header
 - `POST /v1/flows/:name/deploy`
-- `POST /v1/flows/:name/run` (currently pure flows only)
+- `POST /v1/flows/:name/run` (queues pure flows for the worker)
+- `POST /v1/flows/:name/triggers` to register a cron schedule or secret-token webhook
+- `POST /v1/hooks/:token` to durably enqueue a webhook-triggered run
+- `GET /v1/runs` and `GET /v1/runs/:id`
 - `GET /v1/runs` and `GET /v1/runs/:id`
 
 Default internal port: 8081.
