@@ -33,14 +33,32 @@ export const validatePhone = createAction({
       },
       defaultValue: 'basic',
     }),
+    region: Property.StaticDropdown({
+      displayName: 'Region',
+      description:
+        'Where the numbers are located: 1 = US and international, 2 = US/Canada only (numbers outside are marked fake), 3 = outside US/Canada only (US/Canada numbers are marked fake). Use 1 if unsure.',
+      required: true,
+      options: {
+        options: [
+          { label: 'US & International', value: '1' },
+          { label: 'US & Canada Only', value: '2' },
+          { label: 'Outside US & Canada', value: '3' },
+        ],
+      },
+      defaultValue: '1',
+    }),
   },
   async run({ auth, propsValue }) {
     const client = new PhoneValidatorClient(auth.secret_text);
-    const response = await client.validatePhone(propsValue.phoneNumber, propsValue.searchType as 'basic' | 'fake');
+    const response = await client.validatePhone(
+      propsValue.phoneNumber,
+      propsValue.searchType as 'basic' | 'fake',
+      (propsValue.region ?? '1') as '1' | '2' | '3'
+    );
 
     if (response.StatusCode === '200') {
       const result: any = {
-        phoneNumber: response.PhoneNumber,
+        phoneNumber: response.PhoneNumber ?? response.Phone,
         cost: response.Cost,
         searchDate: response.SearchDate,
         statusCode: response.StatusCode,
