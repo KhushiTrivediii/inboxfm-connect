@@ -106,7 +106,7 @@ export function buildServer(): FastifyInstance {
     if (validated.flow.steps.some(step => step.kind === 'integration')) {
       return reply.code(501).send({ error: 'Trusted InboxFM Connect integration executor is not wired into this service yet; integration steps are never executed by this endpoint.' })
     }
-    const result = await executeFlowIR(validated.flow, { input: body.data.input, trigger: body.data.trigger })
+    const result = await executeFlowIR(validated.flow as unknown as import('./compiler.js').FlowIR, { input: body.data.input, trigger: body.data.trigger })
     return result.status === 'succeeded' ? result : reply.code(422).send(result)
   })
 
