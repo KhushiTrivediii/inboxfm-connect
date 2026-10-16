@@ -163,14 +163,19 @@ function serializeSingle(
     }
     case 'JSON':
     case 'OBJECT': {
-      if (typeof value !== 'string' || value.trim() === '') {
-        return undefined
+      if (typeof value === 'string') {
+        if (value.trim() === '') {
+          return undefined
+        }
+        try {
+          return JSON.parse(value)
+        } catch {
+          return undefined
+        }
       }
-      try {
-        return JSON.parse(value)
-      } catch {
-        return undefined
-      }
+      // Values prefilled from stored settings are already parsed JSON — pass
+      // them through instead of silently dropping them on save.
+      return value === null || value === undefined ? undefined : value
     }
     case 'ARRAY': {
       if (!Array.isArray(value)) {
