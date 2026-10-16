@@ -389,3 +389,157 @@ Build this path before implementing the whole language:
 8. Only then add webhook binding and provider-specific app-event triggers.
 
 This yields a usable end-to-end slice while keeping scope debuggable. A parser without an executable vertical slice is a syntax hobby; a runtime without persistence is one service restart away from forgetting everyone's automations.
+
+## 13. Flow Hosting: managed deployment and execution platform
+
+FlowScript is not complete when `flow run` works locally. InboxFM Connect should host deployed flow versions and operate their triggers and executions as a managed service. Developers should not need to provision a server, keep a Node process alive, configure cron, or expose their own webhook receiver.
+
+### Developer mental model
+
+```sh
+flow init issue-triage
+flow dev
+flow test
+flow deploy --env production
+flow logs --follow
+flow runs list --status failed
+flow rollback
+```
+
+`flow dev` watches local files, recompiles on change, validates the definition, and runs against a local runtime with mocked integrations by default. `flow deploy` publishes an immutable version and asks the platform to reconcile the desired triggers. Production runs use the published artifact, not a file sitting on the developer's laptop.
+
+### Hosted capabilities
+
+- **Managed execution:** execute published IR in isolated workers with bounded CPU, memory, wall-clock time, step count, and outbound network policy.
+- **Managed schedules:** durable cron/timezone registrations, missed-tick policy, pause/resume, next-run visibility, and restart-safe dispatch.
+- **Managed webhooks:** stable HTTPS endpoints per deployed trigger, request validation, provider signature verification, replay protection, rate limits, payload limits, and idempotent enqueueing.
+- **Integration events and polling:** use declared integration trigger contracts, stored cursors, checkpoints, backoff, and connection lifecycle handling.
+- **Execution history:** run timeline, step-level status, durations, retry attempts, structured errors, correlation IDs, redacted logs, and input/output previews subject to sensitive-data policy.
+- **Environment management:** development/staging/production deployments, environment variables, secret references, connection bindings, immutable versions, deployment diff, promotion, rollback, and audit history.
+- **Operations:** concurrency quotas, per-project rate limits, dead-letter handling, cancellation, retry/replay controls, health metrics, trace export, and usage metering.
+- **HTTP entry points:** optionally expose an authenticated synchronous invocation endpoint for request/response flows with strict timeouts, separate from asynchronous webhook ingestion.
+
+### Platform architecture
+
+```text
+Developer workstation / CI
+  FlowScript source + tests + lockfile
+               |
+               v
+       Flow CLI / deploy API
+               |
+      parse -> typecheck -> compile
+               |
+               v
+   Artifact registry (immutable IR + source hash)
+               |
+       deployment controller
+               |
+    +----------+-----------+
+    |                      |
+    v                      v
+Trigger control plane   Run control plane
+schedule/webhook/event  manual/API/retry/replay
+    |                      |
+    +----------+-----------+
+               v
+        durable queue
+               |
+               v
+     isolated runtime workers
+               |
+       Connect integrations
+               |
+               v
+ Postgres: deployments, triggers, runs, steps
+ Object storage: larger artifacts/payloads if needed
+ Observability: logs, metrics, traces, audit events
+```
+
+The control plane manages definitions, deployments, trigger registrations, permissions, and run state. The data plane accepts trigger deliveries and executes runs. Keep these as logical boundaries first; do not split them into many microservices until measured load or isolation requirements justify it.
+
+### Existing platform reuse
+
+The current codebase already has `ScheduledTaskEntity`/service, `TriggerBindingEntity`/service, execution APIs, a queue/worker model, integration connections, and runtime/engine/sandbox packages. Flow Hosting should reuse these contracts when they fit. The existing scheduled-task and trigger-binding records currently represent prompt/trigger-binding execution semantics; they are not automatically a storage model for arbitrary FlowScript graphs. Add the thinnest missing deployment/version/run linkage rather than assuming the old records already model hosted flows.
+
+First implementation should investigate whether the current worker queue can carry a typed Flow IR execution job and whether the existing sandbox can execute a bounded sequence of integration actions. If not, define a small adapter and prove it with one flow before designing a new worker fleet.
+
+### Suggested persisted concepts
+
+- **Flow project:** tenant-owned namespace, environment and quota boundary.
+- **Flow source version:** immutable source, compiler version, IR version/hash, lockfile and compile diagnostics.
+- **Deployment:** environment, active version, desired state, last reconciliation result and audit metadata.
+- **Trigger deployment:** trigger kind/config, status, endpoint identity, schedule/cursor state, next fire time, secret reference and delivery policy.
+- **Run:** tenant/project, deployment/version hash, trigger/dedupe key, status, timing, cancellation/retry state and trace ID.
+- **Step run:** step ID, attempt, status, timing, redacted error/output references and retry decision.
+- **Delivery record:** idempotency key, provider event ID, accepted/rejected status and expiry policy.
+
+Map these concepts onto existing tables first. Create new tables only for genuinely missing lifecycle state; do not duplicate the platform's existing execution records or invent a second tenancy model.
+
+### Runtime execution semantics
+
+- A deployment pins one immutable compiled version. Updating source creates a new version and explicit deployment operation.
+- Trigger ingress validates and enqueues work; it should not hold a public HTTP request open while a long flow executes.
+- Use durable queue jobs with idempotent state transitions. The database is the source of truth for deployment and run state; in-memory timers are only dispatch optimizations.
+- Persist step transitions before or atomically with queue continuation where practical, so a worker restart can resume or safely retry from a known state.
+- Distinguish retryable infrastructure errors from permanent validation/auth errors and from ambiguous external side effects.
+- A worker crash may cause at-least-once execution. Use idempotency keys for trigger delivery and action-level idempotency where supported; document that exactly-once external side effects cannot be guaranteed generally.
+- Enforce tenant isolation and concurrency quotas in the trusted server, not only in the CLI or compiled artifact.
+- Keep credentials in existing connection/secret services and resolve them only inside trusted execution adapters.
+- Provide a local worker mode using the same IR contract as hosted execution so local tests predict production behavior without requiring production credentials.
+
+### Hosted product surfaces
+
+1. **CLI:** source authoring, lint/test, local execution, deploy diff, deploy/rollback, logs and run inspection.
+2. **API:** authenticated compile/publish/deploy/invoke endpoints and trigger/run queries.
+3. **Dashboard:** project/environment list, deployments, trigger status, run history, step timeline, logs, failed-run replay, quotas and usage. The dashboard is an operations console, not a visual flow builder requirement.
+4. **Webhook gateway:** stable ingress routes with authentication/verification, rate limiting, size limits, replay protection and durable enqueueing.
+5. **Worker pool:** bounded, isolated execution using existing engine/sandbox capabilities.
+6. **Control plane:** reconciliation loop that compares desired deployments/triggers with active runtime registrations and repairs drift after restart.
+
+### Hosting MVP and rollout
+
+**Hosting Phase A: manual hosted execution**
+- Compile and publish an immutable artifact.
+- Deploy to a project/environment.
+- Invoke manually through CLI/API and persist run/step history.
+- Inspect logs/status and cancel bounded runs.
+- No arbitrary source-code execution; run only validated Flow IR.
+
+**Hosting Phase B: durable schedules**
+- Reconcile schedule registrations from database state.
+- Dispatch due schedules through the durable queue with timezone and missed-tick policy.
+- Test restart, multi-replica dispatch, clock drift, duplicate delivery and concurrency caps.
+
+**Hosting Phase C: webhooks and event triggers**
+- Allocate stable per-deployment webhook endpoints.
+- Verify signatures or capability secrets, deduplicate deliveries and enqueue asynchronously.
+- Add integration trigger registration, polling checkpoints and connection renewal handling.
+
+**Hosting Phase D: production operations**
+- Add environment promotion/rollback, deployment diffs, quotas, usage metering, dead-letter/replay workflows, trace correlation and dashboard operations.
+- Add horizontal worker scaling based on queue depth and execution concurrency.
+- Add tenant-aware retention policies and artifact/payload storage policies.
+
+### Hosting MVP acceptance gates
+
+- [ ] A published flow runs on the hosted worker without access to the developer's machine.
+- [ ] Worker restarts do not erase deployments, schedules, or run history.
+- [ ] Trigger ingress acknowledges accepted work only after durable enqueue/persistence.
+- [ ] Duplicate schedule ticks/webhook deliveries are bounded by idempotency controls.
+- [ ] Every run is pinned to a published source/IR hash.
+- [ ] A project cannot inspect or invoke another project's flows, connections, logs, or run inputs.
+- [ ] Execution limits, rate limits, cancellation and secret redaction are enforced server-side.
+- [ ] A failed deployment reconciliation is visible and retryable without corrupting the active version.
+- [ ] CLI and dashboard inspect the same persisted run records.
+- [ ] Local mocked execution and hosted execution share the same IR compatibility contract.
+
+### Explicit non-goals for the first release
+
+- Running arbitrary user JavaScript/Python, shell commands, or general-purpose containers inside flow steps.
+- A general-purpose serverless function host, arbitrary long-lived user processes, or unrestricted network egress.
+- Building a visual workflow editor before the source-first workflow is stable.
+- Claiming exactly-once delivery for third-party side effects.
+- Splitting the system into separate microservices before load tests show a need.
+
+**Recommended first hosted vertical slice:** one `.flow` file with a manual trigger and two integration steps; `flow lint` and `flow test`; compile to canonical IR; publish an immutable version; `flow deploy`; execute on an isolated worker; persist run and step records; inspect the result with `flow runs inspect`. Then add schedules and webhook hosting using the existing trigger infrastructure.
