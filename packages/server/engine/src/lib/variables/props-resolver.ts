@@ -89,7 +89,11 @@ const mergeFlattenedKeysArraysIntoOneArray = async (token: string, partsThatNeed
     const result = new Array(longestResultLength).fill(null).map((_, index) => {
         return Object.entries(resolvedValues).reduce((acc, [tokenPart, value]) => {
             const valueToUse = (Array.isArray(value) ? value[index] : value) ?? ''
-            acc = acc.replace(tokenPart, isString(valueToUse) ? valueToUse : JSON.stringify(valueToUse))
+            // Replacer function: a string replacement interprets `$&`, `$1`,
+            // `$$` … in the replacement, so a resolved value like "Doe$&" would
+            // splice the raw token (or other matched text) into the output
+            // instead of the value. The function form inserts it literally.
+            acc = acc.replace(tokenPart, () => isString(valueToUse) ? valueToUse : JSON.stringify(valueToUse))
             return acc
         }, token)
     })
