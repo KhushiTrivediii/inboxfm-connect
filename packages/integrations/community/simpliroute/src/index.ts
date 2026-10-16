@@ -100,7 +100,7 @@ export const simpliroute = createPiece({
       baseUrl: () => 'https://api.simpliroute.com',
       auth: simplirouteAuth,
       authMapping: async (auth) => ({
-        Authorization: `Token ${auth}`,
+        Authorization: `Token ${auth.secret_text}`,
       }),
     }),
   ],

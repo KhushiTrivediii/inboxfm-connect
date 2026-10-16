@@ -58,7 +58,7 @@ export const senja = createPiece({
       baseUrl: () => SENJA_BASE_URL,
       auth: senjaAuth,
       authMapping: async (auth) => ({
-        Authorization: `Bearer ${auth}`,
+        Authorization: `Bearer ${auth.secret_text}`,
       }),
     }),
   ],

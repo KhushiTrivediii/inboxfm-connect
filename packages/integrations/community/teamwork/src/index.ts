@@ -21,6 +21,8 @@ import { uploadFileToProject } from "./lib/actions/upload-file-to-project";
 import { createMessageReply } from "./lib/actions/create-message-reply";
 import { createMilestone } from "./lib/actions/create-milestone";
 import { addPeopleToProject } from "./lib/actions/add-people-to-project";
+import { createNotebookComment } from "./lib/actions/create-notebook-comment";
+import { createStage } from "./lib/actions/create-stage";
 import { newComment } from "./lib/triggers/new-comment";
 import { newMessage } from "./lib/triggers/new-message";
 import { newFile } from "./lib/triggers/new-file";
@@ -55,6 +57,8 @@ import { PieceCategory } from '@inboxfm-connect/pieces-framework';
         findCompany,
         findMilestone,
         findNotebookOrComment,
+        createNotebookComment,
+        createStage,
       ],
       triggers: [newTask, newPerson, newComment, newMessage, newFile, newExpense, newInvoice],
     });

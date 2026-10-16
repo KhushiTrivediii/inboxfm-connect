@@ -15,8 +15,8 @@ export const signrequestReceived = createTrigger({
     const apiKey = context.auth.secret_text;
 
     const body = {
-      url: context.webhookUrl,
-      events: ['signrequest_received'],
+      event_type: 'signrequest_received',
+      callback_url: context.webhookUrl,
     };
 
     const response = await makeRequest(

@@ -14,8 +14,8 @@ export const signrequestSigned = createTrigger({
   async onEnable(context) {
     const apiKey = context.auth.secret_text;
     const body = {
-      url: context.webhookUrl,
-      events: ['signer_signed'],
+      event_type: 'signer_signed',
+      callback_url: context.webhookUrl,
     };
     const response = await makeRequest(
       apiKey,
@@ -40,6 +40,10 @@ export const signrequestSigned = createTrigger({
     await context.store.delete('signrequest_signed_webhook');
   },
   async run(context) {
+    const body = context.payload.body as any;
+    if (body.event_type !== 'signer_signed') {
+      return [];
+    }
     return [context.payload.body];
   },
 });

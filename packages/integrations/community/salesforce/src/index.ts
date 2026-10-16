@@ -17,6 +17,7 @@ import { createLead } from './lib/action/create-lead';
 import { createNote } from './lib/action/create-note';
 import { createOpportunity } from './lib/action/create-opportunity';
 import { createRecord } from './lib/action/create-record';
+import { createNewObject } from './lib/action/create-new-object';
 import { createTask } from './lib/action/create-task';
 import { deleteOpportunity } from './lib/action/delete-opportunity';
 import { deleteRecord } from './lib/action/delete-record';
@@ -30,6 +31,7 @@ import { sendEmail } from './lib/action/send-email';
 import { updateContact } from './lib/action/update-contact';
 import { updateLead } from './lib/action/update-lead';
 import { updateRecord } from './lib/action/update-record';
+import { UpdateObjectById } from './lib/action/update-object-by-id';
 import { upsertByExternalId } from './lib/action/upsert-by-external-id';
 import { upsertByExternalIdBulk } from './lib/action/upsert-by-external-id-bulk';
 
@@ -105,6 +107,8 @@ export const salesforce = createPiece({
 		updateRecord,
 		upsertByExternalId,
 		upsertByExternalIdBulk,
+		createNewObject,
+		UpdateObjectById,
 		createCustomApiCallAction({
 			baseUrl: (auth) => (auth as OAuth2PropertyValue).data['instance_url'],
 			auth: salesforceAuth,
