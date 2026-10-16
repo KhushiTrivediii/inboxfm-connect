@@ -1,5 +1,6 @@
 import pg from 'pg'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { CronExpressionParser } from 'cron-parser'
 import type { FlowIR } from './compiler.js'
 
 const { Pool } = pg
@@ -37,6 +38,20 @@ export async function initializeStore(): Promise<void> {
       updated_at timestamptz NOT NULL DEFAULT now(),
       UNIQUE(project_id, flow_name, environment)
     );
+    CREATE TABLE IF NOT EXISTS flowscript_triggers (
+      id uuid PRIMARY KEY,
+      project_id text NOT NULL,
+      flow_name text NOT NULL,
+      environment text NOT NULL,
+      kind text NOT NULL CHECK (kind IN ('schedule', 'webhook')),
+      config jsonb NOT NULL DEFAULT '{}'::jsonb,
+      secret_hash text,
+      enabled boolean NOT NULL DEFAULT true,
+      next_fire_at timestamptz,
+      last_fired_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS flowscript_triggers_due_idx ON flowscript_triggers(kind, next_fire_at) WHERE enabled=true;
     CREATE TABLE IF NOT EXISTS flowscript_runs (
       id uuid PRIMARY KEY,
       project_id text NOT NULL,
@@ -188,4 +203,85 @@ export async function claimQueuedRun() {
 
 export async function markRunFailedBeforeStart(id: string, message: string) {
   await pool.query("UPDATE flowscript_runs SET status='failed', error=$2, finished_at=now() WHERE id=$1 AND status='queued'", [id, message])
+}
+
+export async function createFlowTrigger(params: { projectId: string; flowName: string; environment: string; kind: 'schedule' | 'webhook'; config: Record<string, unknown> }) {
+  const deployed = await getDeployedFlow(params.projectId, params.flowName, params.environment)
+  if (!deployed) throw new Error('Flow must be deployed before adding a trigger')
+  const id = randomUUID()
+  if (params.kind === 'schedule') {
+    const cron = String(params.config.cron ?? '')
+    const timezone = String(params.config.timezone ?? 'UTC')
+    const nextFireAt = CronExpressionParser.parse(cron, { tz: timezone }).next().toDate()
+    await pool.query(
+      'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,next_fire_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify({ cron, timezone }), nextFireAt],
+    )
+    return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt }
+  }
+  const token = randomBytes(32).toString('base64url')
+  const secretHash = createHmac('sha256', process.env.FLOWSCRIPT_WEBHOOK_PEPPER ?? 'development-only-change-me').update(token).digest('hex')
+  await pool.query(
+    'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,secret_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+    [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify(params.config), secretHash],
+  )
+  return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, token }
+}
+
+export async function enqueueDueSchedule() {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const due = await client.query<{ id: string; project_id: string; flow_name: string; environment: string; config: { cron: string; timezone: string } }>(
+      `SELECT id, project_id, flow_name, environment, config FROM flowscript_triggers
+       WHERE kind='schedule' AND enabled=true AND next_fire_at <= now()
+       ORDER BY next_fire_at LIMIT 1 FOR UPDATE SKIP LOCKED`,
+    )
+    const trigger = due.rows[0]
+    if (!trigger) {
+      await client.query('COMMIT')
+      return false
+    }
+    const deployed = await client.query<{ version_id: string }>(
+      "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
+      [trigger.project_id, trigger.flow_name, trigger.environment],
+    )
+    if (deployed.rows[0]) {
+      await client.query(
+        `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
+         VALUES ($1,$2,$3,$4,$5,'schedule','queued','{}'::jsonb)`,
+        [randomUUID(), trigger.project_id, trigger.flow_name, trigger.environment, deployed.rows[0].version_id],
+      )
+    }
+    const nextFireAt = CronExpressionParser.parse(trigger.config.cron, { tz: trigger.config.timezone }).next().toDate()
+    await client.query('UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2 WHERE id=$1', [trigger.id, nextFireAt])
+    await client.query('COMMIT')
+    return true
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function enqueueWebhook(token: string, input: Record<string, unknown>) {
+  const secretHash = createHmac('sha256', process.env.FLOWSCRIPT_WEBHOOK_PEPPER ?? 'development-only-change-me').update(token).digest('hex')
+  const result = await pool.query<{ id: string; project_id: string; flow_name: string; environment: string }>(
+    "SELECT id, project_id, flow_name, environment FROM flowscript_triggers WHERE kind='webhook' AND enabled=true AND secret_hash=$1",
+    [secretHash],
+  )
+  const trigger = result.rows[0]
+  if (!trigger) return null
+  const deployed = await getDeployedFlow(trigger.project_id, trigger.flow_name, trigger.environment)
+  if (!deployed) return null
+  const runId = await createRun({
+    projectId: trigger.project_id,
+    flowName: trigger.flow_name,
+    environment: trigger.environment,
+    versionId: deployed.id,
+    input,
+    triggerKind: 'webhook',
+  })
+  return { runId }
 }
