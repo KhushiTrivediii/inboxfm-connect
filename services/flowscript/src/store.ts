@@ -62,7 +62,7 @@ export async function publishFlow(projectId: string, source: string, ir: FlowIR,
   try {
     await client.query('BEGIN')
     const latest = await client.query<{ version: number }>(
-      'SELECT COALESCE(MAX(version), 0)::int AS version FROM flowscript_versions WHERE project_id = $1 AND flow_name = $2 FOR UPDATE',
+      'SELECT COALESCE(MAX(version), 0)::int AS version FROM flowscript_versions WHERE project_id = $1 AND flow_name = $2',
       [projectId, ir.name],
     )
     const version = Math.max(ir.version, (latest.rows[0]?.version ?? 0) + 1)
