@@ -142,6 +142,33 @@ describe('Props resolver', () => {
         expect(resolvedInput).toEqual(['Alice Smith', 'Bob Doe'])
     })
 
+    test('merge flatten array paths keeps $ characters in resolved values', async ()=>{
+        const stateWithDollarValues = await ExecutionContext.empty().upsertStep(
+            'trigger',
+            GenericStepOutput.create({
+                type: FlowTriggerType.PIECE,
+                status: StepOutputStatus.SUCCEEDED,
+                input: {},
+                output: {
+                    users: [
+                        {
+                            name: 'Alice',
+                        },
+                        {
+                            name: 'Bob',
+                        },
+                    ],
+                    lastNames: [
+                        'Doe$&',
+                        'Smith',
+                    ],
+                },
+            }),
+        )
+        const { resolvedInput } = await propsResolverService.resolve({ unresolvedInput: '{{flattenNestedKeys(trigger.output, [\'users\',\'name\'])}} {{trigger.output.lastNames}}', executionState: stateWithDollarValues })
+        expect(resolvedInput).toEqual(['Alice Doe$&', 'Bob Smith'])
+    })
+
     test('Test resolve steps variables', async () => {
         const { resolvedInput } = await propsResolverService.resolve({ unresolvedInput: '{{trigger.output.name}}', executionState })
         expect(resolvedInput).toEqual(
