@@ -56,10 +56,15 @@ export async function executeFlowIR(
       let output: unknown
       if (step.kind === 'integration') {
         if (!options.integrationExecutor) throw new Error('No trusted integration executor is configured; refusing to execute integration step')
-        output = await Promise.race([
-          options.integrationExecutor(config, context()),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Step timed out after ${timeoutMs}ms`)), timeoutMs)),
-        ])
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          output = await Promise.race([
+            options.integrationExecutor(config, context()),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Step timed out after ${timeoutMs}ms`)), timeoutMs) }),
+          ])
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
       } else if (step.kind === 'transform') {
         output = config.value === undefined ? config : resolveValue(config.value, context())
       } else {
