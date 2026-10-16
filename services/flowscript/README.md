@@ -1,33 +1,85 @@
-# FlowScript Service
+# FlowScript
 
-Standalone FlowScript control-plane microservice scaffold inside the InboxFM Connect monorepo.
+FlowScript is a source-first workflow language and a standalone service inside the InboxFM Connect monorepo.
 
-## Current scope
+## Implemented in this slice
 
-- Independent HTTP service and container boundary.
-- Health/readiness endpoints.
-- Versioned Flow IR validation endpoint: `POST /v1/ir/validate`.
-- Validation for trigger shape, step IDs, and dependency references.
+- YAML-based `.flow` source parser with schema diagnostics.
+- Deterministic canonical IR output and SHA-256 artifact hash.
+- Validation for duplicate step IDs, missing/self dependencies, and dependency cycles.
+- Bounded local runner for pure transform/filter steps, reference resolution, env references, step limits, and per-step timeouts.
+- CLI commands: `lint`, `compile`, `test`, and `run` for local non-integration flows.
+- Fastify endpoints for health/readiness, source compilation, IR validation, and safe local execution.
+- Docker service registered in the root Compose network.
 
-## Not implemented yet
+## Important boundaries
 
-This is the first service slice, not the complete product. It does not yet parse `.flow` source, execute integration steps, persist deployments/runs, or register schedules/webhooks. Those capabilities must be added behind this service boundary in later slices and must reuse the repository's existing execution, connection, trigger, and queue contracts.
+This is an executable first slice, not yet the complete hosted platform.
+
+- The parser currently uses YAML syntax for `.flow` files. A custom grammar can be introduced later without changing the IR/runtime contract.
+- Integration actions are intentionally refused unless a trusted InboxFM Connect executor is injected. This service does not execute arbitrary user code and does not yet bridge to the existing connection/runtime APIs.
+- Filter evaluation currently supports a literal boolean `config.when`; a richer expression language must use a dedicated safe evaluator, never `eval`.
+- API compile/run endpoints are internal service endpoints and are not a substitute for tenant authentication/authorization. Do not expose them publicly until authenticated API gateway integration is implemented.
+- Source/IR, deployment, trigger and run persistence plus durable queue workers are still pending.
+- A successful `flow run` for a pure transform does not mean hosted schedules/webhooks or integration execution are implemented.
+
+## Source format
+
+```yaml
+flow: hello-world
+version: 1
+description: Minimal manual flow
+trigger:
+  kind: manual
+inputSchema:
+  name:
+    type: string
+steps:
+  - id: greeting
+    kind: transform
+    config:
+      value:
+        message: Hello
+        name:
+          $ref: input.name
+    dependsOn: []
+output:
+  greeting:
+    $ref: steps.greeting
+```
+
+References use explicit objects such as `{$ref: input.name}`, `{$ref: trigger.body.id}`, `{$ref: steps.fetch.output.id}`, or `{$env: MY_VARIABLE}`. These are resolved by the runtime and are not JavaScript expressions.
 
 ## Local development
 
-From the repository root:
+From the monorepo root:
 
 ```sh
 bun install
+bun run --cwd services/flowscript build
+bun run --cwd services/flowscript test
 bun run --cwd services/flowscript dev
 ```
 
-Default port: 8081.
+## CLI
 
-## API
+After building:
+
+```sh
+node services/flowscript/dist/cli.js lint services/flowscript/examples/manual.flow
+node services/flowscript/dist/cli.js compile services/flowscript/examples/manual.flow
+node services/flowscript/dist/cli.js test services/flowscript/examples/manual.flow
+node services/flowscript/dist/cli.js run services/flowscript/examples/manual.flow --input input.json
+```
+
+Use `--input path.json` to pass structured input. Local run refuses integration steps until the trusted runtime adapter is wired.
+
+## HTTP API
 
 - `GET /health`
 - `GET /ready`
+- `POST /v1/source/compile` with `{"source":"..."}`
 - `POST /v1/ir/validate`
+- `POST /v1/ir/execute-local` for pure local flows only
 
-The IR schema is versioned. Unsupported IR versions are rejected rather than silently interpreted.
+Default internal port: 8081.
