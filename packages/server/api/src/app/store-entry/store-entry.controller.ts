@@ -26,14 +26,24 @@ export const storeEntryController: FastifyPluginAsyncZod = async (fastify) => {
     },
     )
 
-    fastify.get('/', GetRequest, async (request, reply) => {
+    fastify.get('/', GetRequest, async (request) => {
         const value = await storeEntryService.getOne({
             projectId: requireEngineProjectId({ projectId: request.principal.projectId }),
             key: request.query.key,
         })
 
-        if (!value) {
-            return reply.code(StatusCodes.NOT_FOUND).send('Value not found!')
+        if (isNil(value)) {
+            // Every other miss on the API answers with the structured error
+            // contract ({ code, params }); a raw text body breaks JSON clients
+            // (the engine's store client tolerates it only because it checks the
+            // status code before parsing).
+            throw new ActivepiecesError({
+                code: ErrorCode.ENTITY_NOT_FOUND,
+                params: {
+                    entityType: 'storeEntry',
+                    entityId: request.query.key,
+                },
+            })
         }
 
         return value
