@@ -50,6 +50,27 @@ services:
       context: .
       dockerfile: Dockerfile
       target: run
+  flowscript:
+    image: inboxfm-flowscript:local
+    container_name: inboxfm-flowscript
+    restart: unless-stopped
+    expose:
+      - '8081'
+    environment:
+      - FLOWSCRIPT_HOST=0.0.0.0
+      - FLOWSCRIPT_PORT=8081
+      - FLOWSCRIPT_LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - inboxfm-connect
+    build:
+      context: ./services/flowscript
+      dockerfile: Dockerfile
   worker:
     image: inboxfm-connect:local
     # container_name is incompatible with deploy.replicas (a fixed name cannot
