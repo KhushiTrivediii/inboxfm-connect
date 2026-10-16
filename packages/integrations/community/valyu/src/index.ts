@@ -29,7 +29,7 @@ export const valyu = createPiece({
       auth: valyuAuth,
       baseUrl: () => 'https://api.valyu.ai',
       authMapping: async (auth) => ({
-        'x-api-key': `${auth}`,
+        'x-api-key': `${auth.secret_text}`,
       }),
     }),
   ],
