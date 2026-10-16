@@ -1,6 +1,5 @@
 import { createPiece, PieceAuth } from '@inboxfm-connect/pieces-framework';
 import { createEvent } from './lib/actions/create-event';
-import { newEventCreated } from './lib/triggers/new-event-created';
 import { createCustomApiCallAction } from '@inboxfm-connect/pieces-common';
 
 export const logsnagAuth = PieceAuth.SecretText({
@@ -27,6 +26,6 @@ export const logsnag = createPiece({
       },
     }),
   ],
-  triggers: [newEventCreated],
+  triggers: [],
 });
 
