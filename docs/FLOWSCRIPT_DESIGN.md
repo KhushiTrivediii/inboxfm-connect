@@ -273,6 +273,8 @@ Before implementation, verify live files on the target branch and reuse current 
 - API trigger binding and scheduled-task services under `packages/server/api/src/app/execution/`.
 - Trigger strategies `POLLING`, `WEBHOOK`, `APP_WEBHOOK`, and `MANUAL`.
 
+Verified implementation detail on `dev`: `ScheduledTaskEntity` persists project/platform, prompt, cron expression, timezone, status, last/next run, and the service re-registers enabled schedules at boot. `TriggerBindingEntity` persists project/platform, piece/version, trigger name, optional connection, settings, prompt template, and status; its controller supports enable/disable/renew and a public event-ingress run route. These are useful existing trigger primitives, but they currently dispatch prompt/trigger-binding executions, not an arbitrary FlowScript step graph. Phase 0 must prove how the Flow IR maps to existing execution/run contracts and reuse these trigger services where semantics fit; do not introduce a duplicate scheduler or assume these entities already store FlowScript versions.
+
 Recommended layering:
 
 ```text
