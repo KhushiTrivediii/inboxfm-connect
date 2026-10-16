@@ -41,7 +41,7 @@ export const processInputText = createAction({
           { label: 'claude-3-7-sonnet', value: 'claude-3-7-sonnet' },
         ],
       },
-      defaultValue: ' gpt-4o-mini',
+      defaultValue: 'gpt-4o-mini',
     }),
     citation: Property.Checkbox({
       displayName: 'Citations',
