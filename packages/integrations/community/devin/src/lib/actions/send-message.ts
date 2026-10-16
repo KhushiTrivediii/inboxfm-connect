@@ -24,7 +24,10 @@ export const sendMessage = createAction({
   async run({ auth, propsValue }) {
     const response = await httpClient.sendRequest({
       method: HttpMethod.POST,
-      url: `https://api.devin.ai/v1/session/${propsValue.sessionId}/messages`,
+      // v1 endpoint is POST /v1/sessions/{session_id}/message (singular
+      // "message"): https://docs.devin.ai/api-reference/v1/sessions/send-a-message-to-an-existing-devin-session
+      // The previous /v1/session/{id}/messages path 404s (no such route).
+      url: `https://api.devin.ai/v1/sessions/${propsValue.sessionId}/message`,
       headers: {
         Authorization: `Bearer ${auth.secret_text}`,
       },
