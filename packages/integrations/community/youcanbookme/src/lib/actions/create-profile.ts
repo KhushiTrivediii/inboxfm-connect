@@ -82,7 +82,7 @@ export const createprofile = createAction({
       method: HttpMethod.POST,
       url: 'https://api.youcanbook.me/v1/profiles',
       headers: {
-        Authorization: `Bearer ${auth}`,
+        Authorization: `Bearer ${auth.secret_text}`,
         'Content-Type': 'application/json',
       },
       body,
