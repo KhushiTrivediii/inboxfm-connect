@@ -2,7 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { compileFlowSource } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
-import { closeStore, createRun, deployFlow, finishRun, getDeployedFlow, getRun, initializeStore, listRuns, publishFlow } from './store.js'
+import { closeStore, createRun, deployFlow, finishRun, getDeployedFlow, getRun, initializeStore, listRuns, publishFlow, createFlowTrigger, enqueueWebhook } from './store.js'
 
 const envSchema = z.object({
   FLOWSCRIPT_HOST: z.string().default('0.0.0.0'),
@@ -139,6 +139,40 @@ export function buildServer(): FastifyInstance {
     } catch (error) {
       return reply.code(404).send({ error: error instanceof Error ? error.message : 'Deployment failed' })
     }
+  })
+
+  app.post('/v1/flows/:name/triggers', async (request, reply) => {
+    const projectId = projectIdFrom(request)
+    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    const body = z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('schedule'), environment: z.string().min(1).max(64).default('production'), cron: z.string().min(1).max(128), timezone: z.string().min(1).max(128).default('UTC') }),
+      z.object({ kind: z.literal('webhook'), environment: z.string().min(1).max(64).default('production') }),
+    ]).safeParse(request.body)
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid trigger request', issues: body.success ? undefined : body.error.issues })
+    try {
+      const trigger = await createFlowTrigger({
+        projectId,
+        flowName: params.data.name,
+        environment: body.data.environment,
+        kind: body.data.kind,
+        config: body.data.kind === 'schedule' ? { cron: body.data.cron, timezone: body.data.timezone } : {},
+      })
+      return reply.code(201).send(body.data.kind === 'webhook'
+        ? { ...trigger, webhookUrl: `/v1/hooks/${trigger.token}` }
+        : trigger)
+    } catch (error) {
+      return reply.code(422).send({ error: error instanceof Error ? error.message : 'Trigger creation failed' })
+    }
+  })
+
+  app.post('/v1/hooks/:token', async (request, reply) => {
+    const params = z.object({ token: z.string().min(40).max(128) }).safeParse(request.params)
+    const body = z.record(z.string(), z.unknown()).safeParse(request.body ?? {})
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid webhook request' })
+    const queued = await enqueueWebhook(params.data.token, body.data)
+    if (!queued) return reply.code(404).send({ error: 'Webhook endpoint not found or disabled' })
+    return reply.code(202).send({ accepted: true, runId: queued.runId, status: 'queued' })
   })
 
   app.post('/v1/flows/:name/run', async (request, reply) => {
