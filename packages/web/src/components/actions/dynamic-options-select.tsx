@@ -1,6 +1,6 @@
 import { RefreshCw, Search } from 'lucide-react'
 import { ChangeEvent, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DropdownOption, DropdownState } from '@/lib/api/types'
@@ -69,6 +69,11 @@ export function DynamicOptionsSelect({
     ],
     enabled: !disabled,
     retry: false,
+    // Keep the previous page of options while a new search fetches. Without
+    // this, every debounced keystroke flips the query back to `isPending`,
+    // unmounting the select and the search input — the user loses focus (and
+    // their caret) mid-typing and cannot continue entering a search term.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       apiClient.post<DropdownState>('/integrations/options', {
         ...(projectId !== undefined ? { projectId } : {}),
