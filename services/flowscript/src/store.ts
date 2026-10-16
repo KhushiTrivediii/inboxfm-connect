@@ -1,7 +1,7 @@
 import pg from 'pg'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { CronExpressionParser } from 'cron-parser'
-import type { FlowIR } from './compiler.js'
+import { canonicalizeJson, type FlowIR } from './compiler.js'
 
 const { Pool } = pg
 const connectionString = process.env.DATABASE_URL
@@ -83,7 +83,10 @@ export async function publishFlow(projectId: string, source: string, ir: FlowIR,
     const version = Math.max(ir.version, (latest.rows[0]?.version ?? 0) + 1)
     const id = randomUUID()
     const versionedIr = { ...ir, version }
-    const versionedHash = createHash('sha256').update(JSON.stringify(versionedIr)).digest('hex')
+    const { sourceHash, ...semantic } = versionedIr
+    const versionedHash = version === ir.version
+      ? hash
+      : createHash('sha256').update(canonicalizeJson(semantic)).digest('hex')
     await client.query(
       'INSERT INTO flowscript_versions (id, project_id, flow_name, version, source_text, ir, ir_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [id, projectId, ir.name, version, source, JSON.stringify(versionedIr), versionedHash],
@@ -220,12 +223,16 @@ export async function createFlowTrigger(params: { projectId: string; flowName: s
     return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt }
   }
   const token = randomBytes(32).toString('base64url')
-  const secretHash = createHash('sha256').update(token).digest('hex')
+  const secretHash = hashWebhookToken(token)
   await pool.query(
     'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,secret_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)',
     [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify(params.config), secretHash],
   )
   return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, token }
+}
+
+function hashWebhookToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
 }
 
 export async function enqueueDueSchedule() {
@@ -266,7 +273,7 @@ export async function enqueueDueSchedule() {
 }
 
 export async function enqueueWebhook(token: string, input: Record<string, unknown>) {
-  const secretHash = createHmac('sha256', process.env.FLOWSCRIPT_WEBHOOK_PEPPER ?? 'development-only-change-me').update(token).digest('hex')
+  const secretHash = hashWebhookToken(token)
   const result = await pool.query<{ id: string; project_id: string; flow_name: string; environment: string }>(
     "SELECT id, project_id, flow_name, environment FROM flowscript_triggers WHERE kind='webhook' AND enabled=true AND secret_hash=$1",
     [secretHash],
