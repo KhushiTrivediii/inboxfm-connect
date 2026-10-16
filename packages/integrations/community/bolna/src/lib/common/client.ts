@@ -1,6 +1,6 @@
 import { HttpMethod, httpClient } from '@inboxfm-connect/pieces-common';
 
-export const BASE_URL = ` https://api.bolna.ai`;
+export const BASE_URL = `https://api.bolna.ai`;
 
 export async function makeRequest(
   api_key: string,
