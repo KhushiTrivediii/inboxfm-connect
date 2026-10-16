@@ -60032,7 +60032,7 @@
     "logoUrl": "https://cdn.activepieces.com/pieces/resend.png",
     "description": "The email API for developers",
     "version": "0.4.3",
-    "minimumSupportedRelease": "0.36.1",
+    "minimumSupportedRelease": "0.82.0",
     "maximumSupportedRelease": "999.999.999",
     "categories": [
       "COMMUNICATION"
@@ -60044,198 +60044,1087 @@
       "type": "SECRET_TEXT"
     },
     "actions": {
-      "sendEmail": {
-        "name": "sendEmail",
+      "send_email": {
+        "name": "send_email",
         "displayName": "Send Email",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Send a text or HTML email",
+        "props": {
+          "to": {
+            "displayName": "To",
+            "description": "Emails of the recipients",
+            "required": true,
+            "type": "ARRAY",
+            "properties": {
+              "item": {
+                "displayName": "Item",
+                "description": "Array item",
+                "required": false,
+                "type": "SHORT_TEXT"
+              }
+            },
+            "valueSchema": []
+          },
+          "from_name": {
+            "displayName": "Sender Name",
+            "description": "Sender name",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "from": {
+            "displayName": "Sender Email (From)",
+            "description": "Sender email",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "bcc": {
+            "displayName": "BCC",
+            "description": "List of emails in bcc",
+            "required": false,
+            "type": "ARRAY",
+            "properties": {
+              "item": {
+                "displayName": "Item",
+                "description": "Array item",
+                "required": false,
+                "type": "SHORT_TEXT"
+              }
+            },
+            "valueSchema": []
+          },
+          "cc": {
+            "displayName": "CC",
+            "description": "List of emails in cc",
+            "required": false,
+            "type": "ARRAY",
+            "properties": {
+              "item": {
+                "displayName": "Item",
+                "description": "Array item",
+                "required": false,
+                "type": "SHORT_TEXT"
+              }
+            },
+            "valueSchema": []
+          },
+          "reply_to": {
+            "displayName": "Reply To",
+            "description": "Email to receive replies on (defaults to sender)",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "subject": {
+            "displayName": "Subject",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "content_type": {
+            "displayName": "Content Type",
+            "refreshers": [],
+            "required": true,
+            "defaultValue": "html",
+            "type": "DROPDOWN"
+          },
+          "content": {
+            "displayName": "Content",
+            "description": "HTML is only allowed if you selected HTML as type",
+            "required": true,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Sends a single transactional email (plain text or HTML) to one or more recipients via Resend. Use this for one-off messages; the sender address must be on a domain you have verified in Resend. Not idempotent — each call sends a new email.",
+          "idempotent": false
+        }
       },
-      "sendBatchEmails": {
-        "name": "sendBatchEmails",
+      "send_batch_emails": {
+        "name": "send_batch_emails",
         "displayName": "Send Batch Emails",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Send up to 100 emails in a single API call",
+        "props": {
+          "emails": {
+            "displayName": "Emails",
+            "description": "List of emails to send (max 100). Each email is sent independently with its own recipient, subject, and body.",
+            "required": true,
+            "properties": {
+              "from": {
+                "displayName": "From",
+                "description": "Sender address. Use \"Name <email@domain.com>\" for a friendly name.",
+                "required": true,
+                "type": "SHORT_TEXT"
+              },
+              "to": {
+                "displayName": "To",
+                "description": "Recipient email address.",
+                "required": true,
+                "type": "SHORT_TEXT"
+              },
+              "subject": {
+                "displayName": "Subject",
+                "required": true,
+                "type": "SHORT_TEXT"
+              },
+              "content_type": {
+                "displayName": "Content Type",
+                "required": true,
+                "options": {
+                  "options": [
+                    {
+                      "label": "HTML",
+                      "value": "html"
+                    },
+                    {
+                      "label": "Plain Text",
+                      "value": "text"
+                    }
+                  ]
+                },
+                "type": "STATIC_DROPDOWN"
+              },
+              "content": {
+                "displayName": "Content",
+                "description": "Email body. Use HTML markup if Content Type is HTML.",
+                "required": true,
+                "type": "LONG_TEXT"
+              },
+              "reply_to": {
+                "displayName": "Reply To",
+                "required": false,
+                "type": "SHORT_TEXT"
+              },
+              "cc": {
+                "displayName": "CC",
+                "required": false,
+                "type": "SHORT_TEXT"
+              },
+              "bcc": {
+                "displayName": "BCC",
+                "required": false,
+                "type": "SHORT_TEXT"
+              }
+            },
+            "type": "ARRAY",
+            "valueSchema": []
+          },
+          "idempotency_key": {
+            "displayName": "Idempotency Key",
+            "description": "Optional unique key to prevent duplicate sends. Must be unique per request, expires after 24 hours, max 256 characters.",
+            "required": false,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Sends up to 100 distinct emails in one Resend API call, each with its own recipient, subject, and body. Use this instead of Send Email when delivering many independent messages at once. Senders must be on verified domains; pass an idempotency key to guard against duplicate batch sends, otherwise each call sends new emails.",
+          "idempotent": false
+        }
       },
-      "getEmailStatus": {
-        "name": "getEmailStatus",
+      "get_email_status": {
+        "name": "get_email_status",
         "displayName": "Get Email Status",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Retrieve the delivery status of a sent email",
+        "props": {
+          "email_id": {
+            "displayName": "Email ID",
+            "description": "The ID returned when you sent the email",
+            "required": true,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Looks up the current delivery status and details of a single previously sent email by its Resend email ID. Use this to check whether a specific email was delivered, bounced, or is still scheduled. Read-only and idempotent; requires the email ID returned when the email was sent.",
+          "idempotent": true
+        }
       },
-      "listEmails": {
-        "name": "listEmails",
-        "displayName": "List Emails",
-        "description": "",
+      "list_emails": {
+        "name": "list_emails",
+        "displayName": "List Sent Emails",
+        "description": "Retrieve a list of emails sent from your Resend account",
         "props": {},
-        "requireAuth": true
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Retrieves the list of emails sent from the connected Resend account, including their IDs, recipients, subjects, and latest delivery event. Use this to discover email IDs (e.g. to feed Get Email Status, Cancel Scheduled Email, or Reschedule Email) or to audit recent sends. Read-only and idempotent.",
+          "idempotent": true
+        }
       },
-      "cancelScheduledEmail": {
-        "name": "cancelScheduledEmail",
+      "cancel_scheduled_email": {
+        "name": "cancel_scheduled_email",
         "displayName": "Cancel Scheduled Email",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Cancel a scheduled email before it is sent",
+        "props": {
+          "email_id": {
+            "displayName": "Email ID",
+            "description": "The ID of the scheduled email to cancel. Use \"List Sent Emails\" to find it.",
+            "required": true,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Cancels a previously scheduled email so it will not be delivered, identified by its Resend email ID. Use this to stop a future send before its scheduled time. Effectively idempotent — once an email is cancelled, repeating the call has no further effect; only works while the email is still pending.",
+          "idempotent": true
+        }
       },
-      "rescheduleEmail": {
-        "name": "rescheduleEmail",
+      "reschedule_email": {
+        "name": "reschedule_email",
         "displayName": "Reschedule Email",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Update the send time of a scheduled email",
+        "props": {
+          "email_id": {
+            "displayName": "Email ID",
+            "description": "The ID of the scheduled email to reschedule. Use \"List Sent Emails\" to find it.",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "scheduled_at": {
+            "displayName": "New Send Time",
+            "description": "ISO 8601 date-time for when to send the email, e.g. 2024-12-01T10:00:00Z",
+            "required": true,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Changes the future send time of an already scheduled email, identified by its Resend email ID. Use this to move a pending send to a new time without cancelling and recreating it. Idempotent when called with the same target time; requires an ISO 8601 date-time and only works while the email is still scheduled.",
+          "idempotent": true
+        }
       },
-      "createContact": {
-        "name": "createContact",
+      "create_contact": {
+        "name": "create_contact",
         "displayName": "Create Contact",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Add a contact to a Resend audience",
+        "props": {
+          "audience_id": {
+            "displayName": "Audience",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          },
+          "email": {
+            "displayName": "Email",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "first_name": {
+            "displayName": "First Name",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "last_name": {
+            "displayName": "Last Name",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "unsubscribed": {
+            "displayName": "Unsubscribed",
+            "description": "If true, the contact will be unsubscribed from all broadcasts",
+            "required": false,
+            "defaultValue": false,
+            "type": "CHECKBOX"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Adds a new contact (email plus optional name and subscription status) to a specific Resend audience. Use this to grow a mailing list; requires the target audience ID (use List Audiences to find it). Not idempotent — each call creates a new contact, so guard against re-adding the same email.",
+          "idempotent": false
+        }
       },
-      "updateContact": {
-        "name": "updateContact",
+      "update_contact": {
+        "name": "update_contact",
         "displayName": "Update Contact",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Update the name or subscription status of a contact in an audience",
+        "props": {
+          "audience_id": {
+            "displayName": "Audience",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          },
+          "contact_id": {
+            "displayName": "Contact",
+            "required": true,
+            "refreshers": [
+              "audience_id"
+            ],
+            "type": "DROPDOWN"
+          },
+          "first_name": {
+            "displayName": "First Name",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "last_name": {
+            "displayName": "Last Name",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "unsubscribed": {
+            "displayName": "Subscription Status",
+            "required": false,
+            "options": {
+              "options": [
+                {
+                  "label": "Subscribed",
+                  "value": false
+                },
+                {
+                  "label": "Unsubscribed",
+                  "value": true
+                }
+              ]
+            },
+            "type": "STATIC_DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Updates an existing contact's first name, last name, or subscribed/unsubscribed status within an audience, identified by audience ID and contact ID. Use this to change details or toggle subscription for a known contact. Idempotent — repeating with the same values leaves the contact in the same state.",
+          "idempotent": true
+        }
       },
-      "deleteContact": {
-        "name": "deleteContact",
+      "delete_contact": {
+        "name": "delete_contact",
         "displayName": "Delete Contact",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Remove a contact from an audience",
+        "props": {
+          "audience_id": {
+            "displayName": "Audience",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          },
+          "contact_id": {
+            "displayName": "Contact",
+            "required": true,
+            "refreshers": [
+              "audience_id"
+            ],
+            "type": "DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Permanently removes a contact from a Resend audience, identified by audience ID and contact ID. Use this to delete a subscriber from a list. Effectively idempotent — once removed, repeating the call has no further effect.",
+          "idempotent": true
+        }
       },
-      "listContacts": {
-        "name": "listContacts",
+      "list_contacts": {
+        "name": "list_contacts",
         "displayName": "List Contacts",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Retrieve all contacts in an audience",
+        "props": {
+          "audience_id": {
+            "displayName": "Audience",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Retrieves all contacts in a specific Resend audience, including each contact's ID, email, name, and subscription status. Use this to discover contact IDs (e.g. to feed Update Contact or Delete Contact) or to inspect a mailing list; requires the audience ID. Read-only and idempotent.",
+          "idempotent": true
+        }
       },
-      "listDomains": {
-        "name": "listDomains",
+      "list_domains": {
+        "name": "list_domains",
         "displayName": "List Domains",
-        "description": "",
+        "description": "Retrieve all domains added to your Resend account",
         "props": {},
-        "requireAuth": true
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Retrieves all sending domains configured on the connected Resend account, including each domain's ID, name, verification status, and region. Use this to find a domain ID (e.g. for Verify Domain or Delete Domain) or to check which domains are verified before sending. Read-only and idempotent.",
+          "idempotent": true
+        }
       },
-      "createDomain": {
-        "name": "createDomain",
+      "create_domain": {
+        "name": "create_domain",
         "displayName": "Create Domain",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Add a sending domain to your Resend account and get the DNS records to verify it",
+        "props": {
+          "name": {
+            "displayName": "Domain Name",
+            "description": "The domain you want to send from, e.g. mail.yourdomain.com",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "region": {
+            "displayName": "Region",
+            "description": "AWS region for email delivery. Defaults to US East.",
+            "required": false,
+            "options": {
+              "options": [
+                {
+                  "label": "US East (N. Virginia)",
+                  "value": "us-east-1"
+                },
+                {
+                  "label": "EU West (Ireland)",
+                  "value": "eu-west-1"
+                },
+                {
+                  "label": "Asia Pacific (Tokyo)",
+                  "value": "ap-northeast-1"
+                },
+                {
+                  "label": "South America (São Paulo)",
+                  "value": "sa-east-1"
+                }
+              ]
+            },
+            "type": "STATIC_DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Registers a new sending domain on the Resend account and returns the DNS records that must be added to verify it. Use this as the first step in setting up a custom sending domain before triggering verification. Not idempotent — each call attempts to create a new domain entry.",
+          "idempotent": false
+        }
       },
-      "deleteDomain": {
-        "name": "deleteDomain",
+      "delete_domain": {
+        "name": "delete_domain",
         "displayName": "Delete Domain",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Remove a domain from your Resend account",
+        "props": {
+          "domain_id": {
+            "displayName": "Domain",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Permanently removes a sending domain from the Resend account, identified by its domain ID. Use this to decommission a domain you no longer send from. Effectively idempotent — once deleted, repeating the call has no further effect.",
+          "idempotent": true
+        }
       },
-      "verifyDomain": {
-        "name": "verifyDomain",
+      "verify_domain": {
+        "name": "verify_domain",
         "displayName": "Verify Domain",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Trigger a DNS verification check for a domain",
+        "props": {
+          "domain_id": {
+            "displayName": "Domain",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Triggers Resend to re-check the DNS records of a domain and update its verification status, identified by domain ID. Use this after adding the required DNS records (from Create Domain) to confirm the domain is ready to send. Safe to call repeatedly — it only re-runs the check.",
+          "idempotent": true
+        }
       },
-      "listAudiences": {
-        "name": "listAudiences",
+      "list_audiences": {
+        "name": "list_audiences",
         "displayName": "List Audiences",
-        "description": "",
+        "description": "Retrieve all contact audiences in your Resend account",
         "props": {},
-        "requireAuth": true
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Retrieves all contact audiences (mailing lists) in the connected Resend account, including each audience's ID and name. Use this to discover an audience ID needed by contact and broadcast actions (e.g. Create Contact, List Contacts, Create Broadcast). Read-only and idempotent.",
+          "idempotent": true
+        }
       },
-      "createAudience": {
-        "name": "createAudience",
+      "create_audience": {
+        "name": "create_audience",
         "displayName": "Create Audience",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Create a new contact audience in Resend",
+        "props": {
+          "name": {
+            "displayName": "Audience Name",
+            "description": "A label for this audience, e.g. \"Newsletter Subscribers\"",
+            "required": true,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Creates a new contact audience (mailing list) in Resend with the given name and returns its ID. Use this before adding contacts or sending broadcasts when no suitable audience exists yet. Not idempotent — each call creates a new audience even if the name matches an existing one.",
+          "idempotent": false
+        }
       },
-      "deleteAudience": {
-        "name": "deleteAudience",
+      "delete_audience": {
+        "name": "delete_audience",
         "displayName": "Delete Audience",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Permanently delete an audience and all its contacts",
+        "props": {
+          "audience_id": {
+            "displayName": "Audience",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Permanently deletes an entire audience and all of its contacts from Resend, identified by audience ID. Use this to remove a whole mailing list; this is destructive and cannot be undone. Effectively idempotent — once deleted, repeating the call has no further effect.",
+          "idempotent": true
+        }
       },
-      "listBroadcasts": {
-        "name": "listBroadcasts",
+      "list_broadcasts": {
+        "name": "list_broadcasts",
         "displayName": "List Broadcasts",
-        "description": "",
+        "description": "Retrieve all broadcasts in your Resend account",
         "props": {},
-        "requireAuth": true
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Retrieves all broadcast campaigns in the connected Resend account, including each broadcast's ID, name, audience, subject, and status (draft, scheduled, sent). Use this to find a broadcast ID (e.g. for Send Broadcast or Delete Broadcast) or to check campaign status. Read-only and idempotent.",
+          "idempotent": true
+        }
       },
-      "createBroadcast": {
-        "name": "createBroadcast",
+      "create_broadcast": {
+        "name": "create_broadcast",
         "displayName": "Create Broadcast",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Create a new broadcast email to send to an audience",
+        "props": {
+          "audience_id": {
+            "displayName": "Audience",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          },
+          "from": {
+            "displayName": "From",
+            "description": "Sender address. Must be from a verified domain. Use \"Name <email@yourdomain.com>\" for a friendly name.",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "subject": {
+            "displayName": "Subject",
+            "required": true,
+            "type": "SHORT_TEXT"
+          },
+          "name": {
+            "displayName": "Broadcast Name",
+            "description": "Internal label for this broadcast. Not visible to recipients.",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "reply_to": {
+            "displayName": "Reply To",
+            "description": "Email address recipients will reply to.",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "preview_text": {
+            "displayName": "Preview Text",
+            "description": "Short summary shown in email clients below the subject line.",
+            "required": false,
+            "type": "SHORT_TEXT"
+          },
+          "content_type": {
+            "displayName": "Content Type",
+            "required": true,
+            "options": {
+              "options": [
+                {
+                  "label": "HTML",
+                  "value": "html"
+                },
+                {
+                  "label": "Plain Text",
+                  "value": "text"
+                }
+              ]
+            },
+            "type": "STATIC_DROPDOWN"
+          },
+          "content": {
+            "displayName": "Content",
+            "description": "Email body. Use HTML markup if Content Type is HTML.",
+            "required": true,
+            "type": "LONG_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Creates a draft broadcast email (subject and body) targeting a Resend audience and returns its ID. Use this to prepare a campaign; it only creates the draft and does not deliver anything — pair it with Send Broadcast to actually send. Requires the audience ID and a sender on a verified domain. Not idempotent — each call creates a new broadcast.",
+          "idempotent": false
+        }
       },
-      "sendBroadcast": {
-        "name": "sendBroadcast",
+      "send_broadcast": {
+        "name": "send_broadcast",
         "displayName": "Send Broadcast",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Send or schedule a broadcast email to its audience",
+        "props": {
+          "broadcast_id": {
+            "displayName": "Broadcast",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          },
+          "scheduled_at": {
+            "displayName": "Schedule For",
+            "description": "ISO 8601 date-time to schedule the send, e.g. 2024-12-01T10:00:00Z. Leave blank to send immediately.",
+            "required": false,
+            "type": "SHORT_TEXT"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Sends an existing draft broadcast to its entire audience immediately, or schedules it for a future time, identified by broadcast ID. Use this after Create Broadcast to deliver the campaign. Not idempotent — repeating the call can dispatch the broadcast again; optionally pass an ISO 8601 time to schedule rather than send now.",
+          "idempotent": false
+        }
       },
-      "deleteBroadcast": {
-        "name": "deleteBroadcast",
+      "delete_broadcast": {
+        "name": "delete_broadcast",
         "displayName": "Delete Broadcast",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+        "description": "Permanently delete a broadcast from your Resend account",
+        "props": {
+          "broadcast_id": {
+            "displayName": "Broadcast",
+            "required": true,
+            "refreshers": [],
+            "type": "DROPDOWN"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "both",
+        "aiMetadata": {
+          "description": "Permanently deletes a broadcast from the Resend account, identified by broadcast ID. Use this to remove a draft or unwanted campaign; only broadcasts that have not been sent can be deleted. Effectively idempotent — once deleted, repeating the call has no further effect.",
+          "idempotent": true
+        }
       },
-      "createCustomApiCallActionBASE_URL": {
-        "name": "createCustomApiCallActionBASE_URL",
-        "displayName": "Create Custom Api Call Action B A S E U R L",
-        "description": "",
-        "props": {},
-        "requireAuth": true
-      },
-      "authresendAuth": {
-        "name": "authresendAuth",
-        "displayName": "Authresend Auth",
-        "description": "",
-        "props": {},
-        "requireAuth": true
-      },
-      "authMappingasyncsecret_text": {
-        "name": "authMappingasyncsecret_text",
-        "displayName": "Auth Mappingasyncsecret text",
-        "description": "",
-        "props": {},
-        "requireAuth": true
-      },
-      "custom_api_call_24": {
-        "name": "custom_api_call_24",
-        "displayName": "Custom api call 24",
-        "description": "",
-        "props": {},
-        "requireAuth": true
-      },
-      "custom_api_call_25": {
-        "name": "custom_api_call_25",
-        "displayName": "Custom api call 25",
-        "description": "",
-        "props": {},
-        "requireAuth": true
+      "custom_api_call": {
+        "name": "custom_api_call",
+        "displayName": "Custom API Call",
+        "description": "Make a custom API call to a specific endpoint",
+        "props": {
+          "url": {
+            "auth": {
+              "displayName": "API Key",
+              "description": "To get your API key:\n1. Log in to your [Resend dashboard](https://resend.com/overview)\n2. Go to **API Keys** in the left sidebar\n3. Click **Create API Key**, give it a name, and copy the key",
+              "required": true,
+              "type": "SECRET_TEXT"
+            },
+            "displayName": "",
+            "required": true,
+            "refreshers": [],
+            "type": "DYNAMIC"
+          },
+          "method": {
+            "displayName": "Method",
+            "required": true,
+            "options": {
+              "options": [
+                {
+                  "label": "GET",
+                  "value": "GET"
+                },
+                {
+                  "label": "POST",
+                  "value": "POST"
+                },
+                {
+                  "label": "PATCH",
+                  "value": "PATCH"
+                },
+                {
+                  "label": "PUT",
+                  "value": "PUT"
+                },
+                {
+                  "label": "DELETE",
+                  "value": "DELETE"
+                },
+                {
+                  "label": "HEAD",
+                  "value": "HEAD"
+                }
+              ]
+            },
+            "type": "STATIC_DROPDOWN"
+          },
+          "headers": {
+            "displayName": "Headers",
+            "description": "Authorization headers are injected automatically from your connection.",
+            "required": true,
+            "type": "OBJECT"
+          },
+          "queryParams": {
+            "displayName": "Query Parameters",
+            "required": true,
+            "type": "OBJECT"
+          },
+          "body_type": {
+            "displayName": "Body Type",
+            "required": false,
+            "defaultValue": "none",
+            "options": {
+              "disabled": false,
+              "options": [
+                {
+                  "label": "None",
+                  "value": "none"
+                },
+                {
+                  "label": "JSON",
+                  "value": "json"
+                },
+                {
+                  "label": "Form Data",
+                  "value": "form_data"
+                },
+                {
+                  "label": "Raw",
+                  "value": "raw"
+                }
+              ]
+            },
+            "type": "STATIC_DROPDOWN"
+          },
+          "body": {
+            "auth": {
+              "displayName": "API Key",
+              "description": "To get your API key:\n1. Log in to your [Resend dashboard](https://resend.com/overview)\n2. Go to **API Keys** in the left sidebar\n3. Click **Create API Key**, give it a name, and copy the key",
+              "required": true,
+              "type": "SECRET_TEXT"
+            },
+            "displayName": "Body",
+            "refreshers": [
+              "body_type"
+            ],
+            "required": false,
+            "type": "DYNAMIC"
+          },
+          "response_is_binary": {
+            "displayName": "Response is Binary ?",
+            "description": "Enable for files like PDFs, images, etc.",
+            "required": false,
+            "defaultValue": false,
+            "type": "CHECKBOX"
+          },
+          "failsafe": {
+            "displayName": "No Error on Failure",
+            "required": false,
+            "type": "CHECKBOX"
+          },
+          "timeout": {
+            "displayName": "Timeout (in seconds)",
+            "required": false,
+            "type": "NUMBER"
+          },
+          "followRedirects": {
+            "displayName": "Follow redirects",
+            "required": false,
+            "defaultValue": false,
+            "type": "CHECKBOX"
+          }
+        },
+        "requireAuth": true,
+        "errorHandlingOptions": {
+          "continueOnFailure": {
+            "defaultValue": false
+          },
+          "retryOnFailure": {
+            "defaultValue": false
+          }
+        },
+        "audience": "human"
       }
     },
     "triggers": {
-      "emailBounced": {
-        "name": "emailBounced",
-        "displayName": "Email Bounced",
-        "description": "",
-        "props": {},
-        "type": "POLLING",
-        "sampleData": {},
-        "testStrategy": "SIMULATION"
+      "email_bounced": {
+        "name": "email_bounced",
+        "displayName": "Email Event",
+        "description": "Triggers when a selected email or contact event occurs in Resend",
+        "requireAuth": true,
+        "props": {
+          "events": {
+            "displayName": "Events",
+            "description": "Select one or more event types to subscribe to",
+            "required": true,
+            "options": {
+              "options": [
+                {
+                  "label": "Email Sent",
+                  "value": "email.sent"
+                },
+                {
+                  "label": "Email Delivered",
+                  "value": "email.delivered"
+                },
+                {
+                  "label": "Email Delivery Delayed",
+                  "value": "email.delivery_delayed"
+                },
+                {
+                  "label": "Email Complained",
+                  "value": "email.complained"
+                },
+                {
+                  "label": "Email Bounced",
+                  "value": "email.bounced"
+                },
+                {
+                  "label": "Email Opened",
+                  "value": "email.opened"
+                },
+                {
+                  "label": "Email Clicked",
+                  "value": "email.clicked"
+                },
+                {
+                  "label": "Email Failed",
+                  "value": "email.failed"
+                },
+                {
+                  "label": "Email Received",
+                  "value": "email.received"
+                },
+                {
+                  "label": "Email Scheduled",
+                  "value": "email.scheduled"
+                },
+                {
+                  "label": "Email Suppressed",
+                  "value": "email.suppressed"
+                },
+                {
+                  "label": "Domain Created",
+                  "value": "domain.created"
+                },
+                {
+                  "label": "Domain Updated",
+                  "value": "domain.updated"
+                },
+                {
+                  "label": "Domain Deleted",
+                  "value": "domain.deleted"
+                },
+                {
+                  "label": "Contact Created",
+                  "value": "contact.created"
+                },
+                {
+                  "label": "Contact Updated",
+                  "value": "contact.updated"
+                },
+                {
+                  "label": "Contact Deleted",
+                  "value": "contact.deleted"
+                }
+              ]
+            },
+            "type": "STATIC_MULTI_SELECT_DROPDOWN"
+          }
+        },
+        "type": "WEBHOOK",
+        "handshakeConfiguration": {
+          "strategy": "NONE"
+        },
+        "renewConfiguration": {
+          "strategy": "NONE"
+        },
+        "sampleData": {
+          "type": "email.bounced",
+          "created_at": "2024-03-08T09:37:40.912Z",
+          "data": {
+            "created_at": "2024-03-08T09:37:40.911Z",
+            "email_id": "562e3f00-6bad-4910-b1e3-38c2fca1e2ff",
+            "from": "onboarding@resend.dev",
+            "to": [
+              "john@example.com"
+            ],
+            "subject": "Re: Follow up"
+          }
+        },
+        "testStrategy": "SIMULATION",
+        "aiMetadata": {
+          "description": "Fires when one of the subscribed Resend events occurs, such as an email being sent, delivered, bounced, opened, clicked, complained about, or failing, as well as domain and contact lifecycle events. The payload carries the event type and the affected email, domain, or contact. Subscribe to the specific event types you care about."
+        }
       }
     },
     "actionsCount": 26,
@@ -60244,7 +61133,8 @@
     "packageType": "REGISTRY",
     "projectUsage": 0,
     "folder": "resend",
-    "isCore": false
+    "isCore": false,
+    "updated": "2026-10-16T03:12:05.991Z"
   },
   {
     "id": "piece_respaid",
