@@ -119,7 +119,7 @@
     "webpack-ignore-dynamic-require": "1.0.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.app.json",
+    "build": "tsc -p tsconfig.app.json && mkdir -p dist/src/assets && cp -r src/assets/. dist/src/assets/",
     "serve": "cd ../../.. && npx tsx watch --clear-screen=false --exclude 'packages/integrations/**' --exclude 'packages/**/dist/**' --include 'packages/server/api/src/**' --include 'packages/core/shared/src/**' --include 'packages/server/utils/src/**' --include 'packages/integrations/framework/src/**' --include 'packages/integrations/common/src/**' --tsconfig packages/server/api/tsconfig.app.json packages/server/api/src/bootstrap.ts",
     "lint": "eslint 'src/**/*.ts'",
     "test": "npm run test-ce && npm run test-ee && npm run test-cloud",

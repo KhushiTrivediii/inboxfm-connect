@@ -82,7 +82,7 @@ async function installLocalPieces({
                 archiveId: undefined,
             })
         }
-        else if (existing.displayName !== piece.displayName || existing.description !== piece.description) {
+        else if (hasCatalogDrift({ existing, incoming: piece })) {
             toSave.push({
                 ...existing,
                 displayName: piece.displayName,
@@ -113,6 +113,37 @@ async function installLocalPieces({
 }
 
 type PieceMetadataOnly = Pick<PieceMetadataSchema, 'name' | 'version' | 'pieceType'>
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// jsonb roundtrips reorder object keys, so raw JSON.stringify comparisons report
+// phantom drift on every boot — sort keys recursively to compare canonically.
+function canonicalize(value: unknown): string {
+    if (isRecord(value)) {
+        const entries = Object.entries(value).sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+        return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`).join(',')}}`
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map(canonicalize).join(',')}]`
+    }
+    return JSON.stringify(value) ?? 'null'
+}
+
+// Catalog heals usually only change actions/triggers, never displayName or
+// description — comparing those two fields alone leaves healed entries stuck.
+function hasCatalogDrift({ existing, incoming }: HasCatalogDriftParams): boolean {
+    return existing.displayName !== incoming.displayName
+        || existing.description !== incoming.description
+        || canonicalize(existing.actions) !== canonicalize(incoming.actions)
+        || canonicalize(existing.triggers) !== canonicalize(incoming.triggers)
+}
+
+type HasCatalogDriftParams = {
+    existing: PieceMetadataSchema
+    incoming: PieceMetadataSchema
+}
 
 type InstallLocalPiecesParams = {
     localPieces: PieceMetadataSchema[]
