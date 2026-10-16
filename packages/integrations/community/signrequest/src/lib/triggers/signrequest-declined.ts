@@ -16,8 +16,8 @@ export const signrequestDeclined = createTrigger({
     const apiKey = context.auth.secret_text;
 
     const body = {
-      url: context.webhookUrl,
-      events: ['declined'],
+      event_type: 'declined',
+      callback_url: context.webhookUrl,
     };
 
     const response = await makeRequest(
