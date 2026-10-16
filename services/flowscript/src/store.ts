@@ -124,7 +124,7 @@ export async function createRun(params: { projectId: string; flowName: string; e
   const id = randomUUID()
   await pool.query(
     `INSERT INTO flowscript_runs (id, project_id, flow_name, environment, version_id, trigger_kind, status, input, started_at)
-     VALUES ($1,$2,$3,$4,$5,$6,'running',$7,now())`,
+     VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,NULL)`,
     [id, params.projectId, params.flowName, params.environment, params.versionId, params.triggerKind, JSON.stringify(params.input)],
   )
   return id
@@ -157,4 +157,35 @@ export async function listRuns(projectId: string, flowName?: string, limit = 50)
 
 export async function closeStore(): Promise<void> {
   await pool.end()
+}
+
+export async function claimQueuedRun() {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query<{ id: string; ir: FlowIR; input: Record<string, unknown>; trigger_kind: string }>(
+      `SELECT r.id, v.ir, r.input, r.trigger_kind
+       FROM flowscript_runs r JOIN flowscript_versions v ON v.id=r.version_id
+       WHERE r.status='queued'
+       ORDER BY r.created_at ASC
+       FOR UPDATE OF r SKIP LOCKED LIMIT 1`,
+    )
+    const row = result.rows[0]
+    if (!row) {
+      await client.query('COMMIT')
+      return null
+    }
+    await client.query("UPDATE flowscript_runs SET status='running', started_at=now() WHERE id=$1", [row.id])
+    await client.query('COMMIT')
+    return row
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function markRunFailedBeforeStart(id: string, message: string) {
+  await pool.query("UPDATE flowscript_runs SET status='failed', error=$2, finished_at=now() WHERE id=$1 AND status='queued'", [id, message])
 }
