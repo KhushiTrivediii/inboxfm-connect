@@ -1,5 +1,5 @@
 import pg from 'pg'
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { FlowIR } from './compiler.js'
 
@@ -220,7 +220,7 @@ export async function createFlowTrigger(params: { projectId: string; flowName: s
     return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt }
   }
   const token = randomBytes(32).toString('base64url')
-  const secretHash = createHmac('sha256', process.env.FLOWSCRIPT_WEBHOOK_PEPPER ?? 'development-only-change-me').update(token).digest('hex')
+  const secretHash = createHash('sha256').update(token).digest('hex')
   await pool.query(
     'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,secret_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)',
     [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify(params.config), secretHash],
