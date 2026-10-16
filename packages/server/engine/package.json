@@ -6,6 +6,7 @@
     "build": "node esbuild.config.mjs",
     "serve": "node esbuild.config.mjs --watch",
     "lint": "eslint 'src/**/*.ts'",
+    "typecheck": "tsc -p tsconfig.lib.json --noEmit",
     "test": "vitest run",
     "test-unit": "vitest run test --exclude '**/test/integration/**'",
     "test-integration": "vitest run test/integration"

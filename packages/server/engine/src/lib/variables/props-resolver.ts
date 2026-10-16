@@ -265,18 +265,21 @@ async function evalInScope(js: string, contextAsScope: Record<string, unknown>, 
     })
 }
 
-function flattenNestedKeys(data: unknown, pathToMatch: string[]): unknown[] {
+// Script-invoked helpers get their arguments from the expression evaluator, which
+// passes them as unknown — the narrow runtime types are recovered inside the body.
+function flattenNestedKeys(data: unknown, pathToMatch: unknown): unknown[] {
+    const path = Array.isArray(pathToMatch) ? pathToMatch : []
     if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
-        for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-            if (key === pathToMatch[0]) {
-                return flattenNestedKeys(value, pathToMatch.slice(1))
+        for (const [key, value] of Object.entries(data)) {
+            if (key === path[0]) {
+                return flattenNestedKeys(value, path.slice(1))
             }
         }
     }
     else if (Array.isArray(data)) {
-        return data.flatMap((d) => flattenNestedKeys(d, pathToMatch))
+        return data.flatMap((d) => flattenNestedKeys(d, path))
     }
-    else if (pathToMatch.length === 0) {
+    else if (path.length === 0) {
         return [data]
     }
     return []
