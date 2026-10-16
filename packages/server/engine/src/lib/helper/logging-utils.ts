@@ -2,14 +2,30 @@ import { StepOutput } from '@inboxfm-connect/shared'
 import { utils } from '../utils'
 import { sizeofUtils } from './sizeof'
 
+/**
+ * `Number(process.env.X)` is NaN when the variable is unset, empty, or non-numeric,
+ * which silently corrupts every size cap built from it: a NaN truncate threshold
+ * makes `size > threshold` always false (input truncation silently disabled) and
+ * a NaN max log size makes `isWithinSizeLimit` reject every flow run. Treat those
+ * as "not configured" and fall back to the documented default instead.
+ */
+export function parseNumberEnv(raw: string | undefined, defaultValue: number): number {
+    if (raw === undefined || raw.trim() === '') {
+        return defaultValue
+    }
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : defaultValue
+}
+
 const DEFAULT_INPUT_TRUNCATE_THRESHOLD_KB = 2
-const INPUT_TRUNCATE_THRESHOLD_BYTES = Number(
-    process.env.AP_FLOW_RUN_LOG_INPUT_TRUNCATE_THRESHOLD_KB ?? DEFAULT_INPUT_TRUNCATE_THRESHOLD_KB,
+const INPUT_TRUNCATE_THRESHOLD_BYTES = parseNumberEnv(
+    process.env.AP_FLOW_RUN_LOG_INPUT_TRUNCATE_THRESHOLD_KB,
+    DEFAULT_INPUT_TRUNCATE_THRESHOLD_KB,
 ) * 1024
 
 const DEFAULT_MAX_LOG_SIZE_MB = 50
 const ERROR_OFFSET = 256 * 1024
-const MAX_LOG_SIZE = Number(process.env.AP_MAX_FLOW_RUN_LOG_SIZE_MB ?? DEFAULT_MAX_LOG_SIZE_MB) * 1024 * 1024
+const MAX_LOG_SIZE = parseNumberEnv(process.env.AP_MAX_FLOW_RUN_LOG_SIZE_MB, DEFAULT_MAX_LOG_SIZE_MB) * 1024 * 1024
 const MAX_SIZE_FOR_ALL_ENTRIES = MAX_LOG_SIZE - ERROR_OFFSET
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

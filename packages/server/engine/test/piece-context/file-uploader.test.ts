@@ -43,6 +43,27 @@ describe('file-uploader service', () => {
         ).rejects.toThrow(FileSizeError)
     })
 
+    it('falls back to the API default (25MB) when AP_MAX_FILE_SIZE_MB is unset', async () => {
+        // Regression: Number(undefined) is NaN, every size comparison was
+        // false, and the engine-side upload cap was silently disabled.
+        delete process.env.AP_MAX_FILE_SIZE_MB
+        const files = createFileUploader(SERVICE_PARAMS)
+        const overDefault = Buffer.alloc(26 * 1024 * 1024)
+        await expect(
+            files.write({ fileName: 'big.bin', data: overDefault }),
+        ).rejects.toThrow(FileSizeError)
+    })
+
+    it('falls back to the API default when AP_MAX_FILE_SIZE_MB is non-numeric', async () => {
+        // Regression: same NaN propagation from a garbage value.
+        process.env.AP_MAX_FILE_SIZE_MB = 'twenty-five'
+        const files = createFileUploader(SERVICE_PARAMS)
+        const overDefault = Buffer.alloc(26 * 1024 * 1024)
+        await expect(
+            files.write({ fileName: 'big.bin', data: overDefault }),
+        ).rejects.toThrow(FileSizeError)
+    })
+
     it('returns the read url from the response header on the proxy path', async () => {
         const readUrl = 'https://api.example.com/v1/files/abc123?token=xyz'
 

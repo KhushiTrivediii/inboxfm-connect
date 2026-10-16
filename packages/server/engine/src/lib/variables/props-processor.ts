@@ -84,11 +84,6 @@ export const propsProcessor = {
             if (processor) {
                 processedInput[key] = await processor(property, processedInput[key])
             }
-
-            const shouldValidate = key !== AUTHENTICATION_PROPERTY_NAME && property.type !== PropertyType.MARKDOWN
-            if (!shouldValidate) {
-                continue
-            }
         }
 
         for (const [key, value] of Object.entries(processedInput)) {

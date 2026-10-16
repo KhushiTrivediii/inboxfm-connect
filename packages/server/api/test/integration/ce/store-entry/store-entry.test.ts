@@ -59,12 +59,18 @@ describe('Store Entries API', () => {
             expect(get.json().value).toEqual({ items: ['a', 'b'] })
         })
 
-        it('returns 404 for a key that was never written', async () => {
+        it('returns 404 with the structured error contract for a key that was never written', async () => {
             const { mockProject, mockPlatform } = await mockAndSaveBasicSetup()
             const token = await engineToken({ projectId: mockProject.id, platformId: mockPlatform.id })
 
             const get = await call({ method: 'GET', token, query: { key: 'nope' } })
             expect(get.statusCode).toBe(StatusCodes.NOT_FOUND)
+            // The 404 used to be a plain-text body ('Value not found!'); every
+            // other miss on the API answers with the { code, params } contract.
+            expect(get.json()).toEqual({
+                code: 'ENTITY_NOT_FOUND',
+                params: { entityType: 'storeEntry', entityId: 'nope' },
+            })
         })
 
         it('deletes a key so a later read misses', async () => {
