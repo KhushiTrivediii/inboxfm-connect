@@ -1,6 +1,6 @@
 FROM oven/bun:1.3.3-alpine AS deps
 WORKDIR /app
-COPY package.json bun.lock* ./
+COPY package.json ./
 RUN bun install --no-save
 
 FROM oven/bun:1.3.3-alpine AS build
