@@ -50,6 +50,18 @@ export const tsort = {
             depthToPropertyMap[depthValue].push(property)
         }
 
+        // Kahn's algorithm drops every property in (or downstream of) a refresher
+        // cycle: their in-degree never reaches zero, so they never enter `depth`
+        // and silently vanish from the extraction order — the tool would run with
+        // those inputs missing. A cyclic dependency graph is a piece-authoring
+        // mistake, not a reason to discard the props: collect the leftovers and
+        // append them in a final bucket after every acyclic depth.
+        const maxDepth = Object.values(depth).reduce((max, value) => Math.max(max, value), -1)
+        const unvisited = Object.keys(inDegree).filter(name => depth[name] === undefined)
+        if (unvisited.length > 0) {
+            depthToPropertyMap[maxDepth + 1] = unvisited
+        }
+
         return depthToPropertyMap
     },
 }
