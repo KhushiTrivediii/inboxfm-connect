@@ -1,0 +1,23 @@
+{
+  "name": "@inboxfm-connect/flowscript-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "lint": "eslint 'src/**/*.ts' --no-error-on-unmatched-pattern",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fastify": "5.8.5",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.11.0",
+    "tsx": "^4.20.6",
+    "typescript": "5.5.4",
+    "vitest": "3.2.6"
+  }
+}
