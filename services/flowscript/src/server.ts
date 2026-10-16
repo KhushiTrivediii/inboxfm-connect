@@ -153,15 +153,7 @@ export function buildServer(): FastifyInstance {
       return reply.code(501).send({ error: 'Integration execution is not wired to the trusted Connect runtime yet; no run was started.' })
     }
     const runId = await createRun({ projectId, flowName: params.data.name, environment: body.data.environment, versionId: deployed.id, input: body.data.input, triggerKind: 'manual' })
-    try {
-      const result = await executeFlowIR(deployed.ir, { input: body.data.input, trigger: { source: 'api', kind: 'manual' } })
-      await finishRun(runId, result)
-      return reply.code(result.status === 'succeeded' ? 200 : 422).send({ runId, ...result })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Execution failed'
-      await finishRun(runId, { status: 'failed', steps: [], error: message })
-      return reply.code(500).send({ runId, status: 'failed', error: message })
-    }
+    return reply.code(202).send({ runId, status: 'queued', flow: params.data.name, environment: body.data.environment })
   })
 
   app.get('/v1/runs', async (request, reply) => {
