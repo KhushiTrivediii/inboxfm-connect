@@ -241,6 +241,53 @@ steps:
       expect(diag?.message).toContain('Unsupported reference')
     }
   })
+
+  it('rejects forward dependencies where a step depends on a subsequent step', () => {
+    const source = `flow: forward-dep
+version: 1
+trigger:
+  kind: manual
+steps:
+  - id: step_first
+    kind: transform
+    config: { value: 1 }
+    dependsOn: [step_second]
+  - id: step_second
+    kind: transform
+    config: { value: 2 }
+    dependsOn: []
+`
+    const result = compileFlowSource(source)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      const diag = result.diagnostics.find(d => d.code === 'FLOW_INVALID_REFERENCE')
+      expect(diag).toBeDefined()
+      expect(diag?.message).toContain('Forward dependency not allowed')
+    }
+  })
+
+  it('rejects output referencing trigger payload in manual flows', () => {
+    const source = `flow: manual-trigger-out
+version: 1
+trigger:
+  kind: manual
+steps:
+  - id: step_a
+    kind: transform
+    config: { value: 1 }
+    dependsOn: []
+output:
+  bad_ref:
+    $ref: trigger.body.token
+`
+    const result = compileFlowSource(source)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      const diag = result.diagnostics.find(d => d.code === 'FLOW_INVALID_REFERENCE')
+      expect(diag).toBeDefined()
+      expect(diag?.message).toContain('Manual triggers do not provide payload data for output reference')
+    }
+  })
 })
 
 describe('canonicalizeJson', () => {

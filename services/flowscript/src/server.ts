@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { compileFlowSource } from './compiler.js'
+import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
 import { closeStore, createRun, deployFlow, finishRun, getDeployedFlow, getRun, initializeStore, listRuns, publishFlow, createFlowTrigger, enqueueWebhook } from './store.js'
 
@@ -109,6 +109,10 @@ export function buildServer(): FastifyInstance {
     if (validated.flow.steps.some(step => step.kind === 'integration')) {
       return reply.code(501).send({ error: 'Trusted InboxFM Connect integration executor is not wired into this service yet; integration steps are never executed by this endpoint.' })
     }
+    const inputValidation = validateRunInput(validated.flow.inputSchema ?? {}, body.data.input ?? {})
+    if (!inputValidation.ok) {
+      return reply.code(400).send({ error: 'Invalid execution input', diagnostics: inputValidation.diagnostics })
+    }
     const result = await executeFlowIR(validated.flow as unknown as import('./compiler.js').FlowIR, { input: body.data.input, trigger: body.data.trigger })
     return result.status === 'succeeded' ? result : reply.code(422).send(result)
   })
@@ -188,6 +192,10 @@ export function buildServer(): FastifyInstance {
     if (!deployed) return reply.code(404).send({ error: 'No active deployment for this flow and environment' })
     if (deployed.ir.steps.some(step => step.kind === 'integration')) {
       return reply.code(501).send({ error: 'Integration execution is not wired to the trusted Connect runtime yet; no run was started.' })
+    }
+    const inputValidation = validateRunInput(deployed.ir.inputSchema ?? {}, body.data.input)
+    if (!inputValidation.ok) {
+      return reply.code(400).send({ error: 'Invalid run input', diagnostics: inputValidation.diagnostics })
     }
     const runId = await createRun({ projectId, flowName: params.data.name, environment: body.data.environment, versionId: deployed.id, input: body.data.input, triggerKind: 'manual' })
     return reply.code(202).send({ runId, status: 'queued', flow: params.data.name, environment: body.data.environment })

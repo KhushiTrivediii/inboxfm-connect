@@ -181,6 +181,15 @@ export function compileFlowSource(source: string): CompileResult {
       if (dependency === step.id) {
         diagnostics.push({ severity: 'error', code: DiagnosticCodes.FLOW_SELF_DEPENDENCY, path: `steps.${index}.dependsOn`, message: 'A step cannot depend on itself' })
       }
+      const depIndex = byId.get(dependency)
+      if (depIndex !== undefined && depIndex > index) {
+        diagnostics.push({
+          severity: 'error',
+          code: DiagnosticCodes.FLOW_INVALID_REFERENCE,
+          path: `steps.${index}.dependsOn`,
+          message: `Forward dependency not allowed: step "${step.id}" depends on step "${dependency}" which appears later in the flow`,
+        })
+      }
     }
   })
 
@@ -308,7 +317,16 @@ export function compileFlowSource(source: string): CompileResult {
               message: `Output reference "$ref: ${ref}" refers to unknown step "${targetStepId}"`,
             })
           }
-        } else if (!ref.startsWith('trigger.')) {
+        } else if (ref.startsWith('trigger.')) {
+          if (flow.trigger.kind === 'manual') {
+            diagnostics.push({
+              severity: 'error',
+              code: DiagnosticCodes.FLOW_INVALID_REFERENCE,
+              path: fullPath,
+              message: `Manual triggers do not provide payload data for output reference "$ref: ${ref}"`,
+            })
+          }
+        } else {
           diagnostics.push({
             severity: 'error',
             code: DiagnosticCodes.FLOW_INVALID_REFERENCE,

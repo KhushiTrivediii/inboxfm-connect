@@ -9,6 +9,8 @@
     "start": "node dist/server.js",
     "lint": "eslint 'src/**/*.ts' --no-error-on-unmatched-pattern",
     "test": "vitest run",
+    "test-unit": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:watch": "vitest",
     "cli": "node dist/cli.js"
   },

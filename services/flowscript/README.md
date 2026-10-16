@@ -89,6 +89,5 @@ Use `--input path.json` to pass structured input. Local run refuses integration 
 - `POST /v1/flows/:name/triggers` to register a cron schedule or secret-token webhook
 - `POST /v1/hooks/:token` to durably enqueue a webhook-triggered run
 - `GET /v1/runs` and `GET /v1/runs/:id`
-- `GET /v1/runs` and `GET /v1/runs/:id`
 
 Default internal port: 8081.

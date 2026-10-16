@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { compileFlowSource } from './compiler.js'
+import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
 
 function usage(): never {
@@ -27,8 +27,21 @@ if (command === 'lint') {
   console.log(JSON.stringify({ hash: compiled.hash, ir: compiled.ir }, null, 2))
 } else if (command === 'test' || command === 'run') {
   const inputIndex = args.indexOf('--input')
+  if (inputIndex >= 0 && !args[inputIndex + 1]) {
+    console.error('ERROR: --input flag requires a file path argument')
+    process.exit(2)
+  }
   const inputFile = inputIndex >= 0 ? args[inputIndex + 1] : undefined
   const input = inputFile ? JSON.parse(await readFile(resolve(inputFile), 'utf8')) as Record<string, unknown> : {}
+
+  const inputValidation = validateRunInput(compiled.ir.inputSchema ?? {}, input)
+  if (!inputValidation.ok) {
+    for (const diagnostic of inputValidation.diagnostics) {
+      console.error(`${diagnostic.severity.toUpperCase()} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`)
+    }
+    process.exit(1)
+  }
+
   if (command === 'run' && compiled.ir.steps.some(step => step.kind === 'integration')) {
     console.error('Local live integration execution is not wired yet. Integration steps require the trusted Connect runtime adapter.')
     process.exit(3)
