@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { compileFlowSource } from './compiler.js'
+import { executeFlowIR } from './runtime.js'
 
 const envSchema = z.object({
   FLOWSCRIPT_HOST: z.string().default('0.0.0.0'),
@@ -75,13 +77,37 @@ export function buildServer(): FastifyInstance {
   app.get('/health', async () => ({
     status: 'ok',
     service: 'flowscript',
-    capabilities: ['ir-validation'],
+    capabilities: ['ir-validation', 'source-compilation', 'safe-local-execution'],
   }))
 
   app.get('/ready', async () => ({
     status: 'ready',
     service: 'flowscript',
   }))
+
+  app.post('/v1/source/compile', async (request, reply) => {
+    const body = z.object({ source: z.string().min(1).max(1_000_000) }).safeParse(request.body)
+    if (!body.success) return reply.code(400).send({ error: 'Expected { source: string }', issues: body.error.issues })
+    const result = compileFlowSource(body.data.source)
+    if (!result.ok) return reply.code(422).send({ valid: false, diagnostics: result.diagnostics })
+    return { valid: true, hash: result.hash, ir: result.ir, diagnostics: result.diagnostics }
+  })
+
+  app.post('/v1/ir/execute-local', async (request, reply) => {
+    const body = z.object({
+      flow: FlowIRSchema,
+      input: z.record(z.string(), z.unknown()).optional(),
+      trigger: z.record(z.string(), z.unknown()).optional(),
+    }).safeParse(request.body)
+    if (!body.success) return reply.code(400).send({ error: 'Invalid execution request', issues: body.error.issues })
+    const validated = validateFlowIR(body.data.flow)
+    if (!validated.valid) return reply.code(422).send({ valid: false, issues: validated.issues })
+    if (validated.flow.steps.some(step => step.kind === 'integration')) {
+      return reply.code(501).send({ error: 'Trusted InboxFM Connect integration executor is not wired into this service yet; integration steps are never executed by this endpoint.' })
+    }
+    const result = await executeFlowIR(validated.flow, { input: body.data.input, trigger: body.data.trigger })
+    return result.status === 'succeeded' ? result : reply.code(422).send(result)
+  })
 
   app.post('/v1/ir/validate', async (request, reply) => {
     const result = validateFlowIR(request.body)
