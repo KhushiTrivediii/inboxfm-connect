@@ -183,7 +183,7 @@ export async function claimQueuedRun() {
        FROM flowscript_runs r JOIN flowscript_versions v ON v.id=r.version_id
        WHERE r.status='queued'
        ORDER BY r.created_at ASC
-       FOR UPDATE OF r SKIP LOCKED LIMIT 1`,
+       LIMIT 1 FOR UPDATE OF r SKIP LOCKED`,
     )
     const row = result.rows[0]
     if (!row) {
