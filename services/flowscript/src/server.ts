@@ -21,8 +21,11 @@ const FlowIRStepSchema = z.object({
 
 const FlowIRSchema = z.object({
   irVersion: z.literal(1),
+  compilerVersion: z.string().optional(),
   name: z.string().min(1).max(128).regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/),
   version: z.number().int().positive(),
+  description: z.string().optional(),
+  sourceHash: z.string().optional(),
   trigger: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('manual') }),
     z.object({ kind: z.literal('schedule'), cron: z.string().min(1), timezone: z.string().min(1) }),

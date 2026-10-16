@@ -1,5 +1,5 @@
 import pg from 'pg'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { FlowIR } from './compiler.js'
 
