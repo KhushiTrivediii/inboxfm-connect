@@ -193,13 +193,15 @@ export function buildServer(): FastifyInstance {
 }
 
 const app = buildServer()
-initializeStore()
-  .then(() => app.listen({ host: env.FLOWSCRIPT_HOST, port: env.FLOWSCRIPT_PORT }))
-  .then(address => app.log.info({ address }, 'FlowScript service listening'))
-  .catch(error => {
-    app.log.error({ error }, 'Failed to start FlowScript service')
-    process.exitCode = 1
-  })
+if (process.env.NODE_ENV !== 'test') {
+  initializeStore()
+    .then(() => app.listen({ host: env.FLOWSCRIPT_HOST, port: env.FLOWSCRIPT_PORT }))
+    .then(address => app.log.info({ address }, 'FlowScript service listening'))
+    .catch(error => {
+      app.log.error({ error }, 'Failed to start FlowScript service')
+      process.exitCode = 1
+    })
 
-process.once('SIGTERM', () => { void closeStore().finally(() => process.exit(0)) })
-process.once('SIGINT', () => { void closeStore().finally(() => process.exit(0)) })
+  process.once('SIGTERM', () => { void closeStore().finally(() => process.exit(0)) })
+  process.once('SIGINT', () => { void closeStore().finally(() => process.exit(0)) })
+}
