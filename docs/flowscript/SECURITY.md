@@ -22,13 +22,17 @@
 - Pin runs to immutable artifacts and audit publish/deploy/trigger changes.
 - Keep lockfile and dependency vulnerability checks enabled.
 
-## Current blockers
+## Current security status and controls
 
-- Gateway authentication is enforced via HMAC-SHA256 project signatures (`FLOWSCRIPT_GATEWAY_SECRET`); public access without gateway validation remains blocked.
-- Webhook tokens are bearer capabilities. Do not expose publicly without rate limits, payload limits, provider verification where applicable, revocation and audit logging.
-- The runner is not a hardened sandbox for arbitrary user code. Keep it limited to declarative IR and trusted adapters.
-- Input/output redaction and retention controls are incomplete.
-- Database schema currently uses CREATE TABLE IF NOT EXISTS. Production requires versioned migrations and least-privilege DB credentials.
+- Gateway authentication is enforced via HMAC-SHA256 signatures (`x-project-signature` or `x-gateway-signature`) and signed Bearer tokens against `FLOWSCRIPT_GATEWAY_SECRET` / `FLOWSCRIPT_AUTH_SECRET`. Fails closed (`GATEWAY_SECRET_MISSING`) if secrets are unset.
+- Untrusted edge proxies must strip inbound client `x-project-id`, `x-project-signature`, and `x-gateway-signature` headers before authenticating callers using the `stripUntrustedProjectHeaders` helper.
+- Project IDs are strictly validated to `/^[a-zA-Z0-9_-]{1,128}$/` to prevent injection or header spoofing.
+- Conflicting identities (Bearer token project differing from `x-project-id`) are strictly rejected with 401 `FORGED_PROJECT_HEADER`.
+- Strict project-scoped query isolation is enforced across versions, deployments, triggers, and runs. Cross-project version deployment is rejected with 404 `VERSION_NOT_FOUND`, and flow name mismatch is rejected with 400 `FLOW_NAME_MISMATCH`.
+- Global payload limit of 1MB (`bodyLimit: 1_048_576`) is enforced with 413 `PAYLOAD_TOO_LARGE`.
+- Webhook tokens are bearer capabilities. Raw tokens are SHA-256 hashed; only the hash is persisted in the database. Ingress logs sanitize the raw token (`/v1/hooks/[REDACTED]`).
+- The runner is limited to declarative IR and trusted adapters; arbitrary user code execution (`eval`/`Function`) is strictly disallowed.
+- Database schema currently uses CREATE TABLE IF NOT EXISTS with idempotent column upgrades. Production requires versioned migrations and least-privilege DB credentials.
 
 ## Required threat tests
 
