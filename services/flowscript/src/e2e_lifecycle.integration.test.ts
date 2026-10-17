@@ -29,7 +29,8 @@ import {
   buildServer,
   signProjectId,
 } from './server.js'
-import { executeFlowIR, type FlowIR } from './runtime.js'
+import { executeFlowIR } from './runtime.js'
+import type { FlowIR } from './compiler.js'
 
 const PG_URL = process.env.FLOWSCRIPT_POSTGRES_URL || process.env.POSTGRES_URL || 'postgres://postgres:postgres@localhost:5432/flowscript_test'
 const IS_CI = process.env.CI === 'true'
@@ -69,7 +70,8 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
       DROP TABLE IF EXISTS flowscript_versions CASCADE;
     `)
 
-    await initializeStore(testPool)
+    setStorePool(testPool)
+    await initializeStore()
     app = buildServer()
   })
 
@@ -606,8 +608,8 @@ steps:
 
       // Two workers poll due schedules at the exact same instant
       const [dispatchA, dispatchB] = await Promise.all([
-        enqueueDueSchedule({ workerId: 'worker-node-A' }),
-        enqueueDueSchedule({ workerId: 'worker-node-B' }),
+        enqueueDueSchedule(),
+        enqueueDueSchedule(),
       ])
 
       // Occurrence rows in flowscript_schedule_occurrences must be exactly 1
