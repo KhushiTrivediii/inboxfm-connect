@@ -38,7 +38,11 @@ The prototype does not fully recover stale running rows. Do not reset production
 
 ### Schedule did not fire
 
-Check trigger enabled state, cron, timezone, next_fire_at, worker logs and DB time. DST/missed-tick semantics are not fully specified. Do not assume exactly-once dispatch.
+1. Query `GET /v1/flows/:name/triggers` to check trigger state: inspect `enabled`, `nextFireAt`, `lastFiredAt`, `dispatchLagMs`, and `lastError`.
+2. If `lastError` is populated, the trigger was automatically paused due to a runtime parse or calculation error; review the error message and re-register or patch the trigger.
+3. Check worker container logs for structured telemetry: search for `schedule_dispatched` (contains `triggerId`, `lagMs`, `nextFireAt`, `runId`) or `schedule_dispatch_failed`.
+4. Inspect `flowscript_schedule_occurrences` table to verify whether a particular scheduled instant was already claimed by another worker replica.
+5. Review `missedTickPolicy` (`run-once`, `skip`, or `catch-up`): note that under `run-once` (default), downtime will advance to the next scheduled fire time relative to current time rather than queueing past occurrences.
 
 ### Webhook returns 404
 

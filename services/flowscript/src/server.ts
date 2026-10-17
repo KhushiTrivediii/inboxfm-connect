@@ -20,6 +20,7 @@ import {
   updateFlowTrigger,
   deleteFlowTrigger,
   rotateWebhookTriggerToken,
+  validateScheduleConfig,
 } from './store.js'
 
 const envSchema = z.object({
@@ -233,17 +234,36 @@ export function buildServer(): FastifyInstance {
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
     const body = z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('schedule'), environment: z.string().min(1).max(64).default('production'), cron: z.string().min(1).max(128), timezone: z.string().min(1).max(128).default('UTC') }),
+      z.object({
+        kind: z.literal('schedule'),
+        environment: z.string().min(1).max(64).default('production'),
+        cron: z.string().min(1).max(128),
+        timezone: z.string().min(1).max(128).default('UTC'),
+        missedTickPolicy: z.enum(['run-once', 'skip', 'catch-up']).default('run-once').optional(),
+      }),
       z.object({ kind: z.literal('webhook'), environment: z.string().min(1).max(64).default('production') }),
     ]).safeParse(request.body)
     if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid trigger request', issues: body.success ? undefined : body.error.issues })
+
+    if (body.data.kind === 'schedule') {
+      const scheduleValidation = validateScheduleConfig(body.data.cron, body.data.timezone, { missedTickPolicy: body.data.missedTickPolicy })
+      if (!scheduleValidation.valid) {
+        return reply.code(400).send({
+          error: scheduleValidation.error,
+          path: scheduleValidation.path,
+        })
+      }
+    }
+
     try {
       const trigger = await createFlowTrigger({
         projectId,
         flowName: params.data.name,
         environment: body.data.environment,
         kind: body.data.kind,
-        config: body.data.kind === 'schedule' ? { cron: body.data.cron, timezone: body.data.timezone } : {},
+        config: body.data.kind === 'schedule'
+          ? { cron: body.data.cron, timezone: body.data.timezone, missedTickPolicy: body.data.missedTickPolicy }
+          : {},
       })
       return reply.code(201).send(body.data.kind === 'webhook'
         ? { ...trigger, webhookUrl: `/v1/hooks/${trigger.token}` }

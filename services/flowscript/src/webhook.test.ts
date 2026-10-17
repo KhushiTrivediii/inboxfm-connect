@@ -87,7 +87,7 @@ describe('webhook token registration and ingress consistency (issue #655)', () =
         return { rows: [{ id }], rowCount: 1 }
       }
 
-      if (trimmed.includes('SELECT id, flow_name, environment, kind, config, enabled, next_fire_at, last_fired_at, created_at FROM flowscript_triggers')) {
+      if (trimmed.includes('FROM flowscript_triggers WHERE project_id=$1 AND flow_name=$2')) {
         const [projectId, flowName] = params
         const rows = []
         for (const tr of triggers.values()) {

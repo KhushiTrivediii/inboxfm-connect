@@ -43,11 +43,15 @@ Project-scoped trigger management routes require verified project identity (HMAC
 
 ### POST /v1/flows/:name/triggers
 
-Schedule request includes kind=schedule, cron, timezone and optional environment. Webhook request includes kind=webhook and optional environment. Webhook creation returns a secret token once; store securely and never log it. The raw token is hashed with SHA-256 and only the hash is persisted.
+- **Schedule trigger**: `{ kind: "schedule", cron: string, timezone?: string, missedTickPolicy?: "run-once" | "skip" | "catch-up", environment?: string }`.
+  - Cron syntax and IANA timezone identifiers are strictly validated; invalid syntax returns HTTP 400 with `path: "cron"` or `path: "timezone"`.
+  - `missedTickPolicy` defaults to `"run-once"`, preventing runaway tick cascades following worker downtime.
+- **Webhook trigger**: `{ kind: "webhook", environment?: string }`.
+  - Returns a high-entropy secret token once (`{ id, kind, flowName, token, webhookUrl }`); store securely and never log it. The raw token is hashed with SHA-256 and only the hash is persisted.
 
 ### GET /v1/flows/:name/triggers
 
-Returns active and disabled triggers configured for this flow in the project. Secret hashes are omitted from the response.
+Returns active and disabled triggers configured for this flow in the project. Includes `enabled`, `nextFireAt`, `lastFiredAt`, `dispatchLagMs`, `lastError`, and `config`. Secret hashes and raw tokens are omitted from the response.
 
 ### PATCH /v1/flows/:name/triggers/:triggerId
 
