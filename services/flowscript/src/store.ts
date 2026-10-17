@@ -2,6 +2,7 @@ import pg from 'pg'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { CronExpressionParser } from 'cron-parser'
 import { canonicalizeJson, type FlowIR } from './compiler.js'
+import { redactSensitiveData } from './adapter.js'
 
 const { Pool } = pg
 const connectionString = process.env.DATABASE_URL
@@ -72,16 +73,41 @@ export async function initializeStore(): Promise<void> {
       environment text NOT NULL,
       version_id uuid NOT NULL REFERENCES flowscript_versions(id),
       trigger_kind text NOT NULL,
-      status text NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+      status text NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'dead_letter', 'uncertain')),
       input jsonb NOT NULL DEFAULT '{}'::jsonb,
       output jsonb,
       steps jsonb,
       error text,
+      worker_id text,
+      lease_expires_at timestamptz,
+      attempt_count integer NOT NULL DEFAULT 0,
+      max_attempts integer NOT NULL DEFAULT 3,
+      retry_at timestamptz,
+      cancellation_reason text,
+      idempotency_key text,
+      had_non_idempotent_step boolean NOT NULL DEFAULT false,
       started_at timestamptz,
       finished_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS flowscript_runs_project_created_idx ON flowscript_runs(project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS flowscript_runs_lease_idx ON flowscript_runs(status, lease_expires_at) WHERE status='running';
+    CREATE INDEX IF NOT EXISTS flowscript_runs_retry_idx ON flowscript_runs(status, retry_at) WHERE status='queued';
+    CREATE UNIQUE INDEX IF NOT EXISTS flowscript_runs_idempotency_idx ON flowscript_runs(project_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS flowscript_step_attempts (
+      id uuid PRIMARY KEY,
+      run_id uuid NOT NULL REFERENCES flowscript_runs(id) ON DELETE CASCADE,
+      step_id text NOT NULL,
+      attempt integer NOT NULL DEFAULT 1,
+      status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'skipped')),
+      error_code text,
+      error_message text,
+      retryable boolean,
+      duration_ms integer,
+      started_at timestamptz NOT NULL DEFAULT now(),
+      finished_at timestamptz
+    );
+    CREATE INDEX IF NOT EXISTS flowscript_step_attempts_run_idx ON flowscript_step_attempts(run_id, started_at ASC);
     CREATE TABLE IF NOT EXISTS flowscript_webhook_idempotency (
       id uuid PRIMARY KEY,
       trigger_id uuid NOT NULL REFERENCES flowscript_triggers(id) ON DELETE CASCADE,
@@ -172,53 +198,212 @@ export async function getDeployedFlow(projectId: string, flowName: string, envir
   return result.rows[0] ?? null
 }
 
-export async function createRun(params: { projectId: string; flowName: string; environment: string; versionId: string; input: Record<string, unknown>; triggerKind: string }) {
-  const id = randomUUID()
-  await pool.query(
-    `INSERT INTO flowscript_runs (id, project_id, flow_name, environment, version_id, trigger_kind, status, input, started_at)
-     VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,NULL)`,
-    [id, params.projectId, params.flowName, params.environment, params.versionId, params.triggerKind, JSON.stringify(params.input)],
-  )
-  return id
+export function computeBackoff(
+  attempt: number,
+  baseMs: number = 1000,
+  maxMs: number = 30000,
+  retryAfterMs?: number,
+): number {
+  if (retryAfterMs !== undefined && retryAfterMs > 0) {
+    return Math.min(retryAfterMs, maxMs)
+  }
+  const exp = Math.min(Math.pow(2, Math.max(0, attempt - 1)) * baseMs, maxMs)
+  const jitter = 0.8 + Math.random() * 0.4
+  return Math.floor(exp * jitter)
 }
 
-export async function finishRun(id: string, result: { status: 'succeeded' | 'failed'; output?: unknown; steps: unknown[]; error?: string }) {
+export async function createRun(params: {
+  projectId: string
+  flowName: string
+  environment: string
+  versionId: string
+  input: Record<string, unknown>
+  triggerKind: string
+  idempotencyKey?: string
+  maxAttempts?: number
+}): Promise<{ id: string; duplicate?: boolean }> {
+  if (params.idempotencyKey) {
+    const existing = await pool.query<{ id: string; status: string }>(
+      'SELECT id, status FROM flowscript_runs WHERE project_id=$1 AND idempotency_key=$2',
+      [params.projectId, params.idempotencyKey],
+    )
+    if (existing.rows[0]) {
+      return { id: existing.rows[0].id, duplicate: true }
+    }
+  }
+
+  const id = randomUUID()
+  const maxAttempts = params.maxAttempts ?? 3
+
+  try {
+    await pool.query(
+      `INSERT INTO flowscript_runs (id, project_id, flow_name, environment, version_id, trigger_kind, status, input, idempotency_key, max_attempts, started_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8,$9,NULL)`,
+      [id, params.projectId, params.flowName, params.environment, params.versionId, params.triggerKind, JSON.stringify(params.input), params.idempotencyKey ?? null, maxAttempts],
+    )
+    return { id, duplicate: false }
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && ('code' in err || 'message' in err)) {
+      const e = err as { code?: string; message?: string }
+      if (e.code === '23505' || String(e.message).includes('unique') || String(e.message).includes('flowscript_runs_idempotency_idx')) {
+        if (params.idempotencyKey) {
+          const existing = await pool.query<{ id: string }>(
+            'SELECT id FROM flowscript_runs WHERE project_id=$1 AND idempotency_key=$2',
+            [params.projectId, params.idempotencyKey],
+          )
+          if (existing.rows[0]) {
+            return { id: existing.rows[0].id, duplicate: true }
+          }
+        }
+      }
+    }
+    throw err
+  }
+}
+
+export async function finishRun(
+  id: string,
+  result: {
+    status: 'succeeded' | 'failed' | 'cancelled' | 'uncertain' | 'dead_letter'
+    output?: unknown
+    steps: unknown[]
+    error?: string
+    cancellationReason?: string
+  },
+) {
   await pool.query(
-    'UPDATE flowscript_runs SET status=$2, output=$3, steps=$4, error=$5, finished_at=now() WHERE id=$1',
-    [id, result.status, result.output === undefined ? null : JSON.stringify(result.output), JSON.stringify(result.steps), result.error ?? null],
+    `UPDATE flowscript_runs
+     SET status=$2, output=$3, steps=$4, error=$5, cancellation_reason=COALESCE(cancellation_reason, $6), finished_at=now()
+     WHERE id=$1`,
+    [
+      id,
+      result.status,
+      result.output === undefined ? null : JSON.stringify(result.output),
+      JSON.stringify(result.steps),
+      result.error ?? null,
+      result.cancellationReason ?? null,
+    ],
   )
 }
 
 export async function getRun(projectId: string, runId: string) {
-  const result = await pool.query(
-    'SELECT id, flow_name, environment, version_id, trigger_kind, status, input, output, steps, error, started_at, finished_at, created_at FROM flowscript_runs WHERE project_id=$1 AND id=$2',
+  const result = await pool.query<{
+    id: string
+    flow_name: string
+    environment: string
+    version_id: string
+    trigger_kind: string
+    status: string
+    input: Record<string, unknown>
+    output: unknown | null
+    steps: unknown[] | null
+    error: string | null
+    worker_id: string | null
+    lease_expires_at: Date | null
+    attempt_count: number
+    max_attempts: number
+    retry_at: Date | null
+    cancellation_reason: string | null
+    idempotency_key: string | null
+    had_non_idempotent_step: boolean
+    started_at: Date | null
+    finished_at: Date | null
+    created_at: Date
+  }>(
+    `SELECT id, flow_name, environment, version_id, trigger_kind, status, input, output, steps, error,
+            worker_id, lease_expires_at, attempt_count, max_attempts, retry_at, cancellation_reason,
+            idempotency_key, had_non_idempotent_step, started_at, finished_at, created_at
+     FROM flowscript_runs WHERE project_id=$1 AND id=$2`,
     [projectId, runId],
   )
-  return result.rows[0] ?? null
+  const row = result.rows[0]
+  if (!row) return null
+  return {
+    id: row.id,
+    flowName: row.flow_name,
+    environment: row.environment,
+    versionId: row.version_id,
+    triggerKind: row.trigger_kind,
+    status: row.status,
+    input: row.input,
+    output: row.output,
+    steps: row.steps ?? [],
+    error: row.error,
+    workerId: row.worker_id,
+    leaseExpiresAt: row.lease_expires_at,
+    attemptCount: row.attempt_count,
+    maxAttempts: row.max_attempts,
+    retryAt: row.retry_at,
+    cancellationReason: row.cancellation_reason,
+    idempotencyKey: row.idempotency_key,
+    hadNonIdempotentStep: row.had_non_idempotent_step,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    createdAt: row.created_at,
+  }
 }
 
 export async function listRuns(projectId: string, flowName?: string, limit = 50) {
-  const result = await pool.query(
-    `SELECT id, flow_name, environment, version_id, trigger_kind, status, error, started_at, finished_at, created_at
+  const result = await pool.query<{
+    id: string
+    flow_name: string
+    environment: string
+    version_id: string
+    trigger_kind: string
+    status: string
+    error: string | null
+    worker_id: string | null
+    attempt_count: number
+    retry_at: Date | null
+    cancellation_reason: string | null
+    started_at: Date | null
+    finished_at: Date | null
+    created_at: Date
+  }>(
+    `SELECT id, flow_name, environment, version_id, trigger_kind, status, error, worker_id, attempt_count, retry_at, cancellation_reason, started_at, finished_at, created_at
      FROM flowscript_runs WHERE project_id=$1 AND ($2::text IS NULL OR flow_name=$2)
      ORDER BY created_at DESC LIMIT $3`,
     [projectId, flowName ?? null, Math.min(Math.max(limit, 1), 100)],
   )
-  return result.rows
+  return result.rows.map(row => ({
+    id: row.id,
+    flowName: row.flow_name,
+    environment: row.environment,
+    versionId: row.version_id,
+    triggerKind: row.trigger_kind,
+    status: row.status,
+    error: row.error,
+    workerId: row.worker_id,
+    attemptCount: row.attempt_count,
+    retryAt: row.retry_at,
+    cancellationReason: row.cancellation_reason,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    createdAt: row.created_at,
+  }))
 }
 
 export async function closeStore(): Promise<void> {
   await pool.end()
 }
 
-export async function claimQueuedRun() {
+export async function claimQueuedRun(workerId: string = randomUUID(), leaseDurationMs: number = 30_000) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const result = await client.query<{ id: string; project_id: string; ir: FlowIR; input: Record<string, unknown>; trigger_kind: string }>(
-      `SELECT r.id, r.project_id, v.ir, r.input, r.trigger_kind
+    const result = await client.query<{
+      id: string
+      project_id: string
+      flow_name: string
+      ir: FlowIR
+      input: Record<string, unknown>
+      trigger_kind: string
+      attempt_count: number
+      max_attempts: number
+    }>(
+      `SELECT r.id, r.project_id, r.flow_name, v.ir, r.input, r.trigger_kind, r.attempt_count, r.max_attempts
        FROM flowscript_runs r JOIN flowscript_versions v ON v.id=r.version_id
-       WHERE r.status='queued'
+       WHERE r.status='queued' AND (r.retry_at IS NULL OR r.retry_at <= now())
        ORDER BY r.created_at ASC
        LIMIT 1 FOR UPDATE OF r SKIP LOCKED`,
     )
@@ -227,15 +412,291 @@ export async function claimQueuedRun() {
       await client.query('COMMIT')
       return null
     }
-    await client.query("UPDATE flowscript_runs SET status='running', started_at=now() WHERE id=$1", [row.id])
+
+    const nextAttempt = (row.attempt_count ?? 0) + 1
+    const leaseExpires = new Date(Date.now() + leaseDurationMs)
+
+    await client.query(
+      `UPDATE flowscript_runs
+       SET status='running', worker_id=$2, lease_expires_at=$3, attempt_count=$4, started_at=COALESCE(started_at, now()), retry_at=NULL
+       WHERE id=$1`,
+      [row.id, workerId, leaseExpires, nextAttempt],
+    )
     await client.query('COMMIT')
-    return row
+    return {
+      ...row,
+      worker_id: workerId,
+      attempt_count: nextAttempt,
+      lease_expires_at: leaseExpires,
+    }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
   } finally {
     client.release()
   }
+}
+
+export async function heartbeatRun(
+  runId: string,
+  workerId: string,
+  extensionMs: number = 30_000,
+): Promise<{ active: boolean; cancelled: boolean }> {
+  const nextLease = new Date(Date.now() + extensionMs)
+  const result = await pool.query<{ status: string; cancellation_reason: string | null }>(
+    `UPDATE flowscript_runs
+     SET lease_expires_at=$3
+     WHERE id=$1 AND worker_id=$2 AND status='running'
+     RETURNING status, cancellation_reason`,
+    [runId, workerId, nextLease],
+  )
+  if (result.rows.length === 0) {
+    const check = await pool.query<{ status: string }>(
+      'SELECT status FROM flowscript_runs WHERE id=$1',
+      [runId],
+    )
+    const status = check.rows[0]?.status
+    return { active: false, cancelled: status === 'cancelled' }
+  }
+  return { active: true, cancelled: false }
+}
+
+export type StaleRecoveryResult = {
+  recoveredCount: number
+  retried: string[]
+  uncertain: string[]
+  deadLettered: string[]
+}
+
+export async function recoverStaleRuns(options?: {
+  defaultMaxAttempts?: number
+  baseBackoffMs?: number
+  maxBackoffMs?: number
+}): Promise<StaleRecoveryResult> {
+  const defaultMaxAttempts = options?.defaultMaxAttempts ?? 3
+  const baseBackoffMs = options?.baseBackoffMs ?? 1000
+  const maxBackoffMs = options?.maxBackoffMs ?? 30000
+
+  const client = await pool.connect()
+  const result: StaleRecoveryResult = {
+    recoveredCount: 0,
+    retried: [],
+    uncertain: [],
+    deadLettered: [],
+  }
+
+  try {
+    await client.query('BEGIN')
+    const expired = await client.query<{
+      id: string
+      project_id: string
+      attempt_count: number
+      max_attempts: number | null
+      had_non_idempotent_step: boolean
+    }>(
+      `SELECT id, project_id, attempt_count, max_attempts, had_non_idempotent_step
+       FROM flowscript_runs
+       WHERE status='running' AND lease_expires_at < now()
+       FOR UPDATE SKIP LOCKED`,
+    )
+
+    for (const run of expired.rows) {
+      result.recoveredCount++
+      const maxAttempts = run.max_attempts ?? defaultMaxAttempts
+
+      if (run.had_non_idempotent_step) {
+        await client.query(
+          `UPDATE flowscript_runs
+           SET status='uncertain',
+               error='Worker lease expired after non-idempotent step execution; marked uncertain to prevent duplicate external side effects. Operator intervention required.',
+               finished_at=now()
+           WHERE id=$1`,
+          [run.id],
+        )
+        result.uncertain.push(run.id)
+        console.warn(JSON.stringify({
+          event: 'run_stale_uncertain',
+          runId: run.id,
+          projectId: run.project_id,
+          reason: 'Non-idempotent step may have produced side effects before crash',
+        }))
+      } else if (run.attempt_count < maxAttempts) {
+        const backoff = computeBackoff(run.attempt_count, baseBackoffMs, maxBackoffMs)
+        const retryAt = new Date(Date.now() + backoff)
+        await client.query(
+          `UPDATE flowscript_runs
+           SET status='queued',
+               retry_at=$2,
+               error='Worker lease expired; re-queued for retry',
+               worker_id=NULL,
+               lease_expires_at=NULL
+           WHERE id=$1`,
+          [run.id, retryAt],
+        )
+        result.retried.push(run.id)
+        console.log(JSON.stringify({
+          event: 'run_stale_retry_scheduled',
+          runId: run.id,
+          attempt: run.attempt_count,
+          retryAt: retryAt.toISOString(),
+          backoffMs: backoff,
+        }))
+      } else {
+        await client.query(
+          `UPDATE flowscript_runs
+           SET status='dead_letter',
+               error='Worker lease expired and maximum retry attempts exhausted',
+               finished_at=now()
+           WHERE id=$1`,
+          [run.id],
+        )
+        result.deadLettered.push(run.id)
+        console.error(JSON.stringify({
+          event: 'run_dead_lettered',
+          runId: run.id,
+          attempts: run.attempt_count,
+          error: 'Lease expired and max retry attempts exhausted',
+        }))
+      }
+    }
+
+    await client.query('COMMIT')
+    return result
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function cancelRun(
+  projectId: string,
+  runId: string,
+  reason = 'Cancelled by user',
+): Promise<{ id: string; status: string } | null> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const check = await client.query<{ id: string; status: string }>(
+      'SELECT id, status FROM flowscript_runs WHERE project_id=$1 AND id=$2 FOR UPDATE',
+      [projectId, runId],
+    )
+    const run = check.rows[0]
+    if (!run) {
+      await client.query('COMMIT')
+      return null
+    }
+
+    if (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'dead_letter' || run.status === 'uncertain') {
+      await client.query('COMMIT')
+      return { id: run.id, status: run.status }
+    }
+
+    if (run.status === 'queued') {
+      await client.query(
+        "UPDATE flowscript_runs SET status='cancelled', cancellation_reason=$2, finished_at=now() WHERE id=$1",
+        [runId, reason],
+      )
+    } else if (run.status === 'running') {
+      await client.query(
+        "UPDATE flowscript_runs SET status='cancelled', cancellation_reason=$2 WHERE id=$1",
+        [runId, reason],
+      )
+    }
+
+    await client.query('COMMIT')
+    return { id: run.id, status: 'cancelled' }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function recordStepAttemptStart(params: {
+  runId: string
+  stepId: string
+  attempt: number
+}): Promise<string> {
+  const id = randomUUID()
+  await pool.query(
+    `INSERT INTO flowscript_step_attempts (id, run_id, step_id, attempt, status, started_at)
+     VALUES ($1, $2, $3, $4, 'running', now())`,
+    [id, params.runId, params.stepId, params.attempt],
+  )
+  return id
+}
+
+export async function recordStepAttemptFinish(
+  attemptId: string,
+  params: {
+    status: 'succeeded' | 'failed' | 'skipped'
+    errorCode?: string
+    errorMessage?: string
+    retryable?: boolean
+    durationMs?: number
+  },
+): Promise<void> {
+  const sanitizedMsg = params.errorMessage ? String(redactSensitiveData(params.errorMessage)) : null
+  await pool.query(
+    `UPDATE flowscript_step_attempts
+     SET status=$2, error_code=$3, error_message=$4, retryable=$5, duration_ms=$6, finished_at=now()
+     WHERE id=$1`,
+    [attemptId, params.status, params.errorCode ?? null, sanitizedMsg, params.retryable ?? null, params.durationMs ?? 0],
+  )
+}
+
+export async function markRunNonIdempotentStep(runId: string): Promise<void> {
+  await pool.query(
+    'UPDATE flowscript_runs SET had_non_idempotent_step=true WHERE id=$1',
+    [runId],
+  )
+}
+
+export async function listStepAttempts(runId: string): Promise<Array<{
+  id: string
+  runId: string
+  stepId: string
+  attempt: number
+  status: string
+  errorCode: string | null
+  errorMessage: string | null
+  retryable: boolean | null
+  durationMs: number | null
+  startedAt: Date
+  finishedAt: Date | null
+}>> {
+  const res = await pool.query<{
+    id: string
+    run_id: string
+    step_id: string
+    attempt: number
+    status: string
+    error_code: string | null
+    error_message: string | null
+    retryable: boolean | null
+    duration_ms: number | null
+    started_at: Date
+    finished_at: Date | null
+  }>(
+    'SELECT id, run_id, step_id, attempt, status, error_code, error_message, retryable, duration_ms, started_at, finished_at FROM flowscript_step_attempts WHERE run_id=$1 ORDER BY started_at ASC',
+    [runId],
+  )
+  return res.rows.map(r => ({
+    id: r.id,
+    runId: r.run_id,
+    stepId: r.step_id,
+    attempt: r.attempt,
+    status: r.status,
+    errorCode: r.error_code,
+    errorMessage: r.error_message,
+    retryable: r.retryable,
+    durationMs: r.duration_ms,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
+  }))
 }
 
 export async function markRunFailedBeforeStart(id: string, message: string) {

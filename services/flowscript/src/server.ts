@@ -21,6 +21,8 @@ import {
   deleteFlowTrigger,
   rotateWebhookTriggerToken,
   validateScheduleConfig,
+  cancelRun,
+  listStepAttempts,
 } from './store.js'
 
 const envSchema = z.object({
@@ -381,7 +383,12 @@ export function buildServer(): FastifyInstance {
     if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
-    const body = z.object({ input: z.record(z.string(), z.unknown()).default({}), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body ?? {})
+    const body = z.object({
+      input: z.record(z.string(), z.unknown()).default({}),
+      environment: z.string().min(1).max(64).default('production'),
+      idempotencyKey: z.string().min(1).max(128).optional(),
+      maxAttempts: z.number().int().min(1).max(10).optional(),
+    }).safeParse(request.body ?? {})
     if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid run request' })
     const deployed = await getDeployedFlow(projectId, params.data.name, body.data.environment)
     if (!deployed) return reply.code(404).send({ error: 'No active deployment for this flow and environment' })
@@ -392,8 +399,38 @@ export function buildServer(): FastifyInstance {
     if (!inputValidation.ok) {
       return reply.code(400).send({ error: 'Invalid run input', diagnostics: inputValidation.diagnostics })
     }
-    const runId = await createRun({ projectId, flowName: params.data.name, environment: body.data.environment, versionId: deployed.id, input: body.data.input, triggerKind: 'manual' })
-    return reply.code(202).send({ runId, status: 'queued', flow: params.data.name, environment: body.data.environment })
+
+    const headerIdemp = request.headers['x-idempotency-key'] ?? request.headers['idempotency-key']
+    const idempotencyKey = (typeof headerIdemp === 'string' && headerIdemp.trim().length > 0)
+      ? headerIdemp.trim()
+      : body.data.idempotencyKey
+
+    const runResult = await createRun({
+      projectId,
+      flowName: params.data.name,
+      environment: body.data.environment,
+      versionId: deployed.id,
+      input: body.data.input,
+      triggerKind: 'manual',
+      idempotencyKey,
+      maxAttempts: body.data.maxAttempts,
+    })
+
+    if (runResult.duplicate) {
+      return reply.code(200).header('x-idempotent-replay', 'true').send({
+        runId: runResult.id,
+        status: 'duplicate',
+        flow: params.data.name,
+        environment: body.data.environment,
+      })
+    }
+
+    return reply.code(202).send({
+      runId: runResult.id,
+      status: 'queued',
+      flow: params.data.name,
+      environment: body.data.environment,
+    })
   })
 
   app.get('/v1/runs', async (request, reply) => {
@@ -413,6 +450,42 @@ export function buildServer(): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
     const run = await getRun(projectId, params.data.id)
     return run ? run : reply.code(404).send({ error: 'Run not found' })
+  })
+
+  app.post('/v1/flows/:name/runs/:id/cancel', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128), id: z.string().uuid() }).safeParse(request.params)
+    const body = z.object({ reason: z.string().optional() }).safeParse(request.body ?? {})
+    if (!params.success) return reply.code(400).send({ error: 'Invalid cancel request' })
+    const cancelled = await cancelRun(projectId, params.data.id, body.success ? body.data.reason : undefined)
+    if (!cancelled) return reply.code(404).send({ error: 'Run not found' })
+    return reply.code(200).send(cancelled)
+  })
+
+  app.post('/v1/runs/:id/cancel', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+    const body = z.object({ reason: z.string().optional() }).safeParse(request.body ?? {})
+    if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
+    const cancelled = await cancelRun(projectId, params.data.id, body.success ? body.data.reason : undefined)
+    if (!cancelled) return reply.code(404).send({ error: 'Run not found' })
+    return reply.code(200).send(cancelled)
+  })
+
+  app.get('/v1/runs/:id/attempts', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+    if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
+    const run = await getRun(projectId, params.data.id)
+    if (!run) return reply.code(404).send({ error: 'Run not found' })
+    const attempts = await listStepAttempts(params.data.id)
+    return reply.code(200).send({ runId: params.data.id, attempts })
   })
 
   app.post('/v1/ir/validate', async (request, reply) => {

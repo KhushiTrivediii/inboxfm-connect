@@ -13,16 +13,21 @@
 
 ## Status model
 
-Persisted statuses are queued, running, succeeded, failed and cancelled. Complete cancellation and retry attempt history are not yet implemented. Production should add step attempt records, attempt number, retry decision, timestamps, structured error code, redacted details and correlation ID.
+Persisted statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`, `dead_letter`, and `uncertain`.
+- `queued`: Enqueued and waiting to be claimed by an available worker. Supports deduplication via client `idempotency-key`.
+- `running`: Actively claimed by a worker holding a renewable lease (`worker_id`, `lease_expires_at`).
+- `succeeded`: All steps completed successfully.
+- `failed`: Terminal failure due to non-retryable validation, authentication, or unrecoverable error.
+- `cancelled`: Explicitly cancelled before or during execution via API (`POST /v1/runs/:id/cancel`). In-flight integration operations receive cancellation via `AbortSignal`.
+- `dead_letter`: Maximum retry attempts exhausted for transient errors (`max_attempts` reached). Safe for operator triage without automated loop churn.
+- `uncertain`: A worker crashed or lost its lease after initiating or executing a non-idempotent integration step (without an idempotency key). Stale recovery deliberately quarantines the run as `uncertain` to prevent duplicate side effects (e.g. duplicate payment or email delivery).
 
-## Step execution
+## Step execution & durable attempt tracking
 
-- Steps are evaluated in declared order.
-- Every dependency must already be completed.
-- Config values resolve from explicit references.
-- Transform and filter behavior is deliberately limited.
-- Integration steps must use a trusted adapter mapping declarations to existing Connect piece metadata and runtime execution.
-- Timeouts do not necessarily cancel underlying side effects. Propagate cancellation only where the executor supports it.
+- Steps are evaluated in declared topological order with full dependency validation.
+- Every step attempt is recorded in `flowscript_step_attempts` with `attempt_number`, `status` (`running`, `completed`, `failed`), `started_at`, `finished_at`, `duration_ms`, structured `error_code`, and sanitized/redacted `error_message`.
+- Step attempts history is queryable via `GET /v1/runs/:id/attempts`.
+- Timeouts and cancellations propagate via standard `AbortSignal`. Worker heartbeat monitors run status; if cancellation is detected, the run aborts immediately.
 
 ## Connect integration adapter contract
 
@@ -62,14 +67,12 @@ export interface FlowIntegrationExecutor {
    - `ENGINE_OPERATION_FAILURE` (default/unclassified, retryable: false)
 
 
-## Failure semantics
+## Failure semantics & retry policy
 
-- Validation/configuration errors: do not retry until configuration changes.
-- Authentication/permission errors: surface actionable error; avoid rapid retries.
-- Rate limits/transient errors: bounded exponential backoff with jitter and Retry-After support.
-- Ambiguous external side effects: mark outcome uncertain when appropriate; do not blindly repeat non-idempotent operations.
-- Worker crash: recover stale leases only with an explicit idempotency policy.
-
-## Required production work
-
-Durable queue/lease semantics, stale-running recovery, step attempt records, bounded retries, dead-letter queue, cancellation, input/output limits, redaction, idempotency keys, safe replay, per-project concurrency limits and trace IDs across API/worker/runtime.
+- **Validation / Configuration errors**: fail immediately (`failed`). No retries are scheduled.
+- **Authentication / Permission errors**: (`AUTHENTICATION_EXPIRED`, `CONNECTION_NOT_FOUND`) fail fast without retry, preserving third-party rate budgets and preventing account lockouts.
+- **Rate limits / Transient network timeouts**: (`RATE_LIMITED`, `PROVIDER_ERROR`, `TIMEOUT`) retried up to `maxStepAttempts` (default 3) using exponential backoff with full jitter:
+  $$\text{delay} = \min(\text{maxDelay}, \text{baseDelay} \times 2^{\text{attempt} - 1}) \times (0.5 + 0.5 \times \text{random}())$$
+- **Non-idempotent side effects & crash recovery**: If a step lacks an idempotency key and worker crash or lease expiry occurs, the run transitions to `uncertain` with an operator diagnostic: `worker lease expired after non-idempotent step execution`. Blind replay is strictly prohibited.
+- **Dead-letter quarantine**: Runs that fail due to retry exhaustion transition to `dead_letter`, alerting on-call operators without infinite polling.
+- **Safe replay & deduplication**: Calls with `x-idempotent-replay: true` and a matching `Idempotency-Key` return the existing run with HTTP 200 without enqueuing duplicate execution.
