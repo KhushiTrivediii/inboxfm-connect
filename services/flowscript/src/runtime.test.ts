@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { compileFlowSource } from './compiler.js'
-import { executeFlowIR } from './runtime.js'
+import { compileFlowSource, type FlowIR } from './compiler.js'
+import { executeFlowIR, topologicallySortSteps } from './runtime.js'
 import { ConnectFlowIntegrationExecutor } from './adapter.js'
 
 const source = `flow: hello-world
@@ -255,4 +255,67 @@ output:
     if (!compiled.ok) return
     await expect(executeFlowIR(compiled.ir, { maxSteps: 0 })).rejects.toThrow('maximum step count')
   })
+
+  it('topologically sorts steps so dependencies execute before dependents regardless of declaration order', async () => {
+    const irWithReverseSteps: FlowIR = {
+      irVersion: 1,
+      name: 'reverse-order-flow',
+      version: 1,
+      trigger: { kind: 'manual' },
+      inputSchema: {},
+      steps: [
+        {
+          id: 'step_two',
+          kind: 'transform',
+          config: {
+            value: {
+              doubled: 42,
+              fromFirst: { $ref: 'steps.step_one.initial' },
+            },
+          },
+          dependsOn: ['step_one'],
+        },
+        {
+          id: 'step_one',
+          kind: 'transform',
+          config: {
+            value: {
+              initial: 21,
+            },
+          },
+          dependsOn: [],
+        },
+      ],
+      output: {
+        final: { $ref: 'steps.step_two.fromFirst' },
+      },
+    }
+
+    const result = await executeFlowIR(irWithReverseSteps)
+    expect(result.status).toBe('succeeded')
+    expect(result.steps).toHaveLength(2)
+    // Topological sort orders step_one before step_two
+    expect(result.steps[0].id).toBe('step_one')
+    expect(result.steps[0].status).toBe('succeeded')
+    expect(result.steps[1].id).toBe('step_two')
+    expect(result.steps[1].status).toBe('succeeded')
+    expect(result.output).toEqual({ final: 21 })
+  })
+
+  it('topologicallySortSteps handles complex DAG dependencies', () => {
+    const steps = [
+      { id: 'd', dependsOn: ['b', 'c'] },
+      { id: 'c', dependsOn: ['a'] },
+      { id: 'b', dependsOn: ['a'] },
+      { id: 'a', dependsOn: [] },
+    ]
+    const sorted = topologicallySortSteps(steps)
+    const order = sorted.map((s: { id: string }) => s.id)
+
+    expect(order.indexOf('a')).toBeLessThan(order.indexOf('b'))
+    expect(order.indexOf('a')).toBeLessThan(order.indexOf('c'))
+    expect(order.indexOf('b')).toBeLessThan(order.indexOf('d'))
+    expect(order.indexOf('c')).toBeLessThan(order.indexOf('d'))
+  })
 })
+

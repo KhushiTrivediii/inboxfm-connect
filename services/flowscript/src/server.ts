@@ -1,4 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
+import { fileURLToPath } from 'node:url'
+import { basename, resolve } from 'node:path'
 import { z } from 'zod'
 import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
@@ -53,12 +55,14 @@ export function validateFlowIR(value: unknown): { valid: true; flow: FlowIR } | 
   }
 
   const ids = new Set<string>()
+  const byId = new Map<string, number>()
   const issues: Array<{ path: string; message: string }> = []
   for (const [index, step] of parsed.data.steps.entries()) {
     if (ids.has(step.id)) {
       issues.push({ path: `steps.${index}.id`, message: `Duplicate step id "${step.id}"` })
     }
     ids.add(step.id)
+    byId.set(step.id, index)
   }
   for (const [index, step] of parsed.data.steps.entries()) {
     for (const dependency of step.dependsOn) {
@@ -71,24 +75,49 @@ export function validateFlowIR(value: unknown): { valid: true; flow: FlowIR } | 
     }
   }
 
+  // Detect dependency cycles in IR
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return false
+    if (visited.has(id)) return true
+    visiting.add(id)
+    const stepIdx = byId.get(id)
+    if (stepIdx !== undefined) {
+      const step = parsed.data.steps[stepIdx]
+      for (const dep of step.dependsOn) {
+        if (byId.has(dep) && !visit(dep)) return false
+      }
+    }
+    visiting.delete(id)
+    visited.add(id)
+    return true
+  }
+  for (const id of byId.keys()) {
+    if (!visit(id)) {
+      issues.push({ path: 'steps', message: 'Step dependencies contain a cycle' })
+      break
+    }
+  }
+
   if (issues.length > 0) return { valid: false, issues }
   return { valid: true, flow: parsed.data }
 }
 
-export function getSafeExecutionEnv(sourceEnv: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
-  const safeEnv: Record<string, string | undefined> = Object.create(null)
-  for (const [key, value] of Object.entries(sourceEnv)) {
-    if (key.startsWith('FLOWSCRIPT_ENV_')) {
-      safeEnv[key] = value
-      const strippedKey = key.slice('FLOWSCRIPT_ENV_'.length)
-      if (strippedKey && !Object.prototype.hasOwnProperty.call(safeEnv, strippedKey)) {
-        safeEnv[strippedKey] = value
-      }
-    } else if (key === 'NODE_ENV' || key === 'TZ') {
-      safeEnv[key] = value
-    }
-  }
-  return safeEnv
+import {
+  getSafeExecutionEnv,
+  getGatewaySecret,
+  signProjectId,
+  generateProjectToken,
+  verifyProjectIdentity,
+} from './auth.js'
+
+export {
+  getSafeExecutionEnv,
+  getGatewaySecret,
+  signProjectId,
+  generateProjectToken,
+  verifyProjectIdentity,
 }
 
 export function buildServer(): FastifyInstance {
@@ -140,14 +169,10 @@ export function buildServer(): FastifyInstance {
 
   // These routes are intended for the private service network. The API gateway
   // must authenticate callers and inject a verified project ID before exposure.
-  const projectIdFrom = (request: { headers: Record<string, string | string[] | undefined> }) => {
-    const value = request.headers['x-project-id']
-    return typeof value === 'string' && value.length > 0 && value.length <= 128 ? value : null
-  }
-
   app.post('/v1/flows/publish', async (request, reply) => {
-    const projectId = projectIdFrom(request)
-    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
     const body = z.object({ source: z.string().min(1).max(1_000_000) }).safeParse(request.body)
     if (!body.success) return reply.code(400).send({ error: 'Expected { source: string }', issues: body.error.issues })
     const compiled = compileFlowSource(body.data.source)
@@ -157,8 +182,9 @@ export function buildServer(): FastifyInstance {
   })
 
   app.post('/v1/flows/:name/deploy', async (request, reply) => {
-    const projectId = projectIdFrom(request)
-    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
     const body = z.object({ versionId: z.string().uuid(), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body)
     if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid deployment request' })
@@ -170,8 +196,9 @@ export function buildServer(): FastifyInstance {
   })
 
   app.post('/v1/flows/:name/triggers', async (request, reply) => {
-    const projectId = projectIdFrom(request)
-    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
     const body = z.discriminatedUnion('kind', [
       z.object({ kind: z.literal('schedule'), environment: z.string().min(1).max(64).default('production'), cron: z.string().min(1).max(128), timezone: z.string().min(1).max(128).default('UTC') }),
@@ -204,8 +231,9 @@ export function buildServer(): FastifyInstance {
   })
 
   app.post('/v1/flows/:name/run', async (request, reply) => {
-    const projectId = projectIdFrom(request)
-    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
     const body = z.object({ input: z.record(z.string(), z.unknown()).default({}), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body ?? {})
     if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid run request' })
@@ -223,16 +251,18 @@ export function buildServer(): FastifyInstance {
   })
 
   app.get('/v1/runs', async (request, reply) => {
-    const projectId = projectIdFrom(request)
-    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
     const query = z.object({ flow: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query)
     if (!query.success) return reply.code(400).send({ error: 'Invalid query parameters' })
     return { runs: await listRuns(projectId, query.data.flow, query.data.limit) }
   })
 
   app.get('/v1/runs/:id', async (request, reply) => {
-    const projectId = projectIdFrom(request)
-    if (!projectId) return reply.code(401).send({ error: 'Verified x-project-id header is required from the trusted API gateway' })
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
     if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
     const run = await getRun(projectId, params.data.id)
@@ -250,8 +280,26 @@ export function buildServer(): FastifyInstance {
   return app
 }
 
-const app = buildServer()
-if (process.env.NODE_ENV !== 'test') {
+const isDirectExecution = () => {
+  if (!process.argv[1]) return false
+  try {
+    const scriptPath = resolve(process.argv[1]).toLowerCase()
+    const currentPath = fileURLToPath(import.meta.url).toLowerCase()
+    if (scriptPath === currentPath) return true
+    const base = basename(scriptPath)
+    return (base === 'server.ts' || base === 'server.js') && (
+      scriptPath.endsWith('/services/flowscript/src/server.ts') ||
+      scriptPath.endsWith('\\services\\flowscript\\src\\server.ts') ||
+      scriptPath.endsWith('/services/flowscript/dist/server.js') ||
+      scriptPath.endsWith('\\services\\flowscript\\dist\\server.js')
+    )
+  } catch {
+    return false
+  }
+}
+
+if (process.env.NODE_ENV !== 'test' && isDirectExecution()) {
+  const app = buildServer()
   initializeStore()
     .then(() => app.listen({ host: env.FLOWSCRIPT_HOST, port: env.FLOWSCRIPT_PORT }))
     .then(address => app.log.info({ address }, 'FlowScript service listening'))

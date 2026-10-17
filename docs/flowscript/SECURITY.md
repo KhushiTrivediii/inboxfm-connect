@@ -24,7 +24,7 @@
 
 ## Current blockers
 
-- The service trusts x-project-id as an internal gateway contract; authentication middleware is not implemented here.
+- Gateway authentication is enforced via HMAC-SHA256 project signatures (`FLOWSCRIPT_GATEWAY_SECRET`); public access without gateway validation remains blocked.
 - Webhook tokens are bearer capabilities. Do not expose publicly without rate limits, payload limits, provider verification where applicable, revocation and audit logging.
 - The runner is not a hardened sandbox for arbitrary user code. Keep it limited to declarative IR and trusted adapters.
 - Input/output redaction and retention controls are incomplete.
