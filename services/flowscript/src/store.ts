@@ -90,6 +90,14 @@ export async function initializeStore(): Promise<void> {
       finished_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS worker_id text;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS attempt_count integer NOT NULL DEFAULT 0;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 3;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS retry_at timestamptz;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS cancellation_reason text;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS idempotency_key text;
+    ALTER TABLE flowscript_runs ADD COLUMN IF NOT EXISTS had_non_idempotent_step boolean NOT NULL DEFAULT false;
     CREATE INDEX IF NOT EXISTS flowscript_runs_project_created_idx ON flowscript_runs(project_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS flowscript_runs_lease_idx ON flowscript_runs(status, lease_expires_at) WHERE status='running';
     CREATE INDEX IF NOT EXISTS flowscript_runs_retry_idx ON flowscript_runs(status, retry_at) WHERE status='queued';
