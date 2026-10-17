@@ -29,17 +29,19 @@ Current registration stores cron, timezone and next-fire time. Worker dispatch c
 
 ## Webhook triggers
 
-Current code creates a high-entropy token, stores its SHA-256 hash and returns a token URL at registration. Incoming JSON is accepted and enqueued by token. This is a foundation, not a complete provider webhook implementation.
+Webhook triggers use a cryptographically high-entropy token (`randomBytes(32)` base64url). At creation, the token is hashed using SHA-256 and stored in `flowscript_triggers.secret_hash`. The raw token is returned once to the caller and never stored in plaintext or logged.
 
-Before public exposure:
-- Add payload size limits, timeouts, rate limits and abuse controls.
-- Implement provider signature verification and challenge/handshake protocols.
-- Add idempotency by provider event ID and replay protection.
-- Avoid logging tokens or request bodies.
-- Add token rotation/revocation and trigger disable operations.
-- Use constant-time token comparison if comparing secret values in application code.
-- Acknowledge only after durable enqueue.
-- Keep ingress separate from long-running execution.
+Implemented ingress protections:
+- Payload validation: Enforces 1 MB body limits and rejects non-object or malformed JSON payloads with HTTP 400.
+- Telemetry & log hygiene: Webhook URL tokens are sanitized in server request logs (`/v1/hooks/[REDACTED]`).
+- Generic rejection: Missing, invalid, or revoked/disabled tokens return generic HTTP 404 without disclosing whether the trigger exists.
+- Durable idempotency: Supports deduplication via `x-idempotency-key` / `idempotency-key` headers or body event IDs (`event_id`, `idempotency_key`, `id`). Enforced durably in `flowscript_webhook_idempotency` with transactional conflict resolution to eliminate race conditions. Duplicate requests return HTTP 200 (`x-idempotent-replay: true`) with the existing run ID.
+- Lifecycle management: Full project-authenticated APIs exist for trigger listing, disabling/enabling (`PATCH`), deletion (`DELETE`), and token rotation (`POST /rotate`).
+- Acknowledgement: HTTP 202 is returned only after the run has been durably committed to the database.
+
+Remaining before public internet exposure:
+- Edge gateway rate limits and abuse controls.
+- Provider-specific signature verification and challenge/handshake protocols.
 
 ## Integration event and polling triggers
 
