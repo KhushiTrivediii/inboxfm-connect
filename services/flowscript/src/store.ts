@@ -215,9 +215,9 @@ export function computeBackoff(
   if (retryAfterMs !== undefined && retryAfterMs > 0) {
     return Math.min(retryAfterMs, maxMs)
   }
-  const exp = Math.min(Math.pow(2, Math.max(0, attempt - 1)) * baseMs, maxMs)
+  const exp = Math.pow(2, Math.max(0, attempt - 1)) * baseMs
   const jitter = 0.8 + Math.random() * 0.4
-  return Math.floor(exp * jitter)
+  return Math.min(maxMs, Math.floor(exp * jitter))
 }
 
 export async function createRun(params: {
@@ -281,7 +281,8 @@ export async function finishRun(
 ) {
   await pool.query(
     `UPDATE flowscript_runs
-     SET status=$2, output=$3, steps=$4, error=$5, cancellation_reason=COALESCE(cancellation_reason, $6), finished_at=now()
+     SET status=CASE WHEN status='cancelled' THEN 'cancelled' ELSE $2 END,
+         output=$3, steps=$4, error=$5, cancellation_reason=COALESCE(cancellation_reason, $6), finished_at=now()
      WHERE id=$1`,
     [
       id,

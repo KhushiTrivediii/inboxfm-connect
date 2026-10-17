@@ -31,7 +31,7 @@ async function processJob(job: NonNullable<Awaited<ReturnType<typeof claimQueued
   const heartbeatTimer = setInterval(async () => {
     try {
       const hb = await heartbeatRun(job.id, workerId, LEASE_DURATION_MS)
-      if (hb.cancelled) {
+      if (hb.cancelled || !hb.active) {
         abortController.abort()
       }
     } catch (err) {

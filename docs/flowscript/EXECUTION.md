@@ -25,9 +25,9 @@ Persisted statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`, 
 ## Step execution & durable attempt tracking
 
 - Steps are evaluated in declared topological order with full dependency validation.
-- Every step attempt is recorded in `flowscript_step_attempts` with `attempt_number`, `status` (`running`, `completed`, `failed`), `started_at`, `finished_at`, `duration_ms`, structured `error_code`, and sanitized/redacted `error_message`.
+- Every step attempt is recorded in `flowscript_step_attempts` with `attempt_number`, `status` (`running`, `succeeded`, `failed`, `cancelled`), `started_at`, `finished_at`, `duration_ms`, structured `error_code`, and sanitized/redacted `error_message`.
 - Step attempts history is queryable via `GET /v1/runs/:id/attempts`.
-- Timeouts and cancellations propagate via standard `AbortSignal`. Worker heartbeat monitors run status; if cancellation is detected, the run aborts immediately.
+- Timeouts and cancellations propagate via standard `AbortSignal`. Worker heartbeat monitors run status; if cancellation or lease loss is detected, the run aborts immediately.
 
 ## Connect integration adapter contract
 
@@ -71,8 +71,8 @@ export interface FlowIntegrationExecutor {
 
 - **Validation / Configuration errors**: fail immediately (`failed`). No retries are scheduled.
 - **Authentication / Permission errors**: (`AUTHENTICATION_EXPIRED`, `CONNECTION_NOT_FOUND`) fail fast without retry, preserving third-party rate budgets and preventing account lockouts.
-- **Rate limits / Transient network timeouts**: (`RATE_LIMITED`, `PROVIDER_ERROR`, `TIMEOUT`) retried up to `maxStepAttempts` (default 3) using exponential backoff with full jitter:
-  $$\text{delay} = \min(\text{maxDelay}, \text{baseDelay} \times 2^{\text{attempt} - 1}) \times (0.5 + 0.5 \times \text{random}())$$
+- **Rate limits / Transient network timeouts**: (`RATE_LIMITED`, `PROVIDER_ERROR`, `TIMEOUT`) retried up to `maxStepAttempts` (default 3) using exponential backoff with jitter bounded strictly by `maxDelay`:
+  $$\text{delay} = \min(\text{maxDelay}, \lfloor \text{baseDelay} \times 2^{\text{attempt} - 1} \times (0.8 + 0.4 \times \text{random}()) \rfloor)$$
 - **Non-idempotent side effects & crash recovery**: If a step lacks an idempotency key and worker crash or lease expiry occurs, the run transitions to `uncertain` with an operator diagnostic: `worker lease expired after non-idempotent step execution`. Blind replay is strictly prohibited.
 - **Dead-letter quarantine**: Runs that fail due to retry exhaustion transition to `dead_letter`, alerting on-call operators without infinite polling.
 - **Safe replay & deduplication**: Calls with `x-idempotent-replay: true` and a matching `Idempotency-Key` return the existing run with HTTP 200 without enqueuing duplicate execution.
