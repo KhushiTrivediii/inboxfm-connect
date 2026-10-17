@@ -101,7 +101,7 @@ export async function publishFlow(projectId: string, source: string, ir: FlowIR,
   }
 }
 
-export async function deployFlow(projectId: string, versionId: string, environment: string) {
+export async function deployFlow(projectId: string, flowName: string, versionId: string, environment: string) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -110,16 +110,19 @@ export async function deployFlow(projectId: string, versionId: string, environme
       [versionId, projectId],
     )
     if (!version.rowCount) throw new Error('Published flow version not found in this project')
+    if (version.rows[0].flow_name !== flowName) {
+      throw new Error(`Version "${versionId}" belongs to flow "${version.rows[0].flow_name}", not "${flowName}"`)
+    }
     const id = randomUUID()
     await client.query(
       `INSERT INTO flowscript_deployments (id, project_id, flow_name, environment, version_id, status)
        VALUES ($1,$2,$3,$4,$5,'active')
        ON CONFLICT (project_id, flow_name, environment)
        DO UPDATE SET version_id=EXCLUDED.version_id, status='active', updated_at=now()`,
-      [id, projectId, version.rows[0].flow_name, environment, versionId],
+      [id, projectId, flowName, environment, versionId],
     )
     await client.query('COMMIT')
-    return { projectId, flowName: version.rows[0].flow_name, environment, versionId, status: 'active' }
+    return { projectId, flowName, environment, versionId, status: 'active' }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
@@ -181,8 +184,8 @@ export async function claimQueuedRun() {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const result = await client.query<{ id: string; ir: FlowIR; input: Record<string, unknown>; trigger_kind: string }>(
-      `SELECT r.id, v.ir, r.input, r.trigger_kind
+    const result = await client.query<{ id: string; project_id: string; ir: FlowIR; input: Record<string, unknown>; trigger_kind: string }>(
+      `SELECT r.id, r.project_id, v.ir, r.input, r.trigger_kind
        FROM flowscript_runs r JOIN flowscript_versions v ON v.id=r.version_id
        WHERE r.status='queued'
        ORDER BY r.created_at ASC

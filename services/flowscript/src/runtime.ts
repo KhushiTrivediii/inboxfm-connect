@@ -1,8 +1,14 @@
 import type { FlowIR } from './compiler.js'
+import { redactSensitiveData, type FlowIntegrationExecutor } from './adapter.js'
 
 export type StepContext = { input: Record<string, unknown>; trigger: Record<string, unknown>; outputs: Record<string, unknown>; env: Record<string, string | undefined> }
 export type IntegrationExecutor = (config: Record<string, unknown>, context: StepContext) => Promise<unknown>
-export type RunResult = { status: 'succeeded' | 'failed'; output?: unknown; steps: Array<{ id: string; status: 'succeeded' | 'skipped' | 'failed'; output?: unknown; error?: string; durationMs: number }> }
+export type RunResult = {
+  status: 'succeeded' | 'failed'
+  output?: unknown
+  error?: string
+  steps: Array<{ id: string; status: 'succeeded' | 'skipped' | 'failed'; output?: unknown; error?: string; durationMs: number }>
+}
 
 function resolvePath(value: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((current, key) => {
@@ -34,7 +40,17 @@ function resolveValue(value: unknown, context: StepContext): unknown {
 
 export async function executeFlowIR(
   ir: FlowIR,
-  options: { input?: Record<string, unknown>; trigger?: Record<string, unknown>; env?: Record<string, string | undefined>; integrationExecutor?: IntegrationExecutor; maxSteps?: number; stepTimeoutMs?: number } = {},
+  options: {
+    input?: Record<string, unknown>
+    trigger?: Record<string, unknown>
+    env?: Record<string, string | undefined>
+    integrationExecutor?: IntegrationExecutor | FlowIntegrationExecutor
+    projectId?: string
+    platformId?: string
+    runId?: string
+    maxSteps?: number
+    stepTimeoutMs?: number
+  } = {},
 ): Promise<RunResult> {
   const input = options.input ?? {}
   const trigger = options.trigger ?? {}
@@ -44,7 +60,7 @@ export async function executeFlowIR(
   const maxSteps = options.maxSteps ?? 200
   const timeoutMs = options.stepTimeoutMs ?? 30_000
   if (ir.steps.length > maxSteps) throw new Error(`Flow exceeds maximum step count (${maxSteps})`)
-  const context = (): StepContext => ({ input, trigger, outputs, env: options.env ?? process.env })
+  const context = (): StepContext => ({ input, trigger, outputs, env: options.env ?? {} })
 
   for (const step of ir.steps) {
     if (!step.dependsOn.every(id => completed.has(id))) {
@@ -58,8 +74,32 @@ export async function executeFlowIR(
         if (!options.integrationExecutor) throw new Error('No trusted integration executor is configured; refusing to execute integration step')
         let timer: ReturnType<typeof setTimeout> | undefined
         try {
+          const executor = options.integrationExecutor
+          let executionPromise: Promise<unknown>
+
+          if (typeof executor === 'object' && executor !== null && 'execute' in executor) {
+            const integrationName = String(config.integration ?? config.pieceName ?? config.integrationName ?? '')
+            const actionName = String(config.action ?? config.tool ?? config.actionName ?? '')
+            const connectionId = String(config.connectionId ?? '')
+            const actionInput = (config.input && typeof config.input === 'object' ? config.input : {}) as Record<string, unknown>
+
+            executionPromise = (executor as FlowIntegrationExecutor).execute({
+              projectId: options.projectId ?? 'default-project',
+              platformId: options.platformId ?? 'default-platform',
+              integrationName,
+              actionName,
+              connectionId,
+              input: actionInput,
+              runId: options.runId ?? 'local-run',
+              stepId: step.id,
+              idempotencyKey: config.idempotencyKey ? String(config.idempotencyKey) : undefined,
+            })
+          } else {
+            executionPromise = (executor as IntegrationExecutor)(config, context())
+          }
+
           output = await Promise.race([
-            options.integrationExecutor(config, context()),
+            executionPromise,
             new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Step timed out after ${timeoutMs}ms`)), timeoutMs) }),
           ])
         } finally {
@@ -70,14 +110,23 @@ export async function executeFlowIR(
       } else {
         output = config.when === true
       }
-      outputs[step.id] = output
+      const sanitizedOutput = redactSensitiveData(output)
+      outputs[step.id] = sanitizedOutput
       completed.add(step.id)
-      steps.push({ id: step.id, status: 'succeeded', output, durationMs: Date.now() - started })
+      steps.push({ id: step.id, status: 'succeeded', output: sanitizedOutput, durationMs: Date.now() - started })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown step error'
-      steps.push({ id: step.id, status: 'failed', error: message, durationMs: Date.now() - started })
+      const sanitizedError = redactSensitiveData(message) as string
+      steps.push({ id: step.id, status: 'failed', error: sanitizedError, durationMs: Date.now() - started })
       return { status: 'failed', steps }
     }
   }
-  return { status: 'succeeded', output: ir.output ? resolveValue(ir.output, context()) : outputs, steps }
+  try {
+    const finalOutput = ir.output ? resolveValue(ir.output, context()) : outputs
+    return { status: 'succeeded', output: redactSensitiveData(finalOutput), steps }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Output resolution failed'
+    const sanitizedError = redactSensitiveData(message) as string
+    return { status: 'failed', steps, error: sanitizedError }
+  }
 }
