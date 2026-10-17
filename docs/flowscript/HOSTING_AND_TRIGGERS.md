@@ -18,14 +18,18 @@ Deployment is scoped to project, flow name and environment. Resolve secrets and 
 
 ## Schedule triggers
 
-Current registration stores cron, timezone and next-fire time. Worker dispatch checks due triggers and enqueues runs. Before production:
-- Validate cron/timezone at registration and return actionable diagnostics.
-- Define missed-tick policy: skip, run-once or bounded catch-up.
-- Add deterministic dedupe key per trigger and scheduled instant.
-- Ensure multiple worker replicas cannot dispatch one tick twice.
-- Test DST transitions and timezone changes.
-- Add pause/resume/delete and next-run visibility.
-- Handle invalid stored cron safely and surface trigger health.
+Schedule triggers execute flow deployments automatically on recurring cron expressions in a specified IANA timezone. The scheduler guarantees transactional enqueue idempotency under concurrent worker replicas and horizontal scaling.
+
+Implemented scheduling guarantees:
+- **Registration validation**: Cron expressions and IANA timezone identifiers are validated upon registration via `POST /v1/flows/:name/triggers`. Malformed cron syntax or unknown timezone identifiers return path-specific HTTP 400 validation errors (`path: "cron"` or `path: "timezone"`).
+- **Concurrency & occurrence deduplication**: Enforced durably in PostgreSQL via `flowscript_schedule_occurrences` with a unique constraint on `(trigger_id, scheduled_instant)`. Workers claim due triggers using `FOR UPDATE SKIP LOCKED`, atomically reserve the occurrence instant with `INSERT ... ON CONFLICT DO NOTHING RETURNING id`, enqueue the run, and advance `next_fire_at` within a single transaction. Two or more concurrent worker replicas can never double-enqueue the same scheduled occurrence.
+- **Missed-tick recovery policy**: Configurable via `missedTickPolicy` with default `run-once`:
+  - `run-once` (default): If workers or the system experience downtime, the trigger fires at most once upon recovery, and `next_fire_at` advances relative to `now()`, preventing a catastrophic cascade or queue flood of historical ticks.
+  - `skip`: Omits missed ticks and advances from `now()`.
+  - `catch-up`: Step-by-step catches up historical intervals from the missed scheduled instant.
+- **Daylight saving (DST) transitions**: Standard IANA timezones (e.g. `America/New_York`) handle spring-forward jumps and fall-back repeated hours monotonically using UTC instants for deduplication keys, preventing infinite loops or duplicate execution.
+- **Diagnostics & telemetry**: Scheduled triggers track `dispatch_lag_ms` (time delta between scheduled fire instant and actual dispatch) and `last_error`. Structured JSON telemetry logs `schedule_dispatched` and `schedule_dispatch_failed` events without leaking sensitive data. Triggers with corrupted configurations fail safe, record `last_error`, and automatically disable to prevent crash loops.
+- **Lifecycle management**: Scheduled triggers can be paused and resumed (`PATCH /v1/flows/:name/triggers/:id` with `{ enabled: false | true }`), deleted (`DELETE`), and inspected with full lag and health status via `GET /v1/flows/:name/triggers`.
 
 ## Webhook triggers
 

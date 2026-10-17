@@ -58,8 +58,12 @@ export async function initializeStore(): Promise<void> {
       enabled boolean NOT NULL DEFAULT true,
       next_fire_at timestamptz,
       last_fired_at timestamptz,
+      dispatch_lag_ms bigint,
+      last_error text,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE flowscript_triggers ADD COLUMN IF NOT EXISTS dispatch_lag_ms bigint;
+    ALTER TABLE flowscript_triggers ADD COLUMN IF NOT EXISTS last_error text;
     CREATE INDEX IF NOT EXISTS flowscript_triggers_due_idx ON flowscript_triggers(kind, next_fire_at) WHERE enabled=true;
     CREATE TABLE IF NOT EXISTS flowscript_runs (
       id uuid PRIMARY KEY,
@@ -87,6 +91,15 @@ export async function initializeStore(): Promise<void> {
       UNIQUE(trigger_id, idempotency_key)
     );
     CREATE INDEX IF NOT EXISTS flowscript_webhook_idempotency_created_idx ON flowscript_webhook_idempotency(created_at);
+    CREATE TABLE IF NOT EXISTS flowscript_schedule_occurrences (
+      id uuid PRIMARY KEY,
+      trigger_id uuid NOT NULL REFERENCES flowscript_triggers(id) ON DELETE CASCADE,
+      scheduled_instant timestamptz NOT NULL,
+      run_id uuid REFERENCES flowscript_runs(id) ON DELETE CASCADE,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(trigger_id, scheduled_instant)
+    );
+    CREATE INDEX IF NOT EXISTS flowscript_sched_occurrences_idx ON flowscript_schedule_occurrences(scheduled_instant);
   `)
 }
 
@@ -229,19 +242,78 @@ export async function markRunFailedBeforeStart(id: string, message: string) {
   await pool.query("UPDATE flowscript_runs SET status='failed', error=$2, finished_at=now() WHERE id=$1 AND status='queued'", [id, message])
 }
 
+export function validateScheduleConfig(
+  cron: string,
+  timezone: string = 'UTC',
+  options?: { missedTickPolicy?: string },
+): { valid: true; nextFireAt: Date; cron: string; timezone: string; missedTickPolicy: 'run-once' | 'skip' | 'catch-up' } | { valid: false; error: string; path: 'cron' | 'timezone' | 'missedTickPolicy' } {
+  const cleanCron = cron?.trim()
+  if (!cleanCron) {
+    return { valid: false, error: 'Cron expression is required', path: 'cron' }
+  }
+
+  const cleanTz = timezone?.trim() || 'UTC'
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: cleanTz })
+  } catch {
+    return { valid: false, error: `Invalid IANA timezone identifier: "${cleanTz}"`, path: 'timezone' }
+  }
+
+  let nextFireAt: Date
+  try {
+    const interval = CronExpressionParser.parse(cleanCron, { tz: cleanTz })
+    nextFireAt = interval.next().toDate()
+  } catch (err) {
+    return {
+      valid: false,
+      error: `Invalid cron expression: "${cleanCron}" (${err instanceof Error ? err.message : 'parse error'})`,
+      path: 'cron',
+    }
+  }
+
+  const policy = options?.missedTickPolicy ?? 'run-once'
+  if (policy !== 'run-once' && policy !== 'skip' && policy !== 'catch-up') {
+    return {
+      valid: false,
+      error: `Invalid missedTickPolicy: "${policy}". Must be one of: run-once, skip, catch-up`,
+      path: 'missedTickPolicy',
+    }
+  }
+
+  return {
+    valid: true,
+    nextFireAt,
+    cron: cleanCron,
+    timezone: cleanTz,
+    missedTickPolicy: policy,
+  }
+}
+
 export async function createFlowTrigger(params: { projectId: string; flowName: string; environment: string; kind: 'schedule' | 'webhook'; config: Record<string, unknown> }) {
   const deployed = await getDeployedFlow(params.projectId, params.flowName, params.environment)
   if (!deployed) throw new Error('Flow must be deployed before adding a trigger')
   const id = randomUUID()
   if (params.kind === 'schedule') {
-    const cron = String(params.config.cron ?? '')
-    const timezone = String(params.config.timezone ?? 'UTC')
-    const nextFireAt = CronExpressionParser.parse(cron, { tz: timezone }).next().toDate()
+    const rawCron = String(params.config.cron ?? '')
+    const rawTz = String(params.config.timezone ?? 'UTC')
+    const rawPolicy = typeof params.config.missedTickPolicy === 'string' ? params.config.missedTickPolicy : undefined
+
+    const validated = validateScheduleConfig(rawCron, rawTz, { missedTickPolicy: rawPolicy })
+    if (!validated.valid) {
+      throw new Error(validated.error)
+    }
+
+    const configToStore = {
+      cron: validated.cron,
+      timezone: validated.timezone,
+      missedTickPolicy: validated.missedTickPolicy,
+    }
+
     await pool.query(
       'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,next_fire_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify({ cron, timezone }), nextFireAt],
+      [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify(configToStore), validated.nextFireAt],
     )
-    return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt, enabled: true }
+    return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt: validated.nextFireAt, enabled: true, config: configToStore }
   }
   const token = randomBytes(32).toString('base64url')
   const secretHash = hashWebhookToken(token)
@@ -256,35 +328,137 @@ export function hashWebhookToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
-export async function enqueueDueSchedule() {
+export async function enqueueDueSchedule(): Promise<{ enqueued: boolean; runId?: string; triggerId?: string } | boolean> {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const due = await client.query<{ id: string; project_id: string; flow_name: string; environment: string; config: { cron: string; timezone: string } }>(
-      `SELECT id, project_id, flow_name, environment, config FROM flowscript_triggers
+    const due = await client.query<{
+      id: string
+      project_id: string
+      flow_name: string
+      environment: string
+      config: { cron: string; timezone?: string; missedTickPolicy?: 'run-once' | 'skip' | 'catch-up' }
+      next_fire_at: Date
+      last_fired_at: Date | null
+    }>(
+      `SELECT id, project_id, flow_name, environment, config, next_fire_at, last_fired_at FROM flowscript_triggers
        WHERE kind='schedule' AND enabled=true AND next_fire_at <= now()
-       ORDER BY next_fire_at LIMIT 1 FOR UPDATE SKIP LOCKED`,
+       ORDER BY next_fire_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`,
     )
     const trigger = due.rows[0]
     if (!trigger) {
       await client.query('COMMIT')
       return false
     }
-    const deployed = await client.query<{ version_id: string }>(
-      "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
-      [trigger.project_id, trigger.flow_name, trigger.environment],
-    )
-    if (deployed.rows[0]) {
-      await client.query(
-        `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
-         VALUES ($1,$2,$3,$4,$5,'schedule','queued','{}'::jsonb)`,
-        [randomUUID(), trigger.project_id, trigger.flow_name, trigger.environment, deployed.rows[0].version_id],
-      )
+
+    const scheduledInstant = trigger.next_fire_at
+    const lagMs = Math.max(0, Date.now() - new Date(scheduledInstant).getTime())
+
+    const cron = trigger.config.cron
+    const tz = trigger.config.timezone || 'UTC'
+    const policy = trigger.config.missedTickPolicy || 'run-once'
+
+    // For 'skip' policy, if current time has passed beyond the scheduled interval, omit the missed tick
+    let shouldEnqueue = true
+    if (policy === 'skip') {
+      try {
+        const nextOccurrence = CronExpressionParser.parse(cron, { currentDate: new Date(scheduledInstant), tz }).next().toDate()
+        if (Date.now() >= nextOccurrence.getTime()) {
+          shouldEnqueue = false
+        }
+      } catch {
+        // Cron parsing error will be caught and recorded below
+      }
     }
-    const nextFireAt = CronExpressionParser.parse(trigger.config.cron, { tz: trigger.config.timezone }).next().toDate()
-    await client.query('UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2 WHERE id=$1', [trigger.id, nextFireAt])
+
+    // Atomically claim this occurrence instant to ensure only one worker enqueues it
+    const occId = randomUUID()
+    const claimResult = await client.query<{ id: string }>(
+      `INSERT INTO flowscript_schedule_occurrences (id, trigger_id, scheduled_instant)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (trigger_id, scheduled_instant) DO NOTHING
+       RETURNING id`,
+      [occId, trigger.id, scheduledInstant],
+    )
+
+    let createdRunId: string | undefined
+    let deploymentError: string | undefined
+
+    if (claimResult.rows[0]) {
+      if (shouldEnqueue) {
+        const deployed = await client.query<{ version_id: string }>(
+          "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
+          [trigger.project_id, trigger.flow_name, trigger.environment],
+        )
+
+        if (deployed.rows[0]) {
+          createdRunId = randomUUID()
+          await client.query(
+            `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
+             VALUES ($1,$2,$3,$4,$5,'schedule','queued','{}'::jsonb)`,
+            [createdRunId, trigger.project_id, trigger.flow_name, trigger.environment, deployed.rows[0].version_id],
+          )
+
+          await client.query(
+            'UPDATE flowscript_schedule_occurrences SET run_id=$1 WHERE id=$2',
+            [createdRunId, occId],
+          )
+        } else {
+          deploymentError = `No active deployment for flow "${trigger.flow_name}" in environment "${trigger.environment}"`
+        }
+      }
+    } else {
+      console.log(JSON.stringify({
+        event: 'schedule_claim_lost',
+        triggerId: trigger.id,
+        flowName: trigger.flow_name,
+        scheduledInstant: new Date(scheduledInstant).toISOString(),
+      }))
+    }
+
+    // Advance next_fire_at according to missedTickPolicy
+    let nextFireAt: Date
+    try {
+      // For 'run-once' or 'skip', advance from now() so downtime does not cascade into a tick storm
+      const baseDate = policy === 'catch-up' ? new Date(scheduledInstant) : new Date()
+      nextFireAt = CronExpressionParser.parse(cron, { currentDate: baseDate, tz }).next().toDate()
+    } catch (parseError) {
+      const errorMsg = parseError instanceof Error ? parseError.message : 'Cron parse error'
+      await client.query(
+        'UPDATE flowscript_triggers SET last_error=$2, enabled=false WHERE id=$1',
+        [trigger.id, errorMsg],
+      )
+      console.error(JSON.stringify({
+        event: 'schedule_dispatch_failed',
+        triggerId: trigger.id,
+        flowName: trigger.flow_name,
+        error: errorMsg,
+      }))
+      await client.query('COMMIT')
+      return false
+    }
+
+    const finalError = deploymentError ?? null
+    await client.query(
+      'UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2, dispatch_lag_ms=$3, last_error=$4 WHERE id=$1',
+      [trigger.id, nextFireAt, lagMs, finalError],
+    )
+
+    if (claimResult.rows[0]) {
+      console.log(JSON.stringify({
+        event: 'schedule_dispatched',
+        triggerId: trigger.id,
+        flowName: trigger.flow_name,
+        lagMs,
+        nextFireAt: nextFireAt.toISOString(),
+        runId: createdRunId,
+        policy,
+        omitted: !shouldEnqueue,
+      }))
+    }
+
     await client.query('COMMIT')
-    return true
+    return { enqueued: Boolean(createdRunId), runId: createdRunId, triggerId: trigger.id }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error
@@ -388,9 +562,11 @@ export async function listFlowTriggers(projectId: string, flowName: string) {
     enabled: boolean
     next_fire_at: Date | null
     last_fired_at: Date | null
+    dispatch_lag_ms: number | null
+    last_error: string | null
     created_at: Date
   }>(
-    'SELECT id, flow_name, environment, kind, config, enabled, next_fire_at, last_fired_at, created_at FROM flowscript_triggers WHERE project_id=$1 AND flow_name=$2 ORDER BY created_at ASC',
+    'SELECT id, flow_name, environment, kind, config, enabled, next_fire_at, last_fired_at, dispatch_lag_ms, last_error, created_at FROM flowscript_triggers WHERE project_id=$1 AND flow_name=$2 ORDER BY created_at ASC',
     [projectId, flowName],
   )
   return result.rows.map(row => ({
@@ -402,6 +578,8 @@ export async function listFlowTriggers(projectId: string, flowName: string) {
     enabled: row.enabled,
     nextFireAt: row.next_fire_at,
     lastFiredAt: row.last_fired_at,
+    dispatchLagMs: row.dispatch_lag_ms,
+    lastError: row.last_error,
     createdAt: row.created_at,
   }))
 }
