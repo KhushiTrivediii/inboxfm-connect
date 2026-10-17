@@ -197,6 +197,8 @@ export function buildServer(): FastifyInstance {
     let code = error?.code
     if (statusCode === 413 || code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
       code = 'PAYLOAD_TOO_LARGE'
+    } else if (code === 'FST_ERR_CTP_INVALID_JSON_BODY') {
+      code = 'BAD_REQUEST'
     } else if (!code) {
       if (statusCode === 400) code = 'BAD_REQUEST'
       else if (statusCode === 401) code = 'UNAUTHORIZED'
@@ -370,14 +372,20 @@ export function buildServer(): FastifyInstance {
         environment: body.data.environment,
         kind: body.data.kind,
         config: body.data.kind === 'schedule'
-          ? { cron: body.data.cron, timezone: body.data.timezone, missedTickPolicy: body.data.missedTickPolicy }
+          ? {
+              cron: body.data.cron,
+              timezone: body.data.timezone,
+              missedTickPolicy: body.data.missedTickPolicy,
+            }
           : {},
       })
       return reply.code(201).send(body.data.kind === 'webhook'
         ? { ...trigger, webhookUrl: `/v1/hooks/${trigger.token}` }
         : trigger)
     } catch (error) {
-      return sendError(reply, 422, 'TRIGGER_CREATION_FAILED', error instanceof Error ? error.message : 'Trigger creation failed')
+      const msg = error instanceof Error ? error.message : 'Trigger creation failed'
+      const isValidationError = msg.toLowerCase().includes('cron') || msg.toLowerCase().includes('timezone') || msg.toLowerCase().includes('policy')
+      return sendError(reply, isValidationError ? 400 : 422, isValidationError ? 'BAD_REQUEST' : 'TRIGGER_CREATION_FAILED', msg)
     }
   })
 

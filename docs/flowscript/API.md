@@ -115,9 +115,11 @@ All error responses return a standardized JSON error envelope:
 - `401 INVALID_PROJECT_ID_FORMAT`: Project ID does not match `/^[a-zA-Z0-9_-]{1,128}$/`.
 - `401 GATEWAY_SECRET_MISSING`: Gateway secret environment variable is not configured.
 - `404 NOT_FOUND`: Resource not found.
+- `404 DEPLOYMENT_NOT_FOUND`: Active deployment does not exist for the specified flow and environment.
 - `404 VERSION_NOT_FOUND`: Flow version does not exist in the caller's project.
 - `404 TRIGGER_NOT_FOUND`: Flow trigger does not exist in the caller's project.
 - `404 RUN_NOT_FOUND`: Run does not exist in the caller's project.
 - `413 PAYLOAD_TOO_LARGE`: Request body exceeded 1 MB limit.
 - `422 UNPROCESSABLE_ENTITY`: Semantic or execution error (e.g., compile errors, trigger creation failure, deployment failure).
+- `501 NOT_IMPLEMENTED`: Operation is not implemented for the target trigger kind or configuration.
 - `500 INTERNAL_SERVER_ERROR`: Unhandled internal exception.

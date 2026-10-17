@@ -118,7 +118,7 @@ describe('FlowScript tenant isolation and API boundaries (issue #651)', () => {
         return { rows: [], rowCount: 1 }
       }
 
-      if (trimmed.startsWith('SELECT id, flow_name, environment, kind, config, enabled, next_fire_at, last_fired_at, created_at FROM flowscript_triggers WHERE project_id=$1 AND flow_name=$2')) {
+      if (trimmed.includes('FROM flowscript_triggers WHERE project_id=$1 AND flow_name=$2')) {
         const [projectId, flowName] = params
         const matches = Array.from(triggers.values()).filter(t => t.project_id === projectId && t.flow_name === flowName)
         return { rows: matches, rowCount: matches.length }
