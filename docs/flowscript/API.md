@@ -39,13 +39,36 @@ Request: input object and optional environment. Resolves active deployment, pers
 
 ## Triggers
 
+Project-scoped trigger management routes require verified project identity (HMAC signature or Bearer token).
+
 ### POST /v1/flows/:name/triggers
 
-Schedule request includes kind=schedule, cron, timezone and optional environment. Webhook request includes kind=webhook and optional environment. Webhook creation returns a secret token once; store securely and never log it. Provider signature verification is not implemented.
+Schedule request includes kind=schedule, cron, timezone and optional environment. Webhook request includes kind=webhook and optional environment. Webhook creation returns a secret token once; store securely and never log it. The raw token is hashed with SHA-256 and only the hash is persisted.
+
+### GET /v1/flows/:name/triggers
+
+Returns active and disabled triggers configured for this flow in the project. Secret hashes are omitted from the response.
+
+### PATCH /v1/flows/:name/triggers/:triggerId
+
+Enables or disables an existing trigger (`{ enabled: boolean }`). Disabling a webhook trigger causes ingress requests to return generic HTTP 404 immediately.
+
+### DELETE /v1/flows/:name/triggers/:triggerId
+
+Permanently deletes the trigger and cascades removal of associated idempotency records. Returns HTTP 204.
+
+### POST /v1/flows/:name/triggers/:triggerId/rotate
+
+Rotates the webhook secret token. Generates a new cryptographically secure token, updates the persisted SHA-256 hash, immediately invalidates the previous token, and returns the new token and URL once.
 
 ### POST /v1/hooks/:token
 
-Accepts JSON payload and queues a run for the registered webhook trigger. Public exposure requires gateway controls and provider verification.
+Ingress endpoint for registered webhook triggers.
+- Accepts JSON object payloads up to 1 MB. Malformed or non-object bodies return HTTP 400.
+- URL tokens are sanitized in server logs (`/v1/hooks/[REDACTED]`).
+- Unknown, disabled, or undeployed webhook tokens return a generic HTTP 404 (`{ error: 'Webhook endpoint not found' }`) without disclosing whether the trigger exists.
+- Supports durable idempotency via `x-idempotency-key` or `idempotency-key` header, or body fields `idempotency_key`, `event_id`, or `id`. Duplicate deliveries return HTTP 200 with `x-idempotent-replay: true` header without creating duplicate runs.
+- Returns HTTP 202 (`{ accepted: true, runId: <uuid>, status: 'queued' }`) on initial enqueue. Public exposure requires gateway rate limits and provider verification.
 
 ## Run inspection
 

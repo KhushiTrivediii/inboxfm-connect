@@ -5,7 +5,7 @@ import { canonicalizeJson, type FlowIR } from './compiler.js'
 
 const { Pool } = pg
 const connectionString = process.env.DATABASE_URL
-const pool = new Pool(connectionString ? { connectionString } : {
+const defaultPool = new Pool(connectionString ? { connectionString } : {
   host: process.env.AP_POSTGRES_HOST ?? 'postgres',
   port: Number(process.env.AP_POSTGRES_PORT ?? 5432),
   database: process.env.AP_POSTGRES_DATABASE ?? 'activepieces',
@@ -13,6 +13,15 @@ const pool = new Pool(connectionString ? { connectionString } : {
   password: process.env.AP_POSTGRES_PASSWORD ?? 'postgres',
   max: Number(process.env.FLOWSCRIPT_DB_POOL_SIZE ?? 5),
 })
+let pool = defaultPool
+
+export function setStorePool(customPool: pg.Pool | null): void {
+  pool = customPool ?? defaultPool
+}
+
+export function getStorePool(): pg.Pool {
+  return pool
+}
 
 export async function initializeStore(): Promise<void> {
   await pool.query(`
@@ -69,6 +78,15 @@ export async function initializeStore(): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS flowscript_runs_project_created_idx ON flowscript_runs(project_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS flowscript_webhook_idempotency (
+      id uuid PRIMARY KEY,
+      trigger_id uuid NOT NULL REFERENCES flowscript_triggers(id) ON DELETE CASCADE,
+      idempotency_key text NOT NULL,
+      run_id uuid NOT NULL REFERENCES flowscript_runs(id) ON DELETE CASCADE,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(trigger_id, idempotency_key)
+    );
+    CREATE INDEX IF NOT EXISTS flowscript_webhook_idempotency_created_idx ON flowscript_webhook_idempotency(created_at);
   `)
 }
 
@@ -223,7 +241,7 @@ export async function createFlowTrigger(params: { projectId: string; flowName: s
       'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,next_fire_at) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify({ cron, timezone }), nextFireAt],
     )
-    return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt }
+    return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, nextFireAt, enabled: true }
   }
   const token = randomBytes(32).toString('base64url')
   const secretHash = hashWebhookToken(token)
@@ -231,10 +249,10 @@ export async function createFlowTrigger(params: { projectId: string; flowName: s
     'INSERT INTO flowscript_triggers (id,project_id,flow_name,environment,kind,config,secret_hash) VALUES ($1,$2,$3,$4,$5,$6,$7)',
     [id, params.projectId, params.flowName, params.environment, params.kind, JSON.stringify(params.config), secretHash],
   )
-  return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, token }
+  return { id, kind: params.kind, flowName: params.flowName, environment: params.environment, token, enabled: true }
 }
 
-function hashWebhookToken(token: string): string {
+export function hashWebhookToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
@@ -275,23 +293,160 @@ export async function enqueueDueSchedule() {
   }
 }
 
-export async function enqueueWebhook(token: string, input: Record<string, unknown>) {
+export async function enqueueWebhook(
+  token: string,
+  input: Record<string, unknown>,
+  idempotencyKey?: string,
+): Promise<{ runId: string; duplicate: boolean } | null> {
   const secretHash = hashWebhookToken(token)
-  const result = await pool.query<{ id: string; project_id: string; flow_name: string; environment: string }>(
-    "SELECT id, project_id, flow_name, environment FROM flowscript_triggers WHERE kind='webhook' AND enabled=true AND secret_hash=$1",
-    [secretHash],
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query<{ id: string; project_id: string; flow_name: string; environment: string }>(
+      "SELECT id, project_id, flow_name, environment FROM flowscript_triggers WHERE kind='webhook' AND enabled=true AND secret_hash=$1",
+      [secretHash],
+    )
+    const trigger = result.rows[0]
+    if (!trigger) {
+      await client.query('COMMIT')
+      return null
+    }
+
+    const deployedRes = await client.query<{ version_id: string }>(
+      "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
+      [trigger.project_id, trigger.flow_name, trigger.environment],
+    )
+    const deployed = deployedRes.rows[0]
+    if (!deployed) {
+      await client.query('COMMIT')
+      return null
+    }
+
+    if (idempotencyKey && idempotencyKey.trim().length > 0) {
+      const cleanKey = idempotencyKey.trim().slice(0, 256)
+      const existingIdemp = await client.query<{ run_id: string }>(
+        'SELECT run_id FROM flowscript_webhook_idempotency WHERE trigger_id=$1 AND idempotency_key=$2',
+        [trigger.id, cleanKey],
+      )
+      if (existingIdemp.rows[0]) {
+        await client.query('COMMIT')
+        return { runId: existingIdemp.rows[0].run_id, duplicate: true }
+      }
+
+      const runId = randomUUID()
+      await client.query(
+        `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
+         VALUES ($1,$2,$3,$4,$5,'webhook','queued',$6)`,
+        [runId, trigger.project_id, trigger.flow_name, trigger.environment, deployed.version_id, JSON.stringify(input)],
+      )
+
+      const insertIdemp = await client.query<{ run_id: string }>(
+        `INSERT INTO flowscript_webhook_idempotency (id, trigger_id, idempotency_key, run_id)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (trigger_id, idempotency_key) DO NOTHING
+         RETURNING run_id`,
+        [randomUUID(), trigger.id, cleanKey, runId],
+      )
+
+      if (!insertIdemp.rows[0]) {
+        // Race condition: another concurrent delivery inserted first
+        const winner = await client.query<{ run_id: string }>(
+          'SELECT run_id FROM flowscript_webhook_idempotency WHERE trigger_id=$1 AND idempotency_key=$2',
+          [trigger.id, cleanKey],
+        )
+        await client.query('ROLLBACK')
+        return { runId: winner.rows[0]?.run_id ?? runId, duplicate: true }
+      }
+
+      await client.query('COMMIT')
+      return { runId, duplicate: false }
+    }
+
+    const runId = randomUUID()
+    await client.query(
+      `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
+       VALUES ($1,$2,$3,$4,$5,'webhook','queued',$6)`,
+      [runId, trigger.project_id, trigger.flow_name, trigger.environment, deployed.version_id, JSON.stringify(input)],
+    )
+    await client.query('COMMIT')
+    return { runId, duplicate: false }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function listFlowTriggers(projectId: string, flowName: string) {
+  const result = await pool.query<{
+    id: string
+    flow_name: string
+    environment: string
+    kind: 'schedule' | 'webhook'
+    config: Record<string, unknown>
+    enabled: boolean
+    next_fire_at: Date | null
+    last_fired_at: Date | null
+    created_at: Date
+  }>(
+    'SELECT id, flow_name, environment, kind, config, enabled, next_fire_at, last_fired_at, created_at FROM flowscript_triggers WHERE project_id=$1 AND flow_name=$2 ORDER BY created_at ASC',
+    [projectId, flowName],
   )
-  const trigger = result.rows[0]
-  if (!trigger) return null
-  const deployed = await getDeployedFlow(trigger.project_id, trigger.flow_name, trigger.environment)
-  if (!deployed) return null
-  const runId = await createRun({
-    projectId: trigger.project_id,
-    flowName: trigger.flow_name,
-    environment: trigger.environment,
-    versionId: deployed.id,
-    input,
-    triggerKind: 'webhook',
-  })
-  return { runId }
+  return result.rows.map(row => ({
+    id: row.id,
+    flowName: row.flow_name,
+    environment: row.environment,
+    kind: row.kind,
+    config: row.config,
+    enabled: row.enabled,
+    nextFireAt: row.next_fire_at,
+    lastFiredAt: row.last_fired_at,
+    createdAt: row.created_at,
+  }))
+}
+
+export async function updateFlowTrigger(
+  projectId: string,
+  flowName: string,
+  triggerId: string,
+  updates: { enabled?: boolean },
+): Promise<{ id: string; flowName: string; enabled: boolean } | null> {
+  if (typeof updates.enabled !== 'boolean') return null
+  const result = await pool.query<{ id: string; flow_name: string; enabled: boolean }>(
+    'UPDATE flowscript_triggers SET enabled=$4 WHERE id=$1 AND project_id=$2 AND flow_name=$3 RETURNING id, flow_name, enabled',
+    [triggerId, projectId, flowName, updates.enabled],
+  )
+  const row = result.rows[0]
+  return row ? { id: row.id, flowName: row.flow_name, enabled: row.enabled } : null
+}
+
+export async function deleteFlowTrigger(
+  projectId: string,
+  flowName: string,
+  triggerId: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    'DELETE FROM flowscript_triggers WHERE id=$1 AND project_id=$2 AND flow_name=$3',
+    [triggerId, projectId, flowName],
+  )
+  return (result.rowCount ?? 0) > 0
+}
+
+export async function rotateWebhookTriggerToken(
+  projectId: string,
+  flowName: string,
+  triggerId: string,
+): Promise<{ id: string; flowName: string; token: string } | null> {
+  const newToken = randomBytes(32).toString('base64url')
+  const newSecretHash = hashWebhookToken(newToken)
+  const result = await pool.query<{ id: string; flow_name: string }>(
+    `UPDATE flowscript_triggers
+     SET secret_hash=$4
+     WHERE id=$1 AND project_id=$2 AND flow_name=$3 AND kind='webhook'
+     RETURNING id, flow_name`,
+    [triggerId, projectId, flowName, newSecretHash],
+  )
+  const row = result.rows[0]
+  return row ? { id: row.id, flowName: row.flow_name, token: newToken } : null
 }

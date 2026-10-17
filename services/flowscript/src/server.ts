@@ -4,7 +4,23 @@ import { basename, resolve } from 'node:path'
 import { z } from 'zod'
 import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
-import { closeStore, createRun, deployFlow, finishRun, getDeployedFlow, getRun, initializeStore, listRuns, publishFlow, createFlowTrigger, enqueueWebhook } from './store.js'
+import {
+  closeStore,
+  createRun,
+  deployFlow,
+  finishRun,
+  getDeployedFlow,
+  getRun,
+  initializeStore,
+  listRuns,
+  publishFlow,
+  createFlowTrigger,
+  enqueueWebhook,
+  listFlowTriggers,
+  updateFlowTrigger,
+  deleteFlowTrigger,
+  rotateWebhookTriggerToken,
+} from './store.js'
 
 const envSchema = z.object({
   FLOWSCRIPT_HOST: z.string().default('0.0.0.0'),
@@ -121,7 +137,23 @@ export {
 }
 
 export function buildServer(): FastifyInstance {
-  const app = Fastify({ logger: { level: env.FLOWSCRIPT_LOG_LEVEL } })
+  const app = Fastify({
+    logger: {
+      level: env.FLOWSCRIPT_LOG_LEVEL,
+      serializers: {
+        req(req) {
+          const rawUrl = typeof req.url === 'string' ? req.url : ''
+          const sanitizedUrl = rawUrl.replace(/\/v1\/hooks\/[a-zA-Z0-9_-]+/g, '/v1/hooks/[REDACTED]')
+          return {
+            method: req.method,
+            url: sanitizedUrl,
+            host: req.host,
+            remoteAddress: req.ip,
+          }
+        },
+      },
+    },
+  })
 
   app.get('/health', async () => ({
     status: 'ok',
@@ -221,13 +253,107 @@ export function buildServer(): FastifyInstance {
     }
   })
 
-  app.post('/v1/hooks/:token', async (request, reply) => {
-    const params = z.object({ token: z.string().min(40).max(128) }).safeParse(request.params)
-    const body = z.record(z.string(), z.unknown()).safeParse(request.body ?? {})
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid webhook request' })
-    const queued = await enqueueWebhook(params.data.token, body.data)
-    if (!queued) return reply.code(404).send({ error: 'Webhook endpoint not found or disabled' })
-    return reply.code(202).send({ accepted: true, runId: queued.runId, status: 'queued' })
+  app.get('/v1/flows/:name/triggers', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    if (!params.success) return reply.code(400).send({ error: 'Invalid flow name' })
+    const triggers = await listFlowTriggers(projectId, params.data.name)
+    return reply.code(200).send(triggers)
+  })
+
+  app.patch('/v1/flows/:name/triggers/:triggerId', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128), triggerId: z.string().uuid() }).safeParse(request.params)
+    const body = z.object({ enabled: z.boolean() }).safeParse(request.body)
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid trigger update request' })
+    const updated = await updateFlowTrigger(projectId, params.data.name, params.data.triggerId, { enabled: body.data.enabled })
+    if (!updated) return reply.code(404).send({ error: 'Trigger not found' })
+    return reply.code(200).send(updated)
+  })
+
+  app.delete('/v1/flows/:name/triggers/:triggerId', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128), triggerId: z.string().uuid() }).safeParse(request.params)
+    if (!params.success) return reply.code(400).send({ error: 'Invalid trigger deletion request' })
+    const deleted = await deleteFlowTrigger(projectId, params.data.name, params.data.triggerId)
+    if (!deleted) return reply.code(404).send({ error: 'Trigger not found' })
+    return reply.code(204).send()
+  })
+
+  app.post('/v1/flows/:name/triggers/:triggerId/rotate', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128), triggerId: z.string().uuid() }).safeParse(request.params)
+    if (!params.success) return reply.code(400).send({ error: 'Invalid trigger rotation request' })
+    const rotated = await rotateWebhookTriggerToken(projectId, params.data.name, params.data.triggerId)
+    if (!rotated) return reply.code(404).send({ error: 'Webhook trigger not found' })
+    return reply.code(200).send({
+      id: rotated.id,
+      flowName: rotated.flowName,
+      token: rotated.token,
+      webhookUrl: `/v1/hooks/${rotated.token}`,
+    })
+  })
+
+  app.post('/v1/hooks/:token', {
+    bodyLimit: 1_048_576,
+  }, async (request, reply) => {
+    const params = z.object({ token: z.string().min(32).max(128) }).safeParse(request.params)
+    if (!params.success) {
+      return reply.code(404).send({ error: 'Webhook endpoint not found' })
+    }
+
+    if (request.body !== undefined && request.body !== null && typeof request.body !== 'object') {
+      return reply.code(400).send({ error: 'Invalid webhook payload; expected a JSON object' })
+    }
+
+    const bodyObj = (request.body ?? {}) as Record<string, unknown>
+    if (Array.isArray(bodyObj)) {
+      return reply.code(400).send({ error: 'Invalid webhook payload; expected a JSON object' })
+    }
+
+    // Extract caller idempotency key from header or common provider event ID keys
+    const headerIdemp = request.headers['x-idempotency-key'] ?? request.headers['idempotency-key']
+    let idempotencyKey: string | undefined
+    if (typeof headerIdemp === 'string' && headerIdemp.trim().length > 0) {
+      idempotencyKey = headerIdemp.trim()
+    } else if (typeof bodyObj.idempotency_key === 'string' && bodyObj.idempotency_key.trim().length > 0) {
+      idempotencyKey = bodyObj.idempotency_key.trim()
+    } else if (typeof bodyObj.idempotencyKey === 'string' && bodyObj.idempotencyKey.trim().length > 0) {
+      idempotencyKey = bodyObj.idempotencyKey.trim()
+    } else if (typeof bodyObj.event_id === 'string' && bodyObj.event_id.trim().length > 0) {
+      idempotencyKey = bodyObj.event_id.trim()
+    } else if (typeof bodyObj.eventId === 'string' && bodyObj.eventId.trim().length > 0) {
+      idempotencyKey = bodyObj.eventId.trim()
+    } else if (typeof bodyObj.id === 'string' && bodyObj.id.trim().length > 0) {
+      idempotencyKey = bodyObj.id.trim()
+    }
+
+    const queued = await enqueueWebhook(params.data.token, bodyObj, idempotencyKey)
+    if (!queued) {
+      return reply.code(404).send({ error: 'Webhook endpoint not found' })
+    }
+
+    if (queued.duplicate) {
+      return reply.code(200).header('x-idempotent-replay', 'true').send({
+        accepted: true,
+        runId: queued.runId,
+        status: 'duplicate',
+      })
+    }
+
+    return reply.code(202).send({
+      accepted: true,
+      runId: queued.runId,
+      status: 'queued',
+    })
   })
 
   app.post('/v1/flows/:name/run', async (request, reply) => {
