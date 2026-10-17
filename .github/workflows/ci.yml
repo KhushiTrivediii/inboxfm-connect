@@ -203,10 +203,66 @@ jobs:
           docker rm -f app >/dev/null 2>&1 || true
           docker network rm gateway-config-check >/dev/null 2>&1 || true
 
+  flowscript:
+    name: FlowScript (lifecycle & tenant isolation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: flowscript_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      FLOWSCRIPT_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/flowscript_test
+      FLOWSCRIPT_GATEWAY_SECRET: ci-test-gateway-secret-32-chars-long!!
+      FLOWSCRIPT_AUTH_SECRET: ci-test-gateway-secret-32-chars-long!!
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Build FlowScript
+        run: bun run --cwd services/flowscript build
+      - name: Lint FlowScript
+        run: bun run --cwd services/flowscript lint
+      - name: Typecheck FlowScript
+        run: bun run --cwd services/flowscript typecheck
+      - name: FlowScript Unit Tests
+        run: |
+          set -o pipefail
+          bun run --cwd services/flowscript test-unit 2>&1 | tee flowscript-unit.log
+      - name: Validate compose topology
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml config -q
+      - name: Postgres-backed E2E lifecycle and tenant isolation tests
+        run: |
+          set -o pipefail
+          bun run --cwd services/flowscript test-integration 2>&1 | tee flowscript-e2e.log
+      - name: Upload FlowScript diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flowscript-diagnostics
+          path: |
+            flowscript-unit.log
+            flowscript-e2e.log
+          retention-days: 7
+          if-no-files-found: warn
+
   main:
     name: main
     if: always()
-    needs: [policy, checks, tool-search-postgres, browser, gateway]
+    needs: [policy, checks, tool-search-postgres, browser, gateway, flowscript]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
