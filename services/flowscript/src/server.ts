@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { fileURLToPath } from 'node:url'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { z } from 'zod'
 import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
@@ -283,9 +283,16 @@ export function buildServer(): FastifyInstance {
 const isDirectExecution = () => {
   if (!process.argv[1]) return false
   try {
-    const scriptPath = resolve(process.argv[1])
-    const currentPath = fileURLToPath(import.meta.url)
-    return scriptPath === currentPath || scriptPath.endsWith('server.ts') || scriptPath.endsWith('server.js')
+    const scriptPath = resolve(process.argv[1]).toLowerCase()
+    const currentPath = fileURLToPath(import.meta.url).toLowerCase()
+    if (scriptPath === currentPath) return true
+    const base = basename(scriptPath)
+    return (base === 'server.ts' || base === 'server.js') && (
+      scriptPath.endsWith('/services/flowscript/src/server.ts') ||
+      scriptPath.endsWith('\\services\\flowscript\\src\\server.ts') ||
+      scriptPath.endsWith('/services/flowscript/dist/server.js') ||
+      scriptPath.endsWith('\\services\\flowscript\\dist\\server.js')
+    )
   } catch {
     return false
   }
