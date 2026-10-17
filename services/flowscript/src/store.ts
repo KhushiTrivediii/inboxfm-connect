@@ -58,10 +58,12 @@ export async function initializeStore(): Promise<void> {
       enabled boolean NOT NULL DEFAULT true,
       next_fire_at timestamptz,
       last_fired_at timestamptz,
-      dispatch_lag_ms integer,
+      dispatch_lag_ms bigint,
       last_error text,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE flowscript_triggers ADD COLUMN IF NOT EXISTS dispatch_lag_ms bigint;
+    ALTER TABLE flowscript_triggers ADD COLUMN IF NOT EXISTS last_error text;
     CREATE INDEX IF NOT EXISTS flowscript_triggers_due_idx ON flowscript_triggers(kind, next_fire_at) WHERE enabled=true;
     CREATE TABLE IF NOT EXISTS flowscript_runs (
       id uuid PRIMARY KEY,
@@ -352,6 +354,23 @@ export async function enqueueDueSchedule(): Promise<{ enqueued: boolean; runId?:
     const scheduledInstant = trigger.next_fire_at
     const lagMs = Math.max(0, Date.now() - new Date(scheduledInstant).getTime())
 
+    const cron = trigger.config.cron
+    const tz = trigger.config.timezone || 'UTC'
+    const policy = trigger.config.missedTickPolicy || 'run-once'
+
+    // For 'skip' policy, if current time has passed beyond the scheduled interval, omit the missed tick
+    let shouldEnqueue = true
+    if (policy === 'skip') {
+      try {
+        const nextOccurrence = CronExpressionParser.parse(cron, { currentDate: new Date(scheduledInstant), tz }).next().toDate()
+        if (Date.now() >= nextOccurrence.getTime()) {
+          shouldEnqueue = false
+        }
+      } catch {
+        // Cron parsing error will be caught and recorded below
+      }
+    }
+
     // Atomically claim this occurrence instant to ensure only one worker enqueues it
     const occId = randomUUID()
     const claimResult = await client.query<{ id: string }>(
@@ -363,50 +382,46 @@ export async function enqueueDueSchedule(): Promise<{ enqueued: boolean; runId?:
     )
 
     let createdRunId: string | undefined
+    let deploymentError: string | undefined
 
     if (claimResult.rows[0]) {
-      const deployed = await client.query<{ version_id: string }>(
-        "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
-        [trigger.project_id, trigger.flow_name, trigger.environment],
-      )
-
-      if (deployed.rows[0]) {
-        createdRunId = randomUUID()
-        await client.query(
-          `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
-           VALUES ($1,$2,$3,$4,$5,'schedule','queued','{}'::jsonb)`,
-          [createdRunId, trigger.project_id, trigger.flow_name, trigger.environment, deployed.rows[0].version_id],
+      if (shouldEnqueue) {
+        const deployed = await client.query<{ version_id: string }>(
+          "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
+          [trigger.project_id, trigger.flow_name, trigger.environment],
         )
 
-        await client.query(
-          'UPDATE flowscript_schedule_occurrences SET run_id=$1 WHERE id=$2',
-          [createdRunId, occId],
-        )
+        if (deployed.rows[0]) {
+          createdRunId = randomUUID()
+          await client.query(
+            `INSERT INTO flowscript_runs (id,project_id,flow_name,environment,version_id,trigger_kind,status,input)
+             VALUES ($1,$2,$3,$4,$5,'schedule','queued','{}'::jsonb)`,
+            [createdRunId, trigger.project_id, trigger.flow_name, trigger.environment, deployed.rows[0].version_id],
+          )
+
+          await client.query(
+            'UPDATE flowscript_schedule_occurrences SET run_id=$1 WHERE id=$2',
+            [createdRunId, occId],
+          )
+        } else {
+          deploymentError = `No active deployment for flow "${trigger.flow_name}" in environment "${trigger.environment}"`
+        }
       }
+    } else {
+      console.log(JSON.stringify({
+        event: 'schedule_claim_lost',
+        triggerId: trigger.id,
+        flowName: trigger.flow_name,
+        scheduledInstant: new Date(scheduledInstant).toISOString(),
+      }))
     }
 
     // Advance next_fire_at according to missedTickPolicy
-    const cron = trigger.config.cron
-    const tz = trigger.config.timezone || 'UTC'
-    const policy = trigger.config.missedTickPolicy || 'run-once'
-
+    let nextFireAt: Date
     try {
       // For 'run-once' or 'skip', advance from now() so downtime does not cascade into a tick storm
       const baseDate = policy === 'catch-up' ? new Date(scheduledInstant) : new Date()
-      const nextFireAt = CronExpressionParser.parse(cron, { currentDate: baseDate, tz }).next().toDate()
-
-      await client.query(
-        'UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2, dispatch_lag_ms=$3, last_error=NULL WHERE id=$1',
-        [trigger.id, nextFireAt, lagMs],
-      )
-      console.log(JSON.stringify({
-        event: 'schedule_dispatched',
-        triggerId: trigger.id,
-        flowName: trigger.flow_name,
-        lagMs,
-        nextFireAt: nextFireAt.toISOString(),
-        runId: createdRunId,
-      }))
+      nextFireAt = CronExpressionParser.parse(cron, { currentDate: baseDate, tz }).next().toDate()
     } catch (parseError) {
       const errorMsg = parseError instanceof Error ? parseError.message : 'Cron parse error'
       await client.query(
@@ -418,6 +433,27 @@ export async function enqueueDueSchedule(): Promise<{ enqueued: boolean; runId?:
         triggerId: trigger.id,
         flowName: trigger.flow_name,
         error: errorMsg,
+      }))
+      await client.query('COMMIT')
+      return false
+    }
+
+    const finalError = deploymentError ?? null
+    await client.query(
+      'UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2, dispatch_lag_ms=$3, last_error=$4 WHERE id=$1',
+      [trigger.id, nextFireAt, lagMs, finalError],
+    )
+
+    if (claimResult.rows[0]) {
+      console.log(JSON.stringify({
+        event: 'schedule_dispatched',
+        triggerId: trigger.id,
+        flowName: trigger.flow_name,
+        lagMs,
+        nextFireAt: nextFireAt.toISOString(),
+        runId: createdRunId,
+        policy,
+        omitted: !shouldEnqueue,
       }))
     }
 

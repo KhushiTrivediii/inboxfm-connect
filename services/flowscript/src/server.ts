@@ -239,7 +239,7 @@ export function buildServer(): FastifyInstance {
         environment: z.string().min(1).max(64).default('production'),
         cron: z.string().min(1).max(128),
         timezone: z.string().min(1).max(128).default('UTC'),
-        missedTickPolicy: z.enum(['run-once', 'skip', 'catch-up']).default('run-once').optional(),
+        missedTickPolicy: z.enum(['run-once', 'skip', 'catch-up']).default('run-once'),
       }),
       z.object({ kind: z.literal('webhook'), environment: z.string().min(1).max(64).default('production') }),
     ]).safeParse(request.body)

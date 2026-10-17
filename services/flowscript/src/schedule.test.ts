@@ -3,12 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { CronExpressionParser } from 'cron-parser'
 import {
   createFlowTrigger,
-  deleteFlowTrigger,
   enqueueDueSchedule,
   getStorePool,
   listFlowTriggers,
   setStorePool,
-  updateFlowTrigger,
   validateScheduleConfig,
 } from './store.js'
 import { buildServer, signProjectId } from './server.js'
@@ -21,6 +19,7 @@ describe('flowscript scheduled triggers hardening (issue #656)', () => {
   let mockPool: any
   let originalPool: any
   let app: ReturnType<typeof buildServer>
+  let executeQuery: (sql: string, params?: any[]) => Promise<any>
 
   beforeEach(() => {
     triggers = new Map()
@@ -30,7 +29,7 @@ describe('flowscript scheduled triggers hardening (issue #656)', () => {
     originalPool = getStorePool()
     app = buildServer()
 
-    const executeQuery = async (sql: string, params: any[] = []) => {
+    executeQuery = async (sql: string, params: any[] = []) => {
       const trimmed = sql.trim()
 
       if (trimmed.startsWith('SELECT v.id, v.ir, d.flow_name, d.environment') || trimmed.includes('FROM flowscript_deployments')) {
@@ -113,14 +112,14 @@ describe('flowscript scheduled triggers hardening (issue #656)', () => {
         return { rows: [], rowCount: 0 }
       }
 
-      if (trimmed.includes('UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2, dispatch_lag_ms=$3, last_error=NULL WHERE id=$1')) {
-        const [id, nextFireAt, lagMs] = params
+      if (trimmed.includes('UPDATE flowscript_triggers SET last_fired_at=now(), next_fire_at=$2, dispatch_lag_ms=$3, last_error=$4 WHERE id=$1')) {
+        const [id, nextFireAt, lagMs, lastError] = params
         const trigger = triggers.get(id)
         if (trigger) {
           trigger.last_fired_at = new Date()
           trigger.next_fire_at = nextFireAt
           trigger.dispatch_lag_ms = lagMs
-          trigger.last_error = null
+          trigger.last_error = lastError
         }
         return { rows: [], rowCount: 1 }
       }
@@ -553,6 +552,101 @@ describe('flowscript scheduled triggers hardening (issue #656)', () => {
       expect(list[0].lastFiredAt).toBeDefined()
       expect(list[0].nextFireAt).toBeDefined()
       expect(list[0].lastError).toBeNull()
+    })
+
+    it('skips enqueuing run for missed ticks when policy is skip', async () => {
+      const triggerId = 'trig-skip-1'
+      const threeDaysAgo = new Date(Date.now() - 3 * 86400 * 1000)
+      triggers.set(triggerId, {
+        id: triggerId,
+        project_id: 'p1',
+        flow_name: 'test-flow',
+        environment: 'production',
+        kind: 'schedule',
+        config: { cron: '0 * * * *', timezone: 'UTC', missedTickPolicy: 'skip' },
+        next_fire_at: threeDaysAgo,
+        enabled: true,
+      })
+      deployments.set('dep-1', {
+        version_id: 'v1',
+        project_id: 'p1',
+        flow_name: 'test-flow',
+        environment: 'production',
+        status: 'active',
+      })
+
+      const result = await enqueueDueSchedule()
+      expect(result).toBeDefined()
+      expect((result as any).enqueued).toBe(false)
+      expect((result as any).runId).toBeUndefined()
+      expect(runs.size).toBe(0)
+
+      const updated = triggers.get(triggerId)
+      expect(new Date(updated.next_fire_at).getTime()).toBeGreaterThan(Date.now())
+    })
+
+    it('records last_error when trigger is due but no active deployment exists', async () => {
+      const triggerId = 'trig-no-dep'
+      triggers.set(triggerId, {
+        id: triggerId,
+        project_id: 'p1',
+        flow_name: 'undeployed-flow',
+        environment: 'production',
+        kind: 'schedule',
+        config: { cron: '* * * * *', timezone: 'UTC' },
+        next_fire_at: new Date(Date.now() - 1000),
+        enabled: true,
+      })
+
+      const result = await enqueueDueSchedule()
+      expect((result as any).enqueued).toBe(false)
+      const updated = triggers.get(triggerId)
+      expect(updated.last_error).toContain('No active deployment')
+      expect(runs.size).toBe(0)
+    })
+
+    it('rolls back and leaves state recoverable on unexpected database error', async () => {
+      let rollbackCalled = false
+      let failNextQuery = true
+      const originalConnect = mockPool.connect
+      mockPool.connect = async () => ({
+        query: async (sql: string, params?: any[]) => {
+          if (sql === 'ROLLBACK') {
+            rollbackCalled = true
+            return { rows: [], rowCount: 0 }
+          }
+          if (failNextQuery && sql.includes('INSERT INTO flowscript_runs')) {
+            failNextQuery = false
+            throw new Error('Simulated database connection failure')
+          }
+          return executeQuery(sql, params)
+        },
+        release: () => {},
+      })
+
+      triggers.set('trig-fail-1', {
+        id: 'trig-fail-1',
+        project_id: 'p1',
+        flow_name: 'test-flow',
+        environment: 'production',
+        kind: 'schedule',
+        config: { cron: '* * * * *', timezone: 'UTC' },
+        next_fire_at: new Date(Date.now() - 1000),
+        enabled: true,
+      })
+      deployments.set('dep-1', {
+        version_id: 'v1',
+        project_id: 'p1',
+        flow_name: 'test-flow',
+        environment: 'production',
+        status: 'active',
+      })
+
+      await expect(enqueueDueSchedule()).rejects.toThrow('Simulated database connection failure')
+      expect(rollbackCalled).toBe(true)
+      const trig = triggers.get('trig-fail-1')
+      expect(trig.enabled).toBe(true)
+      mockPool.connect = originalConnect
     })
   })
 })
