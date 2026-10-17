@@ -177,24 +177,25 @@ describe('server endpoints', () => {
   })
 
   it('/v1/flows/:name/deploy validates request body parameters', async () => {
+    const sig = signProjectId('proj_123')
     const response = await app.inject({
       method: 'POST',
       url: '/v1/flows/my-flow/deploy',
-      headers: { 'x-project-id': 'proj_123' },
+      headers: { 'x-project-id': 'proj_123', 'x-project-signature': sig },
       payload: { versionId: 'invalid-not-a-uuid' },
     })
     expect(response.statusCode).toBe(400)
     expect(response.json().error).toContain('Invalid deployment request')
   })
 
-  it('verifyProjectIdentity handles unsigned, signed, and forged requests', () => {
+  it('verifyProjectIdentity handles unsigned, signed, forged requests and fails closed without secret', () => {
     const secret = 'super_secret_gateway_key'
     const projectId = 'proj_alpha'
 
-    // 1. Without secret, raw x-project-id is accepted
+    // 1. Without secret, fails closed
     const unconfigured = verifyProjectIdentity({ headers: { 'x-project-id': projectId } }, '')
-    expect(unconfigured.valid).toBe(true)
-    expect(unconfigured.projectId).toBe(projectId)
+    expect(unconfigured.valid).toBe(false)
+    expect(unconfigured.error).toContain('Gateway authentication secret is not configured')
 
     // 2. With secret, unsigned request is rejected
     const unsigned = verifyProjectIdentity({ headers: { 'x-project-id': projectId } }, secret)

@@ -1,6 +1,6 @@
 import { closeStore, claimQueuedRun, enqueueDueSchedule, finishRun, initializeStore } from './store.js'
 import { executeFlowIR } from './runtime.js'
-import { getSafeExecutionEnv } from './server.js'
+import { getSafeExecutionEnv } from './auth.js'
 import type { FlowIR } from './compiler.js'
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))

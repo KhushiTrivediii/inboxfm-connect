@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 import { z } from 'zod'
 import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
@@ -103,79 +104,20 @@ export function validateFlowIR(value: unknown): { valid: true; flow: FlowIR } | 
   return { valid: true, flow: parsed.data }
 }
 
-export function getSafeExecutionEnv(sourceEnv: Record<string, string | undefined> = process.env): Record<string, string | undefined> {
-  const safeEnv: Record<string, string | undefined> = Object.create(null)
-  for (const [key, value] of Object.entries(sourceEnv)) {
-    if (key.startsWith('FLOWSCRIPT_ENV_')) {
-      safeEnv[key] = value
-      const strippedKey = key.slice('FLOWSCRIPT_ENV_'.length)
-      if (strippedKey && !Object.prototype.hasOwnProperty.call(safeEnv, strippedKey)) {
-        safeEnv[strippedKey] = value
-      }
-    } else if (key === 'NODE_ENV' || key === 'TZ') {
-      safeEnv[key] = value
-    }
-  }
-  return safeEnv
-}
+import {
+  getSafeExecutionEnv,
+  getGatewaySecret,
+  signProjectId,
+  generateProjectToken,
+  verifyProjectIdentity,
+} from './auth.js'
 
-export function signProjectId(projectId: string, secret: string): string {
-  return createHmac('sha256', secret).update(projectId).digest('hex')
-}
-
-export function generateProjectToken(projectId: string, secret: string): string {
-  const signature = signProjectId(projectId, secret)
-  return `${projectId}.${signature}`
-}
-
-export function verifyProjectIdentity(
-  request: { headers: Record<string, string | string[] | undefined> },
-  secret: string = process.env.FLOWSCRIPT_GATEWAY_SECRET ?? process.env.FLOWSCRIPT_AUTH_SECRET ?? '',
-): { valid: boolean; projectId: string | null; error?: string } {
-  const authHeader = request.headers['authorization']
-  const signatureHeader = request.headers['x-project-signature'] ?? request.headers['x-gateway-signature']
-  const rawProjectId = request.headers['x-project-id']
-
-  let candidateProjectId: string | null = null
-  let candidateSignature: string | null = null
-
-  // 1. Check Authorization: Bearer <projectId>.<signature>
-  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim()
-    const dotIndex = token.indexOf('.')
-    if (dotIndex > 0) {
-      candidateProjectId = token.slice(0, dotIndex)
-      candidateSignature = token.slice(dotIndex + 1)
-    }
-  }
-
-  // 2. Check x-project-id + signature header
-  if (!candidateProjectId && typeof rawProjectId === 'string' && rawProjectId.length > 0 && rawProjectId.length <= 128) {
-    candidateProjectId = rawProjectId
-    if (typeof signatureHeader === 'string' && signatureHeader.length > 0) {
-      candidateSignature = signatureHeader
-    }
-  }
-
-  if (!candidateProjectId) {
-    return { valid: false, projectId: null, error: 'Verified x-project-id header is required (or Bearer token) from the trusted API gateway' }
-  }
-
-  // If a gateway secret is configured, require and verify cryptographic signature
-  if (secret.length > 0) {
-    if (!candidateSignature) {
-      return { valid: false, projectId: null, error: 'Unverified project identity: cryptographic signature is required' }
-    }
-    const expectedSig = signProjectId(candidateProjectId, secret)
-    const sigBuf = Buffer.from(candidateSignature, 'hex')
-    const expBuf = Buffer.from(expectedSig, 'hex')
-
-    if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
-      return { valid: false, projectId: null, error: 'Invalid project identity signature' }
-    }
-  }
-
-  return { valid: true, projectId: candidateProjectId }
+export {
+  getSafeExecutionEnv,
+  getGatewaySecret,
+  signProjectId,
+  generateProjectToken,
+  verifyProjectIdentity,
 }
 
 export function buildServer(): FastifyInstance {
@@ -338,8 +280,19 @@ export function buildServer(): FastifyInstance {
   return app
 }
 
-const app = buildServer()
-if (process.env.NODE_ENV !== 'test') {
+const isDirectExecution = () => {
+  if (!process.argv[1]) return false
+  try {
+    const scriptPath = resolve(process.argv[1])
+    const currentPath = fileURLToPath(import.meta.url)
+    return scriptPath === currentPath || scriptPath.endsWith('server.ts') || scriptPath.endsWith('server.js')
+  } catch {
+    return false
+  }
+}
+
+if (process.env.NODE_ENV !== 'test' && isDirectExecution()) {
+  const app = buildServer()
   initializeStore()
     .then(() => app.listen({ host: env.FLOWSCRIPT_HOST, port: env.FLOWSCRIPT_PORT }))
     .then(address => app.log.info({ address }, 'FlowScript service listening'))
