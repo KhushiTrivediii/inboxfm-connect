@@ -38,6 +38,52 @@ function resolveValue(value: unknown, context: StepContext): unknown {
   return value
 }
 
+export function topologicallySortSteps<T extends { id: string; dependsOn: string[] }>(steps: T[]): T[] {
+  const byId = new Map<string, T>()
+  const inDegree = new Map<string, number>()
+  const graph = new Map<string, string[]>()
+
+  for (const step of steps) {
+    byId.set(step.id, step)
+    inDegree.set(step.id, step.dependsOn.length)
+    for (const dep of step.dependsOn) {
+      const dependents = graph.get(dep) ?? []
+      dependents.push(step.id)
+      graph.set(dep, dependents)
+    }
+  }
+
+  const queue: string[] = []
+  for (const step of steps) {
+    if ((inDegree.get(step.id) ?? 0) === 0) {
+      queue.push(step.id)
+    }
+  }
+
+  const sorted: T[] = []
+  while (queue.length > 0) {
+    const currentId = queue.shift()!
+    const step = byId.get(currentId)
+    if (step) {
+      sorted.push(step)
+    }
+    const neighbors = graph.get(currentId) ?? []
+    for (const neighborId of neighbors) {
+      const updatedDegree = (inDegree.get(neighborId) ?? 1) - 1
+      inDegree.set(neighborId, updatedDegree)
+      if (updatedDegree === 0) {
+        queue.push(neighborId)
+      }
+    }
+  }
+
+  if (sorted.length !== steps.length) {
+    return steps
+  }
+
+  return sorted
+}
+
 export async function executeFlowIR(
   ir: FlowIR,
   options: {
@@ -62,7 +108,8 @@ export async function executeFlowIR(
   if (ir.steps.length > maxSteps) throw new Error(`Flow exceeds maximum step count (${maxSteps})`)
   const context = (): StepContext => ({ input, trigger, outputs, env: options.env ?? {} })
 
-  for (const step of ir.steps) {
+  const orderedSteps = topologicallySortSteps(ir.steps)
+  for (const step of orderedSteps) {
     if (!step.dependsOn.every(id => completed.has(id))) {
       return { status: 'failed', steps: [...steps, { id: step.id, status: 'failed', error: 'Dependency was not completed before this step', durationMs: 0 }] }
     }

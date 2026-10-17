@@ -23,7 +23,7 @@ Runs pure flows synchronously for development. Integration steps return HTTP 501
 
 ## Publish and deploy
 
-Project-scoped routes require x-project-id. It must be injected by a trusted gateway after authenticating the caller; caller-controlled headers are not authentication.
+Project-scoped routes require verified project identity. Callers must provide either an HMAC-SHA256 signature (`x-project-signature: <sig>` matching `x-project-id`) or a signed Bearer token (`Authorization: Bearer <projectId>.<signature>`) authenticated against `FLOWSCRIPT_GATEWAY_SECRET` / `FLOWSCRIPT_AUTH_SECRET`. Unsigned or forged requests are rejected with HTTP 401.
 
 ### POST /v1/flows/publish
 
