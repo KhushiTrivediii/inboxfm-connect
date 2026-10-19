@@ -1,13 +1,15 @@
 import type { FlowIR } from './compiler.js'
-import { redactSensitiveData, type FlowIntegrationExecutor } from './adapter.js'
+import { redactSensitiveData, FlowIntegrationError, type FlowIntegrationExecutor } from './adapter.js'
+import { computeBackoff } from './store.js'
 
 export type StepContext = { input: Record<string, unknown>; trigger: Record<string, unknown>; outputs: Record<string, unknown>; env: Record<string, string | undefined> }
 export type IntegrationExecutor = (config: Record<string, unknown>, context: StepContext) => Promise<unknown>
 export type RunResult = {
-  status: 'succeeded' | 'failed'
+  status: 'succeeded' | 'failed' | 'cancelled'
   output?: unknown
   error?: string
-  steps: Array<{ id: string; status: 'succeeded' | 'skipped' | 'failed'; output?: unknown; error?: string; durationMs: number }>
+  cancelled?: boolean
+  steps: Array<{ id: string; status: 'succeeded' | 'skipped' | 'failed'; output?: unknown; error?: string; durationMs: number; attempts?: number }>
 }
 
 function resolvePath(value: unknown, path: string): unknown {
@@ -84,6 +86,8 @@ export function topologicallySortSteps<T extends { id: string; dependsOn: string
   return sorted
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
 export async function executeFlowIR(
   ir: FlowIR,
   options: {
@@ -96,6 +100,14 @@ export async function executeFlowIR(
     runId?: string
     maxSteps?: number
     stepTimeoutMs?: number
+    maxStepAttempts?: number
+    signal?: AbortSignal
+    onStepAttemptStart?: (stepId: string, attempt: number) => Promise<string | void>
+    onStepAttemptFinish?: (
+      attemptId: string | void,
+      details: { status: 'succeeded' | 'failed'; errorCode?: string; errorMessage?: string; retryable?: boolean; durationMs: number },
+    ) => Promise<void>
+    onNonIdempotentStep?: (stepId: string) => Promise<void>
   } = {},
 ): Promise<RunResult> {
   const input = options.input ?? {}
@@ -105,69 +117,169 @@ export async function executeFlowIR(
   const completed = new Set<string>()
   const maxSteps = options.maxSteps ?? 200
   const timeoutMs = options.stepTimeoutMs ?? 30_000
+  const maxStepAttempts = Math.max(1, options.maxStepAttempts ?? 3)
   if (ir.steps.length > maxSteps) throw new Error(`Flow exceeds maximum step count (${maxSteps})`)
   const context = (): StepContext => ({ input, trigger, outputs, env: options.env ?? {} })
 
   const orderedSteps = topologicallySortSteps(ir.steps)
   for (const step of orderedSteps) {
+    if (options.signal?.aborted) {
+      return { status: 'cancelled', cancelled: true, error: 'Execution cancelled', steps }
+    }
+
     if (!step.dependsOn.every(id => completed.has(id))) {
       return { status: 'failed', steps: [...steps, { id: step.id, status: 'failed', error: 'Dependency was not completed before this step', durationMs: 0 }] }
     }
-    const started = Date.now()
-    try {
-      const config = resolveValue(step.config, context()) as Record<string, unknown>
-      let output: unknown
-      if (step.kind === 'integration') {
-        if (!options.integrationExecutor) throw new Error('No trusted integration executor is configured; refusing to execute integration step')
-        let timer: ReturnType<typeof setTimeout> | undefined
-        try {
-          const executor = options.integrationExecutor
-          let executionPromise: Promise<unknown>
 
-          if (typeof executor === 'object' && executor !== null && 'execute' in executor) {
-            const integrationName = String(config.integration ?? config.pieceName ?? config.integrationName ?? '')
-            const actionName = String(config.action ?? config.tool ?? config.actionName ?? '')
-            const connectionId = String(config.connectionId ?? '')
-            const actionInput = (config.input && typeof config.input === 'object' ? config.input : {}) as Record<string, unknown>
+    const stepStart = Date.now()
+    const isIntegration = step.kind === 'integration'
+    const allowedAttempts = isIntegration ? maxStepAttempts : 1
+    let attempt = 0
+    let stepSuccess = false
+    let stepOutput: unknown
+    let lastError: unknown = null
+    let lastErrorCode: string | undefined
+    let lastRetryable = false
 
-            executionPromise = (executor as FlowIntegrationExecutor).execute({
-              projectId: options.projectId ?? 'default-project',
-              platformId: options.platformId ?? 'default-platform',
-              integrationName,
-              actionName,
-              connectionId,
-              input: actionInput,
-              runId: options.runId ?? 'local-run',
-              stepId: step.id,
-              idempotencyKey: config.idempotencyKey ? String(config.idempotencyKey) : undefined,
-            })
-          } else {
-            executionPromise = (executor as IntegrationExecutor)(config, context())
+    while (attempt < allowedAttempts && !stepSuccess) {
+      attempt++
+      if (options.signal?.aborted) {
+        return { status: 'cancelled', cancelled: true, error: 'Execution cancelled', steps }
+      }
+
+      const attemptStart = Date.now()
+      let attemptId: string | void = undefined
+      if (options.onStepAttemptStart) {
+        attemptId = await options.onStepAttemptStart(step.id, attempt)
+      }
+
+      try {
+        const config = resolveValue(step.config, context()) as Record<string, unknown>
+
+        if (step.kind === 'integration') {
+          if (!options.integrationExecutor) throw new Error('No trusted integration executor is configured; refusing to execute integration step')
+
+          // If the step does not specify an idempotency key, it represents an ambiguous/non-idempotent side effect
+          if (!config.idempotencyKey && options.onNonIdempotentStep) {
+            await options.onNonIdempotentStep(step.id)
           }
 
-          output = await Promise.race([
-            executionPromise,
-            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Step timed out after ${timeoutMs}ms`)), timeoutMs) }),
-          ])
-        } finally {
-          if (timer) clearTimeout(timer)
+          let timer: ReturnType<typeof setTimeout> | undefined
+          try {
+            const executor = options.integrationExecutor
+            let executionPromise: Promise<unknown>
+
+            if (typeof executor === 'object' && executor !== null && 'execute' in executor) {
+              const integrationName = String(config.integration ?? config.pieceName ?? config.integrationName ?? '')
+              const actionName = String(config.action ?? config.tool ?? config.actionName ?? '')
+              const connectionId = String(config.connectionId ?? '')
+              const actionInput = (config.input && typeof config.input === 'object' ? config.input : {}) as Record<string, unknown>
+
+              executionPromise = (executor as FlowIntegrationExecutor).execute({
+                projectId: options.projectId ?? 'default-project',
+                platformId: options.platformId ?? 'default-platform',
+                integrationName,
+                actionName,
+                connectionId,
+                input: actionInput,
+                runId: options.runId ?? 'local-run',
+                stepId: step.id,
+                idempotencyKey: config.idempotencyKey ? String(config.idempotencyKey) : undefined,
+              })
+            } else {
+              executionPromise = (executor as IntegrationExecutor)(config, context())
+            }
+
+            stepOutput = await Promise.race([
+              executionPromise,
+              new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`Step timed out after ${timeoutMs}ms`)), timeoutMs) }),
+            ])
+          } finally {
+            if (timer) clearTimeout(timer)
+          }
+        } else if (step.kind === 'transform') {
+          stepOutput = config.value === undefined ? config : resolveValue(config.value, context())
+        } else {
+          stepOutput = config.when === true
         }
-      } else if (step.kind === 'transform') {
-        output = config.value === undefined ? config : resolveValue(config.value, context())
-      } else {
-        output = config.when === true
+
+        const sanitizedOutput = redactSensitiveData(stepOutput)
+        stepSuccess = true
+        outputs[step.id] = sanitizedOutput
+        completed.add(step.id)
+
+        if (options.onStepAttemptFinish) {
+          await options.onStepAttemptFinish(attemptId, {
+            status: 'succeeded',
+            durationMs: Date.now() - attemptStart,
+          })
+        }
+
+        steps.push({
+          id: step.id,
+          status: 'succeeded',
+          output: sanitizedOutput,
+          durationMs: Date.now() - stepStart,
+          attempts: attempt,
+        })
+      } catch (error) {
+        lastError = error
+        const duration = Date.now() - attemptStart
+        const rawMessage = error instanceof Error ? error.message : 'Unknown step error'
+        const sanitizedError = redactSensitiveData(rawMessage) as string
+
+        if (error instanceof FlowIntegrationError) {
+          lastErrorCode = error.code
+          lastRetryable = error.details?.retryable ?? (error as any).retryable ?? false
+        } else if (error && typeof error === 'object' && 'retryable' in error && typeof (error as any).retryable === 'boolean') {
+          lastRetryable = (error as any).retryable
+          lastErrorCode = (error as any).code ?? 'TRANSIENT_ERROR'
+        } else if (rawMessage.includes('timed out')) {
+          lastRetryable = true
+          lastErrorCode = 'TIMEOUT'
+        } else {
+          lastRetryable = false
+          lastErrorCode = 'UNCLASSIFIED'
+        }
+
+        if (options.onStepAttemptFinish) {
+          await options.onStepAttemptFinish(attemptId, {
+            status: 'failed',
+            errorCode: lastErrorCode,
+            errorMessage: sanitizedError,
+            retryable: lastRetryable,
+            durationMs: duration,
+          })
+        }
+
+        if (lastRetryable && attempt < allowedAttempts && !options.signal?.aborted) {
+          const backoff = computeBackoff(attempt, 20, 500)
+          await sleep(backoff)
+          continue
+        } else {
+          break
+        }
       }
-      const sanitizedOutput = redactSensitiveData(output)
-      outputs[step.id] = sanitizedOutput
-      completed.add(step.id)
-      steps.push({ id: step.id, status: 'succeeded', output: sanitizedOutput, durationMs: Date.now() - started })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown step error'
-      const sanitizedError = redactSensitiveData(message) as string
-      steps.push({ id: step.id, status: 'failed', error: sanitizedError, durationMs: Date.now() - started })
-      return { status: 'failed', steps }
+    }
+
+    if (!stepSuccess) {
+      const rawMessage = lastError instanceof Error ? lastError.message : 'Unknown step error'
+      const sanitizedError = redactSensitiveData(rawMessage) as string
+      steps.push({
+        id: step.id,
+        status: 'failed',
+        error: sanitizedError,
+        durationMs: Date.now() - stepStart,
+        attempts: attempt,
+      })
+      return { status: 'failed', steps, error: sanitizedError }
     }
   }
+
+  if (options.signal?.aborted) {
+    return { status: 'cancelled', cancelled: true, error: 'Execution cancelled', steps }
+  }
+
   try {
     const finalOutput = ir.output ? resolveValue(ir.output, context()) : outputs
     return { status: 'succeeded', output: redactSensitiveData(finalOutput), steps }

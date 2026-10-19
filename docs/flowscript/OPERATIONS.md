@@ -34,7 +34,13 @@ Check worker health/logs, DB connectivity, queue claim errors and locks. Inspect
 
 ### Run remains running
 
-The prototype does not fully recover stale running rows. Do not reset production rows until side-effect outcome and idempotency are understood. Add leases/heartbeat and recovery before production.
+Workers claim runs with a 30-second lease (`lease_expires_at`) and actively heartbeat every 10 seconds.
+If a worker crashes or network partitions:
+- Automated recovery (`recoverStaleRuns`) executes every 30 seconds across workers.
+- Runs without non-idempotent steps whose `attempt_count < max_attempts` are automatically requeued for clean execution with backoff.
+- Runs whose retry count is exhausted transition to `dead_letter`.
+- Runs that executed non-idempotent steps (e.g. external actions lacking idempotency keys) are marked `uncertain` to prevent duplicate operations.
+- Operators can inspect step attempts via `GET /v1/runs/:id/attempts` and safely cancel via `POST /v1/runs/:id/cancel`.
 
 ### Schedule did not fire
 

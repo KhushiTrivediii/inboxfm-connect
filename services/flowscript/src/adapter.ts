@@ -149,8 +149,9 @@ function findForbiddenCredentialKey(obj: unknown): string | null {
 export function redactSensitiveData(value: unknown): unknown {
   if (value === null || value === undefined) return value
   if (typeof value === 'string') {
-    let sanitized = value.replace(/Bearer\s+[A-Za-z0-9_.\-]+/gi, 'Bearer [REDACTED]')
-    sanitized = sanitized.replace(/(api[_-]?key|secret|password|token)\s*[:=]\s*['"]?[A-Za-z0-9_.\-]+['"]?/gi, '$1=[REDACTED]')
+    let sanitized = value.replace(/Bearer\s+(?:token\s+)?([A-Za-z0-9_.\-]+)/gi, 'Bearer [REDACTED]')
+    sanitized = sanitized.replace(/(api[_-]?key|secret|password|token|bearer)\s*[:=\s]\s*['"]?[A-Za-z0-9_.\-]+['"]?/gi, '$1=[REDACTED]')
+    sanitized = sanitized.replace(/sk_live_[A-Za-z0-9_]+/gi, '[REDACTED]')
     return sanitized
   }
   if (Array.isArray(value)) {
