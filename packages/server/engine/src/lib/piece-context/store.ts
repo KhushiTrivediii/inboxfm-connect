@@ -148,7 +148,8 @@ function createKey(prefix: string, scope: StoreScope, flowId: FlowId, key: strin
 }
 
 function buildUrl(apiUrl: string, key?: string): URL {
-    const url = new URL(`${apiUrl}v1/store-entries`)
+    const baseApiUrl = apiUrl.endsWith('/') ? apiUrl : `${apiUrl}/`
+    const url = new URL(`${baseApiUrl}v1/store-entries`)
     if (key) {
         url.searchParams.set('key', key)
     }
