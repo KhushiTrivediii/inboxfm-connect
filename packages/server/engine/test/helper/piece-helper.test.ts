@@ -73,4 +73,63 @@ describe('pieceHelper.executeTool headless context contract', () => {
             vi.unstubAllGlobals()
         }
     })
+
+    it('wires store with engineToken and normalizes internalApiUrl for store operations (#544)', async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ key: 'flow_headless/demo-key', value: 'demo-val' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+        runMock.mockImplementation(async (ctx: { store: { get: (key: string) => Promise<unknown> } }) => {
+            const val = await ctx.store.get('demo-key')
+            return {
+                val,
+                calledUrl: fetchMock.mock.calls[0][0].toString(),
+                authHeader: (fetchMock.mock.calls[0][1] as RequestInit)?.headers,
+            }
+        })
+
+        try {
+            const response = await pieceHelper.executeTool({
+                params: { ...params, internalApiUrl: 'http://localhost:3100/api', engineToken: 'secret-engine-token' },
+                devPieces: [],
+            })
+
+            expect(response.status).toBe('OK')
+            expect(response.response).toEqual({
+                val: 'demo-val',
+                calledUrl: 'http://localhost:3100/api/v1/store-entries?key=flow_headless%2Fdemo-key',
+                authHeader: {
+                    Authorization: 'Bearer secret-engine-token',
+                },
+            })
+        }
+        finally {
+            vi.unstubAllGlobals()
+        }
+    })
+
+    it('normalizes internalApiUrl without trailing slash for file uploads (#544)', async () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ readUrl: 'http://localhost:3100/api/v1/files/read-url' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+        runMock.mockImplementation(async (ctx: { files: { write: (p: { fileName: string, data: Buffer }) => Promise<string> } }) => {
+            const readUrl = await ctx.files.write({ fileName: 'test.txt', data: Buffer.from('hello') })
+            return {
+                readUrl,
+                calledUrl: fetchMock.mock.calls[0][0].toString(),
+            }
+        })
+
+        try {
+            const response = await pieceHelper.executeTool({
+                params: { ...params, internalApiUrl: 'http://localhost:3100/api', engineToken: 'secret-engine-token' },
+                devPieces: [],
+            })
+
+            expect(response.status).toBe('OK')
+            const res = response.response as { readUrl: string, calledUrl: string }
+            expect(res.readUrl).toBe('http://localhost:3100/api/v1/files/read-url')
+            expect(res.calledUrl).toMatch(/^http:\/\/localhost:3100\/api\/v1\/files\//)
+        }
+        finally {
+            vi.unstubAllGlobals()
+        }
+    })
 })

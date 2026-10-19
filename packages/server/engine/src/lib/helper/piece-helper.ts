@@ -234,7 +234,7 @@ export const pieceHelper = {
                 apiUrl: params.internalApiUrl,
                 prefix: '',
                 flowId: 'headless',
-                flowVersionId: 'headless',
+                engineToken: params.engineToken,
             }),
             step: {
                 name: params.actionName,
