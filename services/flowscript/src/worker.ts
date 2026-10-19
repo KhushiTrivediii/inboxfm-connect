@@ -23,9 +23,11 @@ const HEARTBEAT_INTERVAL_MS = Number(process.env.FLOWSCRIPT_HEARTBEAT_MS || 10_0
 
 let stopping = false
 const activeRuns = new Set<Promise<void>>()
+const activeControllers = new Set<AbortController>()
 
 async function processJob(job: NonNullable<Awaited<ReturnType<typeof claimQueuedRun>>>) {
   const abortController = new AbortController()
+  activeControllers.add(abortController)
 
   // Start background heartbeat
   const heartbeatTimer = setInterval(async () => {
@@ -85,6 +87,7 @@ async function processJob(job: NonNullable<Awaited<ReturnType<typeof claimQueued
     console.error(JSON.stringify({ event: 'run_failed', runId: job.id, error: message, durationMs: Date.now() - startTime }))
   } finally {
     clearInterval(heartbeatTimer)
+    activeControllers.delete(abortController)
   }
 }
 
@@ -131,10 +134,26 @@ async function main() {
   // Graceful drain
   console.log(JSON.stringify({ service: 'flowscript-worker', status: 'draining', activeCount: activeRuns.size }))
   if (activeRuns.size > 0) {
-    await Promise.race([
-      Promise.allSettled(Array.from(activeRuns)),
-      sleep(10_000),
+    const drainTimeout = sleep(10_000)
+    const allDone = Promise.allSettled(Array.from(activeRuns))
+    const outcome = await Promise.race([
+      allDone.then(() => 'completed'),
+      drainTimeout.then(() => 'timed_out'),
     ])
+    if (outcome === 'timed_out') {
+      console.warn(JSON.stringify({ service: 'flowscript-worker', warning: 'drain_timeout_reached', abortingCount: activeControllers.size }))
+      for (const controller of activeControllers) {
+        try {
+          controller.abort()
+        } catch {
+          // ignore
+        }
+      }
+      await Promise.race([
+        Promise.allSettled(Array.from(activeRuns)),
+        sleep(2_000),
+      ])
+    }
   }
 
   await closeStore()
