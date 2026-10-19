@@ -81,6 +81,45 @@ Ingress endpoint for registered webhook triggers.
 
 Project ID is used in queries. Add cursor pagination before run history grows significantly.
 
+## Request IDs and trace correlation
+- Every request accepts an optional `x-request-id` header from the client or edge gateway.
+- If omitted, the service generates a standard UUIDv4 request ID.
+- The `x-request-id` is returned on every HTTP response header and embedded inside all error responses as `requestId`.
+
+## Global request limits
+- Request body size is capped at 1 MB (1,048,576 bytes) across all endpoints.
+- Payloads exceeding this limit receive an HTTP 413 response with `code: 'PAYLOAD_TOO_LARGE'`.
+
 ## Error handling
 
-Current behavior uses 400 for malformed requests, 401 for missing trusted identity, 404 for missing deployment/run/webhook, 422 for compile/deploy/flow errors, 501 for unsupported integration execution and 202 for queued runs. Standardize an error envelope with stable code, request ID, details and retryability before production.
+All error responses return a standardized JSON error envelope:
+
+```json
+{
+  "statusCode": 400,
+  "code": "BAD_REQUEST",
+  "error": "Detailed error message",
+  "message": "Detailed error message",
+  "requestId": "92f767a4-3a98-4c8d-8fd6-218080f558e8",
+  "issues": [...]
+}
+```
+
+### Standardized error codes:
+- `400 BAD_REQUEST`: Malformed request syntax or invalid Zod parameters.
+- `400 FLOW_NAME_MISMATCH`: Deploying a version where the version's internal flow name does not match the URL `:name`.
+- `401 UNAUTHORIZED`: Missing or invalid gateway signature / bearer token.
+- `401 UNVERIFIED_PROJECT_IDENTITY`: `x-project-id` present without HMAC signature.
+- `401 INVALID_PROJECT_SIGNATURE`: HMAC signature does not match project ID.
+- `401 FORGED_PROJECT_HEADER`: Bearer token project does not match `x-project-id` header.
+- `401 INVALID_PROJECT_ID_FORMAT`: Project ID does not match `/^[a-zA-Z0-9_-]{1,128}$/`.
+- `401 GATEWAY_SECRET_MISSING`: Gateway secret environment variable is not configured.
+- `404 NOT_FOUND`: Resource not found.
+- `404 DEPLOYMENT_NOT_FOUND`: Active deployment does not exist for the specified flow and environment.
+- `404 VERSION_NOT_FOUND`: Flow version does not exist in the caller's project.
+- `404 TRIGGER_NOT_FOUND`: Flow trigger does not exist in the caller's project.
+- `404 RUN_NOT_FOUND`: Run does not exist in the caller's project.
+- `413 PAYLOAD_TOO_LARGE`: Request body exceeded 1 MB limit.
+- `422 UNPROCESSABLE_ENTITY`: Semantic or execution error (e.g., compile errors, trigger creation failure, deployment failure).
+- `501 NOT_IMPLEMENTED`: Operation is not implemented for the target trigger kind or configuration.
+- `500 INTERNAL_SERVER_ERROR`: Unhandled internal exception.

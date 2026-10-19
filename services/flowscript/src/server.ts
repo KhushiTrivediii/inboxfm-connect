@@ -1,4 +1,5 @@
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify'
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { basename, resolve } from 'node:path'
 import { z } from 'zod'
@@ -129,6 +130,7 @@ import {
   signProjectId,
   generateProjectToken,
   verifyProjectIdentity,
+  stripUntrustedProjectHeaders,
 } from './auth.js'
 
 export {
@@ -137,10 +139,38 @@ export {
   signProjectId,
   generateProjectToken,
   verifyProjectIdentity,
+  stripUntrustedProjectHeaders,
+}
+
+export function sendError(
+  reply: FastifyReply,
+  statusCode: number,
+  code: string,
+  message: string,
+  extra?: Record<string, unknown>,
+) {
+  return reply.code(statusCode).send({
+    statusCode,
+    code,
+    error: message,
+    message,
+    requestId: reply.request.id,
+    ...extra,
+  })
 }
 
 export function buildServer(): FastifyInstance {
   const app = Fastify({
+    bodyLimit: 1_048_576,
+    requestIdHeader: 'x-request-id',
+    requestIdLogLabel: 'reqId',
+    genReqId(req) {
+      const incoming = req.headers['x-request-id']
+      if (typeof incoming === 'string' && incoming.trim().length > 0 && incoming.length <= 128) {
+        return incoming.trim()
+      }
+      return randomUUID()
+    },
     logger: {
       level: env.FLOWSCRIPT_LOG_LEVEL,
       serializers: {
@@ -158,6 +188,35 @@ export function buildServer(): FastifyInstance {
     },
   })
 
+  app.addHook('onSend', async (request, reply) => {
+    reply.header('x-request-id', request.id)
+  })
+
+  app.setErrorHandler((error: any, request, reply) => {
+    const statusCode = error?.statusCode ?? 500
+    let code = error?.code
+    if (statusCode === 413 || code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      code = 'PAYLOAD_TOO_LARGE'
+    } else if (code === 'FST_ERR_CTP_INVALID_JSON_BODY') {
+      code = 'BAD_REQUEST'
+    } else if (!code) {
+      if (statusCode === 400) code = 'BAD_REQUEST'
+      else if (statusCode === 401) code = 'UNAUTHORIZED'
+      else if (statusCode === 403) code = 'FORBIDDEN'
+      else if (statusCode === 404) code = 'NOT_FOUND'
+      else if (statusCode === 422) code = 'UNPROCESSABLE_ENTITY'
+      else code = 'INTERNAL_SERVER_ERROR'
+    }
+    const msg = error?.message ?? 'An unexpected error occurred'
+    reply.code(statusCode).send({
+      statusCode,
+      code,
+      error: msg,
+      message: msg,
+      requestId: request.id,
+    })
+  })
+
   app.get('/health', async () => ({
     status: 'ok',
     service: 'flowscript',
@@ -171,9 +230,19 @@ export function buildServer(): FastifyInstance {
 
   app.post('/v1/source/compile', async (request, reply) => {
     const body = z.object({ source: z.string().min(1).max(1_000_000) }).safeParse(request.body)
-    if (!body.success) return reply.code(400).send({ error: 'Expected { source: string }', issues: body.error.issues })
+    if (!body.success) return sendError(reply, 400, 'BAD_REQUEST', 'Expected { source: string }', { issues: body.error.issues })
     const result = compileFlowSource(body.data.source)
-    if (!result.ok) return reply.code(422).send({ valid: false, diagnostics: result.diagnostics })
+    if (!result.ok) {
+      return reply.code(422).send({
+        statusCode: 422,
+        code: 'UNPROCESSABLE_ENTITY',
+        error: 'Flow compilation failed',
+        message: 'Flow compilation failed',
+        requestId: request.id,
+        valid: false,
+        diagnostics: result.diagnostics,
+      })
+    }
     return { valid: true, hash: result.hash, ir: result.ir, diagnostics: result.diagnostics }
   })
 
@@ -183,15 +252,15 @@ export function buildServer(): FastifyInstance {
       input: z.record(z.string(), z.unknown()).optional(),
       trigger: z.record(z.string(), z.unknown()).optional(),
     }).safeParse(request.body)
-    if (!body.success) return reply.code(400).send({ error: 'Invalid execution request', issues: body.error.issues })
+    if (!body.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid execution request', { issues: body.error.issues })
     const validated = validateFlowIR(body.data.flow)
-    if (!validated.valid) return reply.code(422).send({ valid: false, issues: validated.issues })
+    if (!validated.valid) return sendError(reply, 422, 'UNPROCESSABLE_ENTITY', 'Invalid Flow IR', { valid: false, issues: validated.issues })
     if (validated.flow.steps.some(step => step.kind === 'integration')) {
-      return reply.code(501).send({ error: 'Trusted InboxFM Connect integration executor is not wired into this service yet; integration steps are never executed by this endpoint.' })
+      return sendError(reply, 501, 'NOT_IMPLEMENTED', 'Trusted InboxFM Connect integration executor is not wired into this service yet; integration steps are never executed by this endpoint.')
     }
     const inputValidation = validateRunInput(validated.flow.inputSchema ?? {}, body.data.input ?? {})
     if (!inputValidation.ok) {
-      return reply.code(400).send({ error: 'Invalid execution input', diagnostics: inputValidation.diagnostics })
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid execution input', { diagnostics: inputValidation.diagnostics })
     }
     const safeEnv = getSafeExecutionEnv()
     const result = await executeFlowIR(validated.flow as unknown as import('./compiler.js').FlowIR, {
@@ -206,35 +275,72 @@ export function buildServer(): FastifyInstance {
   // must authenticate callers and inject a verified project ID before exposure.
   app.post('/v1/flows/publish', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const body = z.object({ source: z.string().min(1).max(1_000_000) }).safeParse(request.body)
-    if (!body.success) return reply.code(400).send({ error: 'Expected { source: string }', issues: body.error.issues })
+    if (!body.success) return sendError(reply, 400, 'BAD_REQUEST', 'Expected { source: string }', { issues: body.error.issues })
     const compiled = compileFlowSource(body.data.source)
-    if (!compiled.ok) return reply.code(422).send({ valid: false, diagnostics: compiled.diagnostics })
+    if (!compiled.ok) {
+      return reply.code(422).send({
+        statusCode: 422,
+        code: 'UNPROCESSABLE_ENTITY',
+        error: 'Flow compilation failed',
+        message: 'Flow compilation failed',
+        requestId: request.id,
+        valid: false,
+        diagnostics: compiled.diagnostics,
+      })
+    }
     const version = await publishFlow(projectId, body.data.source, compiled.ir, compiled.hash)
     return reply.code(201).send(version)
   })
 
   app.post('/v1/flows/:name/deploy', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    if (!params.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid deployment request', {
+        issues: params.error.issues,
+      })
+    }
     const body = z.object({ versionId: z.string().uuid(), environment: z.string().min(1).max(64).default('production') }).safeParse(request.body)
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid deployment request' })
+    if (!body.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid deployment request', {
+        issues: body.error.issues,
+      })
+    }
     try {
       return await deployFlow(projectId, params.data.name, body.data.versionId, body.data.environment)
     } catch (error) {
-      return reply.code(404).send({ error: error instanceof Error ? error.message : 'Deployment failed' })
+      const msg = error instanceof Error ? error.message : 'Deployment failed'
+      if (msg.includes('belongs to flow')) {
+        return sendError(reply, 400, 'FLOW_NAME_MISMATCH', msg)
+      }
+      if (msg.includes('not found in this project')) {
+        return sendError(reply, 404, 'VERSION_NOT_FOUND', msg)
+      }
+      return sendError(reply, 422, 'DEPLOYMENT_FAILED', msg)
     }
   })
 
   app.post('/v1/flows/:name/triggers', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    if (!params.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid trigger request', {
+        issues: params.error.issues,
+      })
+    }
     const body = z.discriminatedUnion('kind', [
       z.object({
         kind: z.literal('schedule'),
@@ -245,18 +351,20 @@ export function buildServer(): FastifyInstance {
       }),
       z.object({ kind: z.literal('webhook'), environment: z.string().min(1).max(64).default('production') }),
     ]).safeParse(request.body)
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid trigger request', issues: body.success ? undefined : body.error.issues })
+    if (!body.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid trigger request', {
+        issues: body.error.issues,
+      })
+    }
 
     if (body.data.kind === 'schedule') {
       const scheduleValidation = validateScheduleConfig(body.data.cron, body.data.timezone, { missedTickPolicy: body.data.missedTickPolicy })
       if (!scheduleValidation.valid) {
-        return reply.code(400).send({
-          error: scheduleValidation.error,
+        return sendError(reply, 400, 'BAD_REQUEST', scheduleValidation.error, {
           path: scheduleValidation.path,
         })
       }
     }
-
     try {
       const trigger = await createFlowTrigger({
         projectId,
@@ -264,58 +372,72 @@ export function buildServer(): FastifyInstance {
         environment: body.data.environment,
         kind: body.data.kind,
         config: body.data.kind === 'schedule'
-          ? { cron: body.data.cron, timezone: body.data.timezone, missedTickPolicy: body.data.missedTickPolicy }
+          ? {
+              cron: body.data.cron,
+              timezone: body.data.timezone,
+              missedTickPolicy: body.data.missedTickPolicy,
+            }
           : {},
       })
       return reply.code(201).send(body.data.kind === 'webhook'
         ? { ...trigger, webhookUrl: `/v1/hooks/${trigger.token}` }
         : trigger)
     } catch (error) {
-      return reply.code(422).send({ error: error instanceof Error ? error.message : 'Trigger creation failed' })
+      const msg = error instanceof Error ? error.message : 'Trigger creation failed'
+      const isValidationError = msg.toLowerCase().includes('cron') || msg.toLowerCase().includes('timezone') || msg.toLowerCase().includes('policy')
+      return sendError(reply, isValidationError ? 400 : 422, isValidationError ? 'BAD_REQUEST' : 'TRIGGER_CREATION_FAILED', msg)
     }
   })
 
   app.get('/v1/flows/:name/triggers', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
-    if (!params.success) return reply.code(400).send({ error: 'Invalid flow name' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid flow name')
     const triggers = await listFlowTriggers(projectId, params.data.name)
     return reply.code(200).send(triggers)
   })
 
   app.patch('/v1/flows/:name/triggers/:triggerId', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128), triggerId: z.string().uuid() }).safeParse(request.params)
     const body = z.object({ enabled: z.boolean() }).safeParse(request.body)
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid trigger update request' })
+    if (!params.success || !body.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid trigger update request')
     const updated = await updateFlowTrigger(projectId, params.data.name, params.data.triggerId, { enabled: body.data.enabled })
-    if (!updated) return reply.code(404).send({ error: 'Trigger not found' })
+    if (!updated) return sendError(reply, 404, 'TRIGGER_NOT_FOUND', 'Trigger not found')
     return reply.code(200).send(updated)
   })
 
   app.delete('/v1/flows/:name/triggers/:triggerId', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128), triggerId: z.string().uuid() }).safeParse(request.params)
-    if (!params.success) return reply.code(400).send({ error: 'Invalid trigger deletion request' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid trigger deletion request')
     const deleted = await deleteFlowTrigger(projectId, params.data.name, params.data.triggerId)
-    if (!deleted) return reply.code(404).send({ error: 'Trigger not found' })
+    if (!deleted) return sendError(reply, 404, 'TRIGGER_NOT_FOUND', 'Trigger not found')
     return reply.code(204).send()
   })
 
   app.post('/v1/flows/:name/triggers/:triggerId/rotate', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128), triggerId: z.string().uuid() }).safeParse(request.params)
-    if (!params.success) return reply.code(400).send({ error: 'Invalid trigger rotation request' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid trigger rotation request')
     const rotated = await rotateWebhookTriggerToken(projectId, params.data.name, params.data.triggerId)
-    if (!rotated) return reply.code(404).send({ error: 'Webhook trigger not found' })
+    if (!rotated) return sendError(reply, 404, 'TRIGGER_NOT_FOUND', 'Webhook trigger not found')
     return reply.code(200).send({
       id: rotated.id,
       flowName: rotated.flowName,
@@ -329,16 +451,16 @@ export function buildServer(): FastifyInstance {
   }, async (request, reply) => {
     const params = z.object({ token: z.string().min(32).max(128) }).safeParse(request.params)
     if (!params.success) {
-      return reply.code(404).send({ error: 'Webhook endpoint not found' })
+      return sendError(reply, 404, 'NOT_FOUND', 'Webhook endpoint not found')
     }
 
     if (request.body !== undefined && request.body !== null && typeof request.body !== 'object') {
-      return reply.code(400).send({ error: 'Invalid webhook payload; expected a JSON object' })
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid webhook payload; expected a JSON object')
     }
 
     const bodyObj = (request.body ?? {}) as Record<string, unknown>
     if (Array.isArray(bodyObj)) {
-      return reply.code(400).send({ error: 'Invalid webhook payload; expected a JSON object' })
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid webhook payload; expected a JSON object')
     }
 
     // Extract caller idempotency key from header or common provider event ID keys
@@ -360,7 +482,7 @@ export function buildServer(): FastifyInstance {
 
     const queued = await enqueueWebhook(params.data.token, bodyObj, idempotencyKey)
     if (!queued) {
-      return reply.code(404).send({ error: 'Webhook endpoint not found' })
+      return sendError(reply, 404, 'NOT_FOUND', 'Webhook endpoint not found')
     }
 
     if (queued.duplicate) {
@@ -380,7 +502,9 @@ export function buildServer(): FastifyInstance {
 
   app.post('/v1/flows/:name/run', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
     const body = z.object({
@@ -389,15 +513,15 @@ export function buildServer(): FastifyInstance {
       idempotencyKey: z.string().min(1).max(128).optional(),
       maxAttempts: z.number().int().min(1).max(10).optional(),
     }).safeParse(request.body ?? {})
-    if (!params.success || !body.success) return reply.code(400).send({ error: 'Invalid run request' })
+    if (!params.success || !body.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run request')
     const deployed = await getDeployedFlow(projectId, params.data.name, body.data.environment)
-    if (!deployed) return reply.code(404).send({ error: 'No active deployment for this flow and environment' })
+    if (!deployed) return sendError(reply, 404, 'DEPLOYMENT_NOT_FOUND', 'No active deployment for this flow and environment')
     if (deployed.ir.steps.some(step => step.kind === 'integration')) {
-      return reply.code(501).send({ error: 'Integration execution is not wired to the trusted Connect runtime yet; no run was started.' })
+      return sendError(reply, 501, 'NOT_IMPLEMENTED', 'Integration execution is not wired to the trusted Connect runtime yet; no run was started.')
     }
     const inputValidation = validateRunInput(deployed.ir.inputSchema ?? {}, body.data.input)
     if (!inputValidation.ok) {
-      return reply.code(400).send({ error: 'Invalid run input', diagnostics: inputValidation.diagnostics })
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run input', { diagnostics: inputValidation.diagnostics })
     }
 
     const headerIdemp = request.headers['x-idempotency-key'] ?? request.headers['idempotency-key']
@@ -435,55 +559,65 @@ export function buildServer(): FastifyInstance {
 
   app.get('/v1/runs', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const query = z.object({ flow: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query)
-    if (!query.success) return reply.code(400).send({ error: 'Invalid query parameters' })
+    if (!query.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid query parameters')
     return { runs: await listRuns(projectId, query.data.flow, query.data.limit) }
   })
 
   app.get('/v1/runs/:id', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
-    if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run ID')
     const run = await getRun(projectId, params.data.id)
-    return run ? run : reply.code(404).send({ error: 'Run not found' })
+    return run ? run : sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
   })
 
   app.post('/v1/flows/:name/runs/:id/cancel', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ name: z.string().min(1).max(128), id: z.string().uuid() }).safeParse(request.params)
     const body = z.object({ reason: z.string().optional() }).safeParse(request.body ?? {})
-    if (!params.success) return reply.code(400).send({ error: 'Invalid cancel request' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid cancel request')
     const cancelled = await cancelRun(projectId, params.data.id, body.success ? body.data.reason : undefined)
-    if (!cancelled) return reply.code(404).send({ error: 'Run not found' })
+    if (!cancelled) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
     return reply.code(200).send(cancelled)
   })
 
   app.post('/v1/runs/:id/cancel', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
     const body = z.object({ reason: z.string().optional() }).safeParse(request.body ?? {})
-    if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run ID')
     const cancelled = await cancelRun(projectId, params.data.id, body.success ? body.data.reason : undefined)
-    if (!cancelled) return reply.code(404).send({ error: 'Run not found' })
+    if (!cancelled) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
     return reply.code(200).send(cancelled)
   })
 
   app.get('/v1/runs/:id/attempts', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
-    if (!auth.valid || !auth.projectId) return reply.code(401).send({ error: auth.error ?? 'Verified x-project-id header is required from the trusted API gateway' })
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
     const projectId = auth.projectId
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
-    if (!params.success) return reply.code(400).send({ error: 'Invalid run ID' })
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run ID')
     const run = await getRun(projectId, params.data.id)
-    if (!run) return reply.code(404).send({ error: 'Run not found' })
+    if (!run) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
     const attempts = await listStepAttempts(params.data.id)
     return reply.code(200).send({ runId: params.data.id, attempts })
   })
@@ -491,7 +625,7 @@ export function buildServer(): FastifyInstance {
   app.post('/v1/ir/validate', async (request, reply) => {
     const result = validateFlowIR(request.body)
     if (!result.valid) {
-      return reply.code(400).send({ valid: false, issues: result.issues })
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid Flow IR', { valid: false, issues: result.issues })
     }
     return { valid: true, flow: result.flow }
   })

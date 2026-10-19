@@ -36,14 +36,23 @@ export function generateProjectToken(projectId: string, secret: string = getGate
   return `${projectId}.${signature}`
 }
 
+const PROJECT_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/
+
+export function stripUntrustedProjectHeaders(headers: Record<string, unknown>): void {
+  delete headers['x-project-id']
+  delete headers['x-project-signature']
+  delete headers['x-gateway-signature']
+}
+
 export function verifyProjectIdentity(
   request: { headers: Record<string, string | string[] | undefined> },
   secret: string = getGatewaySecret(),
-): { valid: boolean; projectId: string | null; error?: string } {
+): { valid: boolean; projectId: string | null; error?: string; code?: string } {
   if (!secret) {
     return {
       valid: false,
       projectId: null,
+      code: 'GATEWAY_SECRET_MISSING',
       error: 'Gateway authentication secret is not configured; refusing project access',
     }
   }
@@ -65,20 +74,52 @@ export function verifyProjectIdentity(
     }
   }
 
+  // If a Bearer token was supplied, verify that any caller-supplied x-project-id does not contradict it
+  if (candidateProjectId && typeof rawProjectId === 'string') {
+    const trimmedRaw = rawProjectId.trim()
+    if (trimmedRaw && trimmedRaw !== candidateProjectId) {
+      return {
+        valid: false,
+        projectId: null,
+        code: 'FORGED_PROJECT_HEADER',
+        error: 'Project identity conflict: x-project-id header does not match authenticated bearer token',
+      }
+    }
+  }
+
   // 2. Check x-project-id + signature header
-  if (!candidateProjectId && typeof rawProjectId === 'string' && rawProjectId.length > 0 && rawProjectId.length <= 128) {
-    candidateProjectId = rawProjectId
+  if (!candidateProjectId && typeof rawProjectId === 'string' && rawProjectId.trim().length > 0) {
+    candidateProjectId = rawProjectId.trim()
     if (typeof signatureHeader === 'string' && signatureHeader.length > 0) {
-      candidateSignature = signatureHeader
+      candidateSignature = signatureHeader.trim()
     }
   }
 
   if (!candidateProjectId) {
-    return { valid: false, projectId: null, error: 'Verified x-project-id header is required (or Bearer token) from the trusted API gateway' }
+    return {
+      valid: false,
+      projectId: null,
+      code: 'MISSING_PROJECT_IDENTITY',
+      error: 'Verified x-project-id header is required (or Bearer token) from the trusted API gateway',
+    }
+  }
+
+  if (!PROJECT_ID_REGEX.test(candidateProjectId)) {
+    return {
+      valid: false,
+      projectId: null,
+      code: 'INVALID_PROJECT_ID_FORMAT',
+      error: 'Project ID contains invalid characters or exceeds 128 characters',
+    }
   }
 
   if (!candidateSignature) {
-    return { valid: false, projectId: null, error: 'Unverified project identity: cryptographic signature is required' }
+    return {
+      valid: false,
+      projectId: null,
+      code: 'UNVERIFIED_PROJECT_IDENTITY',
+      error: 'Unverified project identity: cryptographic signature is required',
+    }
   }
 
   try {
@@ -87,10 +128,20 @@ export function verifyProjectIdentity(
     const expBuf = Buffer.from(expectedSig, 'hex')
 
     if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
-      return { valid: false, projectId: null, error: 'Invalid project identity signature' }
+      return {
+        valid: false,
+        projectId: null,
+        code: 'INVALID_PROJECT_SIGNATURE',
+        error: 'Invalid project identity signature',
+      }
     }
   } catch {
-    return { valid: false, projectId: null, error: 'Invalid project identity signature' }
+    return {
+      valid: false,
+      projectId: null,
+      code: 'INVALID_PROJECT_SIGNATURE',
+      error: 'Invalid project identity signature',
+    }
   }
 
   return { valid: true, projectId: candidateProjectId }
