@@ -79,8 +79,9 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
     if (app) {
       await app.close()
     }
+    await closeStore().catch(() => {})
     if (testPool) {
-      await closeStore()
+      await testPool.end().catch(() => {})
     }
   })
 

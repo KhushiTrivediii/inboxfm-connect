@@ -17,9 +17,9 @@ Persisted statuses are `queued`, `running`, `succeeded`, `failed`, `cancelled`, 
 - `queued`: Enqueued and waiting to be claimed by an available worker. Supports deduplication via client `idempotency-key`.
 - `running`: Actively claimed by a worker holding a renewable lease (`worker_id`, `lease_expires_at`).
 - `succeeded`: All steps completed successfully.
-- `failed`: Terminal failure due to non-retryable validation, authentication, or unrecoverable error.
-- `cancelled`: Explicitly cancelled before or during execution via API (`POST /v1/runs/:id/cancel`). In-flight integration operations receive cancellation via `AbortSignal`.
-- `dead_letter`: Maximum retry attempts exhausted for transient errors (`max_attempts` reached). Safe for operator triage without automated loop churn.
+- `failed`: Terminal failure due to non-retryable validation, authentication, or unrecoverable error, or retryable attempts exhausted during runtime execution.
+- `cancelled`: Explicitly cancelled before or during execution via API (`POST /v1/runs/:id/cancel`). Workers propagate cancellation to in-flight jobs via active `AbortController` / `AbortSignal`.
+- `dead_letter`: Stale lease recovery quarantine for runs whose maximum retry attempts are exhausted or which were abandoned repeatedly. Safe for operator triage without automated loop churn.
 - `uncertain`: A worker crashed or lost its lease after initiating or executing a non-idempotent integration step (without an idempotency key). Stale recovery deliberately quarantines the run as `uncertain` to prevent duplicate side effects (e.g. duplicate payment or email delivery).
 
 ## Step execution & durable attempt tracking
