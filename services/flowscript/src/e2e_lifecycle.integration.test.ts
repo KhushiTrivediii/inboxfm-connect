@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import pg from 'pg'
 const { Pool } = pg
 import {
+  cancelRun,
   claimQueuedRun,
   closeStore,
   createFlowTrigger,
@@ -21,6 +22,7 @@ import {
   publishFlow,
   recordStepAttemptFinish,
   recordStepAttemptStart,
+  recoverStaleRuns,
   rotateWebhookTriggerToken,
   setStorePool,
   updateFlowTrigger,
@@ -60,15 +62,21 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
     }
 
     // Clean and initialize database
-    await testPool.query(`
-      DROP TABLE IF EXISTS flowscript_schedule_occurrences CASCADE;
-      DROP TABLE IF EXISTS flowscript_step_attempts CASCADE;
-      DROP TABLE IF EXISTS flowscript_idempotency_keys CASCADE;
-      DROP TABLE IF EXISTS flowscript_triggers CASCADE;
-      DROP TABLE IF EXISTS flowscript_runs CASCADE;
-      DROP TABLE IF EXISTS flowscript_deployments CASCADE;
-      DROP TABLE IF EXISTS flowscript_versions CASCADE;
-    `)
+    if (IS_CI || /test/i.test(new URL(PG_URL).pathname)) {
+      await testPool.query(`
+        DROP TABLE IF EXISTS flowscript_schedule_occurrences CASCADE;
+        DROP TABLE IF EXISTS flowscript_step_attempts CASCADE;
+        DROP TABLE IF EXISTS flowscript_idempotency_keys CASCADE;
+        DROP TABLE IF EXISTS flowscript_triggers CASCADE;
+        DROP TABLE IF EXISTS flowscript_runs CASCADE;
+        DROP TABLE IF EXISTS flowscript_deployments CASCADE;
+        DROP TABLE IF EXISTS flowscript_versions CASCADE;
+      `)
+    } else {
+      throw new Error(
+        `[SAFETY GATE] Refusing to drop flowscript_* tables on a database whose path does not look like a test database (${new URL(PG_URL).pathname}). Set FLOWSCRIPT_POSTGRES_URL to a *test* database or set CI=true.`,
+      )
+    }
 
     setStorePool(testPool)
     await initializeStore()
@@ -85,7 +93,9 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
     }
   })
 
-  const testIfPg = () => (pgAvailable ? it : it.skip)
+  // Tests register unconditionally and skip at RUN time: pgAvailable is only known after
+  // beforeAll, so deciding at registration time made every test it.skip (see review on #666).
+  const testIfPg = () => it
 
   describe('1. Full Lifecycle: Publish -> Deploy -> Run -> Worker Execution -> Inspection', () => {
     const projA = 'project_alpha_lifecycle'
@@ -93,7 +103,8 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
     let versionId: string
     let runId: string
 
-    testIfPg()('publishes a valid FlowScript flow and verifies immutable storage', async () => {
+    testIfPg()('publishes a valid FlowScript flow and verifies immutable storage', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       const source = `flow: ${flowName}
 version: 1
 trigger:
@@ -119,7 +130,7 @@ steps:
 
       expect(res.statusCode).toBe(201)
       const data = res.json()
-      expect(data.flowName).toBe(flowName)
+      expect(data.name).toBe(flowName)
       expect(data.version).toBe(1)
       expect(data.id).toBeDefined()
       versionId = data.id
@@ -134,7 +145,8 @@ steps:
       expect(dbRes.rows[0].flow_name).toBe(flowName)
     })
 
-    testIfPg()('deploys the published version to production environment', async () => {
+    testIfPg()('deploys the published version to production environment', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       const res = await app.inject({
         method: 'POST',
         url: `/v1/flows/${flowName}/deploy`,
@@ -150,7 +162,7 @@ steps:
 
       expect(res.statusCode).toBe(200)
       const data = res.json()
-      expect(data.flow_name).toBe(flowName)
+      expect(data.flowName).toBe(flowName)
       expect(data.status).toBe('active')
 
       // Verify active deployment in Postgres
@@ -159,7 +171,8 @@ steps:
       expect(deployed!.id).toBe(versionId)
     })
 
-    testIfPg()('enqueues a manual run and verifies queued status in database', async () => {
+    testIfPg()('enqueues a manual run and verifies queued status in database', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       const res = await app.inject({
         method: 'POST',
         url: `/v1/flows/${flowName}/run`,
@@ -186,7 +199,8 @@ steps:
       expect(run!.workerId).toBeNull()
     })
 
-    testIfPg()('worker claims queued run and executes to completion with attempt logging', async () => {
+    testIfPg()('worker claims queued run and executes to completion with attempt logging', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       const workerId = 'worker-e2e-node-1'
       const job = await claimQueuedRun(workerId, 30_000)
       expect(job).not.toBeNull()
@@ -265,7 +279,8 @@ steps:
     let versionAlphaId: string
     let runAlphaId: string
 
-    testIfPg()('rejects cross-project version deployment', async () => {
+    testIfPg()('rejects cross-project version deployment', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Project Alpha publishes flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -298,7 +313,8 @@ steps:
       expect(deployRes.json().code).toBe('VERSION_NOT_FOUND')
     })
 
-    testIfPg()('prevents cross-project run inspection, listing, and cancellation', async () => {
+    testIfPg()('prevents cross-project run inspection, listing, and cancellation', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Deploy flow in Alpha and enqueue run
       await deployFlow(projAlpha, 'secure_flow', versionAlphaId, 'production')
       const runRes = await app.inject({
@@ -349,9 +365,16 @@ steps:
       })
       expect(cancelRes.statusCode).toBe(404)
       expect(cancelRes.json().code).toBe('RUN_NOT_FOUND')
+
+      // Alpha (the owner) cancels its leftover queued run so it cannot be picked up by the
+      // worker-claim test below: claimQueuedRun picks the OLDEST queued run first, and a leftover
+      // would break the single-winner assertion there. This also proves owner-side cancel works.
+      const ownerCancel = await cancelRun(projAlpha, runAlphaId, 'cleanup after isolation checks')
+      expect(ownerCancel?.status).toBe('cancelled')
     })
 
-    testIfPg()('prevents cross-project trigger listing, patching, rotating, and deleting', async () => {
+    testIfPg()('prevents cross-project trigger listing, patching, rotating, and deleting', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Create trigger in Alpha
       const trigRes = await app.inject({
         method: 'POST',
@@ -420,7 +443,8 @@ steps:
     const projWorker = 'proj_worker_concurrency'
     let workerFlowVersionId: string
 
-    testIfPg()('FOR UPDATE SKIP LOCKED ensures exactly one concurrent worker claims a queued run', async () => {
+    testIfPg()('FOR UPDATE SKIP LOCKED ensures exactly one concurrent worker claims a queued run', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Publish and deploy flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -463,7 +487,8 @@ steps:
       await finishRun(winner!.id, { status: 'succeeded', steps: [] })
     })
 
-    testIfPg()('recovers stale runs whose worker lease expired without completion', async () => {
+    testIfPg()('recovers stale runs whose worker lease expired without completion', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Enqueue run and simulate crashed worker whose lease expired in the past
       const runRes = await createRun({
         projectId: projWorker,
@@ -474,15 +499,27 @@ steps:
         triggerKind: 'manual',
       })
 
-      // Simulate lease expiration by updating lease_expires_at to the past
+      // Give the run one real prior attempt: a worker claims it (attempt_count=1),
+      // then "crashes" — its lease expires while the run is still marked running.
+      const firstClaim = await claimQueuedRun('crashed-worker-99', 30_000)
+      expect(firstClaim).not.toBeNull()
+      expect(firstClaim!.id).toBe(runRes.id)
+      expect(firstClaim!.attempt_count).toBe(1)
       await testPool!.query(
         `UPDATE flowscript_runs
-         SET status='running', worker_id='crashed-worker-99', lease_expires_at=now() - interval '10 seconds'
+         SET lease_expires_at=now() - interval '10 seconds'
          WHERE id=$1`,
         [runRes.id],
       )
 
-      // A healthy worker claims: the expired lease run must be claimed
+      // The actual recovery path: the stale-run recovery loop re-queues the expired run
+      // (this is the #657 recovery loop getting its real-Postgres coverage).
+      // baseBackoffMs 0 so the re-queued run is immediately claimable by the next worker.
+      const recovery = await recoverStaleRuns({ defaultMaxAttempts: 3, baseBackoffMs: 0 })
+      expect(recovery.recoveredCount).toBe(1)
+      expect(recovery.retried).toContain(runRes.id)
+
+      // A healthy worker then claims the re-queued run, on its second attempt
       const recovered = await claimQueuedRun('healthy-worker-01', 30_000)
       expect(recovered).not.toBeNull()
       expect(recovered!.id).toBe(runRes.id)
@@ -497,7 +534,8 @@ steps:
     const projWebhook = 'proj_webhook_e2e'
     let webhookFlowVersionId: string
 
-    testIfPg()('hashes webhook token at rest and deduplicates deliveries with idempotency key', async () => {
+    testIfPg()('hashes webhook token at rest and deduplicates deliveries with idempotency key', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Publish and deploy flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -507,7 +545,7 @@ steps:
           'x-project-signature': signProjectId(projWebhook),
         },
         body: {
-          source: 'flow: hook_flow\nversion: 1\ntrigger:\n  kind: webhook\nsteps:\n  - id: t1\n    kind: transform\n    config:\n      value: {}\n',
+          source: 'flow: hook_flow\nversion: 1\ntrigger:\n  kind: webhook\n  method: POST\n  path: /hooks/order\nsteps:\n  - id: t1\n    kind: transform\n    config:\n      value: {}\n',
         },
       })
       webhookFlowVersionId = pubRes.json().id
@@ -561,12 +599,15 @@ steps:
       expect(delivery2.headers['x-idempotent-replay']).toBe('true')
       expect(delivery2.json().runId).toBe(firstRunId)
 
-      // Verify PostgreSQL has exactly ONE run recorded for this event
-      const runRows = await testPool!.query(
-        'SELECT id FROM flowscript_runs WHERE idempotency_key=$1',
+      // Verify PostgreSQL has exactly ONE deduplication record and ONE run for this event:
+      // the idempotency key is tracked in flowscript_webhook_idempotency (not on the run row).
+      const dedupRows = await testPool!.query(
+        `SELECT r.id FROM flowscript_runs r
+         JOIN flowscript_webhook_idempotency w ON w.run_id = r.id
+         WHERE w.idempotency_key=$1`,
         [eventKey],
       )
-      expect(runRows.rowCount).toBe(1)
+      expect(dedupRows.rowCount).toBe(1)
     })
   })
 
@@ -574,7 +615,8 @@ steps:
     const projSchedule = 'proj_schedule_e2e'
     let scheduleFlowVersionId: string
 
-    testIfPg()('concurrent workers execute enqueueDueSchedule with atomic occurrence deduplication', async () => {
+    testIfPg()('concurrent workers execute enqueueDueSchedule with atomic occurrence deduplication', async (ctx) => {
+      if (!pgAvailable) return ctx.skip()
       // Publish and deploy flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -584,7 +626,7 @@ steps:
           'x-project-signature': signProjectId(projSchedule),
         },
         body: {
-          source: 'flow: cron_flow\nversion: 1\ntrigger:\n  kind: schedule\nsteps:\n  - id: t1\n    kind: transform\n    config:\n      value: {}\n',
+          source: 'flow: cron_flow\nversion: 1\ntrigger:\n  kind: schedule\n  cron: 0 0 * * *\n  timezone: UTC\nsteps:\n  - id: t1\n    kind: transform\n    config:\n      value: {}\n',
         },
       })
       scheduleFlowVersionId = pubRes.json().id
