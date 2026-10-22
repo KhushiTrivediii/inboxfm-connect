@@ -1,6 +1,6 @@
 import { assertEqual, isNil } from '@inboxfm-connect/core-utils'
 import { PiecePropertyMap, StaticPropsValue, TriggerStrategy } from '@inboxfm-connect/pieces-framework'
-import { AUTHENTICATION_PROPERTY_NAME, EngineGenericError, EventPayload, ExecuteTriggerResponse, FlowTrigger, InvalidCronExpressionError, PieceTrigger, PropertySettings, ScheduleOptions, TriggerHookType, TriggerSourceScheduleType } from '@inboxfm-connect/shared'
+import { AUTHENTICATION_PROPERTY_NAME, EngineGenericError, EventPayload, ExecuteTriggerResponse, FlowTrigger, InvalidCronExpressionError, PieceTrigger, PropertySettings, PropsValidationError, ScheduleOptions, TriggerHookType, TriggerSourceScheduleType } from '@inboxfm-connect/shared'
 import { isValidCron } from 'cron-validator'
 import { EngineConstants, ResolvedExecuteTriggerOperation } from '../handler/context/engine-constants'
 import { ExecutionContext } from '../handler/context/execution-context'
@@ -266,7 +266,7 @@ async function prepareTriggerExecution({ pieceName, pieceVersion, triggerName, i
     const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, pieceTrigger.props, piece.auth, pieceTrigger.requireAuth, propertySettings)
 
     if (Object.keys(errors).length > 0) {
-        throw new Error(JSON.stringify(errors, null, 2))
+        throw new PropsValidationError(errors)
     }
 
     return { piece, pieceTrigger, processedInput }

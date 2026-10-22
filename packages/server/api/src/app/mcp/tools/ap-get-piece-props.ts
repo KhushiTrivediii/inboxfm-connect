@@ -1,6 +1,6 @@
 import { isNil, isObject, spreadIfDefined, tryCatch } from '@inboxfm-connect/core-utils'
 import { PiecePropertyMap } from '@inboxfm-connect/pieces-framework'
-import { AppConnectionStatus, EngineResponse, EngineResponseStatus, McpToolDefinition, ProjectScopedMcpServer, WorkerJobType } from '@inboxfm-connect/shared'
+import { AppConnectionStatus, McpToolDefinition, ProjectScopedMcpServer, WorkerJobType } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { z } from 'zod'
 import { appConnectionService } from '../../app-connection/app-connection-service/app-connection-service'
@@ -153,10 +153,10 @@ async function resolvePropertyOptions({ props, componentProps, pieceName, pieceV
     const resolveOne = async ({ prop, input }: { prop: { name: string }, input: Record<string, unknown> }): Promise<PropertyResolutionResult> => {
         const engineInput: Record<string, unknown> = { ...input, ...(auth ? { auth: `{{connections['${auth}']}}` } : {}) }
         const { data: result, error } = await tryCatch(() => withTimeout({
-            promise: userInteractionWatcher.submitAndWaitForResponse<EngineResponse<{
+            promise: userInteractionWatcher.submitAndWaitForResponse<{
                 options: Array<{ label: string, value: unknown }> | PiecePropertyMap
                 disabled?: boolean
-            }>>({
+            }>({
                 jobType: WorkerJobType.EXECUTE_PROPERTY,
                 platformId,
                 projectId,
@@ -170,10 +170,10 @@ async function resolvePropertyOptions({ props, componentProps, pieceName, pieceV
             }, log),
             ms: PROPERTY_TIMEOUT_MS,
         }))
-        if (error || result.status !== EngineResponseStatus.OK || isNil(result.response?.options)) {
+        if (error || isNil(result?.options)) {
             return { status: 'failed', message: error instanceof Error ? error.message : 'Could not resolve options' }
         }
-        const { options } = result.response
+        const { options } = result
         if (isObject(options) && !Array.isArray(options)) {
             return { status: 'dynamic', props: options }
         }

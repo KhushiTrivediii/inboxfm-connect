@@ -5,7 +5,7 @@ Global Connections are app connections scoped to a platform rather than an indiv
 
 ## Key Files
 - `packages/server/api/src/app/ee/global-connections/global-connection-module.ts` — module + controller (no separate controller file; both are in the module file)
-- `packages/server/api/src/app/ee/app-connection/app-connection-service/app-connection-service.ts` — shared connection service used by global connections (with `scope: PLATFORM`)
+- `packages/server/api/src/app/app-connection/app-connection-service/app-connection-service.ts` — shared connection service used by global connections (with `scope: PLATFORM`)
 - `packages/core/shared/src/lib/` — uses existing `AppConnectionWithoutSensitiveData`, `UpsertGlobalConnectionRequestBody`, `UpdateGlobalConnectionValueRequestBody`, `ListGlobalConnectionsRequestQuery` types from shared
 
 ## Edition Availability

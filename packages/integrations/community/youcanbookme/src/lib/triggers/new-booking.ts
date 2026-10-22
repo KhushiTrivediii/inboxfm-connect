@@ -24,7 +24,7 @@ export const newBooking = createTrigger({
 4. Click into the notification you wish to have the webhook fire (After new booking made, rescheduled, cancelled, reminder, after appointment ends, etc)
 5. Click the **+** to add a new notification
 6. Click **Webhook**
-7. Enter the URL provided by Activepieces (copy from the input field below)
+7. Enter the URL provided by Inboxfm Connect (copy from the input field below)
 	\`\`\`text
 			{{webhookUrl}}
 			\`\`\`

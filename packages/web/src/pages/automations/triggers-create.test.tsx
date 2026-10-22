@@ -4,7 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import NewTriggerBindingPage from './triggers-new'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
-import { ALL_SUMMARIES, githubMetadata } from '@/test/fixtures/integrations'
+import { ALL_SUMMARIES, githubMetadata, seekPage } from '@/test/fixtures/integrations'
 import { automationConnection } from '@/test/fixtures/automations'
 
 interface RecordedRequest {
@@ -54,7 +54,7 @@ function installApi(options: { createStatus?: number } = {}): RecordedRequest[] 
     requests.push({ url: raw, method, body })
 
     if (url.pathname === '/api/v1/integrations') {
-      return json(ALL_SUMMARIES)
+      return json(seekPage(ALL_SUMMARIES))
     }
     if (url.pathname === '/api/v1/integrations/github') {
       return json(githubMetadata())

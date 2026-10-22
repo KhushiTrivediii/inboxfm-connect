@@ -42,7 +42,7 @@ function stubRoutes(): StubRoute[] {
     },
     {
       match: (url) => url.pathname === '/api/v1/integrations',
-      respond: () => ({ status: 200, body: ALL_SUMMARIES }),
+      respond: () => ({ status: 200, body: seekPage(ALL_SUMMARIES) }),
     },
     {
       match: (url) => /^\/api\/v1\/integrations\/[^/]+$/.test(url.pathname),

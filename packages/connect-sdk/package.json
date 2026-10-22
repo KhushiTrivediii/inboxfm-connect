@@ -38,10 +38,12 @@
     "typecheck": "tsc -p tsconfig.test.json",
     "generate": "tsx scripts/generate-types.ts",
     "generate:check": "tsx scripts/generate-types.ts --check",
-    "pack:verify": "npm run build && node scripts/verify-package.mjs"
+    "pack:verify": "npm run build && node scripts/verify-package.mjs",
+    "example:quickstart": "tsx --tsconfig tsconfig.test.json examples/quickstart/main.ts"
   },
   "devDependencies": {
     "@inboxfm-connect/core-utils": "workspace:*",
+    "@inboxfm-connect/pieces-framework": "workspace:*",
     "@inboxfm-connect/shared": "workspace:*",
     "@types/node": "24.11.0",
     "json-schema-to-typescript": "16.0.0",

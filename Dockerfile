@@ -30,9 +30,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 RUN export ARCH=$(uname -m) && \
     if [ "$ARCH" = "x86_64" ]; then \
-      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.1/bun-linux-x64-baseline.zip -o bun.zip; \
+      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.3/bun-linux-x64-baseline.zip -o bun.zip; \
     elif [ "$ARCH" = "aarch64" ]; then \
-      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.1/bun-linux-aarch64.zip -o bun.zip; \
+      curl -fSL https://github.com/oven-sh/bun/releases/download/bun-v1.3.3/bun-linux-aarch64.zip -o bun.zip; \
     fi
 
 RUN unzip bun.zip \
@@ -96,7 +96,7 @@ RUN --mount=type=secret,id=sentry_auth_token \
     SENTRY_RELEASE="$SENTRY_RELEASE" \
     SENTRY_ENVIRONMENT="$SENTRY_ENVIRONMENT" \
     SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" \
-    npx turbo run build --filter=web --filter=@inboxfm-connect/engine --filter=api
+    npx turbo run build --filter=@inboxfm-connect/web --filter=@inboxfm-connect/engine --filter=api
 
 # Always strip .map files from the shipped image, independent of whether the
 # upload above ran — source is never served from the runtime image (self-hosted too).

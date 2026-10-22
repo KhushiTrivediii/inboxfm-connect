@@ -64,7 +64,7 @@ export function isolateProcess(log: SandboxLogger, enginePath: string, _codeDire
                 assertMountInsideRoot(mount)
             }
 
-            const engineSandboxPath = path.join('/root/common', path.basename(enginePath))
+            const engineSandboxPath = path.posix.join('/root/common', path.basename(enginePath))
             const sandboxEnv = {
                 ...env,
                 AP_BASE_CODE_DIRECTORY: '/root/codes',
@@ -112,12 +112,23 @@ export function isolateProcess(log: SandboxLogger, enginePath: string, _codeDire
                 ...dirArgs,
                 '--share-net',
                 `--box-id=${boxId}`,
+                `--mem=${params.resourceLimits.memoryLimitMb * 1024}`,
+                ...(params.reusable ? [] : [`--time=${params.resourceLimits.timeLimitSeconds}`]),
                 '--processes',
+                // Isolate's --time is a wall-clock limit measured from process start,
+                // so for reusable sandboxes (REUSE_SANDBOX=true or DEVELOPMENT mode) it is omitted
+                // to prevent killing a healthy worker mid-execution after total aging. Reusable executions
+                // rely on the per-execution timeout in sandbox.ts, while non-reusable sandboxes receive
+                // the isolate-level --time limit above.
                 '--chdir=/root',
                 ...envArgs,
                 '--run',
                 '--',
                 process.execPath,
+                // Keep V8's own heap ceiling at or below the isolate ceiling so
+                // the allocation failure happens inside the sandbox (where we
+                // can report it) rather than as an opaque host OOM.
+                `--max-old-space-size=${params.resourceLimits.memoryLimitMb}`,
                 engineSandboxPath,
             ]
 

@@ -1,17 +1,18 @@
-## What does this PR do?
+## Problem and change
 
-<!-- We need a clear description of what the PR does, as this will be used for the marketing team to generate the release notes. -->
+Explain the problem and resulting behavior.
 
+Closes #
 
-### Explain How the Feature Works
-<!-- Adding a video demonstration is optional but encourged! It helps reviewers / marketing team understand your implementation better. -->
-<!-- [Insert the video link here] -->
+## Validation
 
-### Relevant User Scenarios
+List the commands and relevant tests you ran, plus remaining limitations. Include screenshots for UI changes.
 
-<!-- List specific use cases where this feature would be valuable. -->
-<!-- [Insert Pylon tickets or community posts here if possible] -->
+## Contributor checklist
 
-
-
-Fixes # (issue)
+- [ ] This PR targets `dev` (maintainer promotions are `dev` → `main`).
+- [ ] I checked existing issues/PRs and kept the change focused.
+- [ ] I ran `npm run lint-dev` and relevant tests.
+- [ ] I retained notices and introduced no dependencies on Enterprise implementation.
+- [ ] I included no live secrets or personal data.
+- [ ] One primary label applies: `feature`, `bug`, or `skip-changelog` (maintainers can apply it).

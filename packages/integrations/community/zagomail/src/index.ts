@@ -9,6 +9,7 @@ import { updateSubscriber } from './lib/actions/update-subscriber';
 import { searchSubscriberByEmail } from './lib/actions/search-subscriber-by-email';
 import { getSubscriberDetails } from './lib/actions/get-subscriber-details';
 import { getCampaignDetails } from './lib/actions/get-campaign-details';
+import { unsubscribeSubscriber } from './lib/actions/unsubscribe-subscriber';
 import { zagoMailApiService } from './lib/common/request';
 import { zagomailAuth } from './lib/auth';
 
@@ -27,6 +28,7 @@ export const zagomail = createPiece({
 
 		getSubscriberDetails,
 		getCampaignDetails,
+		unsubscribeSubscriber,
 	],
 	triggers: [addedSubscriber, unsubscribedSubscriber, taggedSubscriber],
 	categories: [PieceCategory.MARKETING],

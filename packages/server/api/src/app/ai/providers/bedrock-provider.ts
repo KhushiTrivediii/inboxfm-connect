@@ -11,6 +11,9 @@ import { AIProviderModel, AIProviderModelType, BedrockProviderAuthConfig, Bedroc
 import { FastifyBaseLogger } from 'fastify'
 import { AIProviderStrategy } from './ai-provider'
 
+// AWS Bedrock communicates exclusively through official @aws-sdk/client-bedrock
+// to fixed AWS-managed endpoints (bedrock.<region>.amazonaws.com). User cannot supply
+// custom hosts/URLs, so SSRF via safeHttp client does not apply here.
 export const bedrockProvider: AIProviderStrategy<
 BedrockProviderAuthConfig,
 BedrockProviderConfig

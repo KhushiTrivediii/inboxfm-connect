@@ -24,32 +24,50 @@ export const filesController: FastifyPluginAsyncZod = async (app) => {
             const fileId = (request.params as { fileId: string }).fileId
             const token = (request.query as { token: string }).token
             const principal = await verifyEnginePrincipal(token, request.log)
+            const { projectId, platform } = principal
+            // Fail closed on a malformed engine token: the ownership predicate is
+            // only sound when the principal's scope is fully resolved, so an engine
+            // token without a project/platform is a hard error, never a silent
+            // undefined scope.
+            assertNotNullOrUndefined(projectId, 'projectId')
+            assertNotNullOrUndefined(platform, 'platform')
             const fileType = parseFileTypeHeader(request.headers[fileTransportHeaders.TYPE])
             const fileName = parseStringHeader(request.headers[fileTransportHeaders.NAME])
             const contentEncoding = parseStringHeader(request.headers['content-encoding'])
             const compression = contentEncoding === 'zstd' ? FileCompression.ZSTD : FileCompression.NONE
             const contentLength = Number(request.headers['content-length'] ?? 0)
 
-            const readUrl = await filesService.constructReadUrl({
-                fileId,
-                fileType,
-                platformId: principal.platform.id,
-            })
-            void reply.header(fileTransportHeaders.READ_URL, readUrl)
-
+            // DB storage: the single claim+write happens in the route handler below,
+            // where an ownership rejection (403) reaches the client as a proper
+            // ActivepiecesError body. Nothing to do this early.
             if (!signedFileTransport.shouldRedirectForType(fileType)) {
                 return
             }
-            const file = await fileService(request.log).save({
+
+            // S3 signed-URL mode: the engine client uploads the bytes to S3 right
+            // after this redirect, so the row must be claimed before the redirect.
+            // The ownership predicate lives in the write itself (see saveEngineOwned):
+            // this claim may only create the row or rewrite a row already inside the
+            // principal's scope, so a foreign row can neither be re-owned nor leak its
+            // read URL — the claim runs before the read-URL is minted.
+            const file = await fileService(request.log).saveEngineOwned({
                 fileId,
-                projectId: principal.projectId,
-                platformId: principal.platform.id,
+                projectId,
+                platformId: platform.id,
                 type: fileType,
                 fileName,
                 compression,
                 size: contentLength,
                 data: null,
             })
+
+            const readUrl = await filesService.constructReadUrl({
+                fileId,
+                fileType,
+                platformId: platform.id,
+            })
+            void reply.header(fileTransportHeaders.READ_URL, readUrl)
+
             const redirected = await signedFileTransport.maybeRedirectToS3Put({
                 reply,
                 log: request.log,
@@ -68,6 +86,10 @@ export const filesController: FastifyPluginAsyncZod = async (app) => {
     }, async (request, reply) => {
         const { fileId } = request.params
         const principal = await verifyEnginePrincipal(request.query.token, request.log)
+        const { projectId, platform } = principal
+        // Fail closed on a malformed engine token (see the onRequest branch).
+        assertNotNullOrUndefined(projectId, 'projectId')
+        assertNotNullOrUndefined(platform, 'platform')
         const fileType = parseFileTypeHeader(request.headers[fileTransportHeaders.TYPE])
         const fileName = parseStringHeader(request.headers[fileTransportHeaders.NAME])
         const contentEncoding = parseStringHeader(request.headers['content-encoding'])
@@ -75,10 +97,10 @@ export const filesController: FastifyPluginAsyncZod = async (app) => {
 
         const data = request.body as Buffer
         assertNotNullOrUndefined(data, 'body')
-        await fileService(request.log).save({
+        const savedFile = await fileService(request.log).saveEngineOwned({
             fileId,
-            projectId: principal.projectId,
-            platformId: principal.platform.id,
+            projectId,
+            platformId: platform.id,
             type: fileType,
             fileName,
             compression,
@@ -86,10 +108,14 @@ export const filesController: FastifyPluginAsyncZod = async (app) => {
             data,
         })
         const readUrl = await filesService.constructReadUrl({
-            fileId,
+            fileId: savedFile.id,
             fileType,
-            platformId: principal.platform.id,
+            platformId: platform.id,
         })
+        // The transport contract mirrors the S3-redirect branch: the read-URL header
+        // is only minted after the ownership claim, so a rejected PUT never leaks a
+        // read capability for a row the caller does not own.
+        void reply.header(fileTransportHeaders.READ_URL, readUrl)
         return reply.status(StatusCodes.OK).send({ fileId, readUrl })
     })
 
@@ -156,6 +182,12 @@ const INLINE_SAFE_MIME_TYPES = new Set([
 
 function isInlineSafeMimeType(mimeType: string): boolean {
     return INLINE_SAFE_MIME_TYPES.has(mimeType.split(';')[0].trim().toLowerCase())
+}
+
+type AuthorizeReadParams = {
+    token: string
+    fileId: string
+    log: import('fastify').FastifyBaseLogger
 }
 
 async function authorizeRead({ token, fileId, log }: AuthorizeReadParams): Promise<string | undefined> {
@@ -229,10 +261,4 @@ function parseStringHeader(value: unknown): string | undefined {
         return value[0]
     }
     return undefined
-}
-
-type AuthorizeReadParams = {
-    token: string
-    fileId: string
-    log: import('fastify').FastifyBaseLogger
 }

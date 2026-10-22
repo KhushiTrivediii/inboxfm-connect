@@ -1,66 +1,49 @@
 ---
-sidebarTitle: "Welcome"
-title: "Welcome" 
-icon: 'hand-wave'
-description: "Your friendliest open source all-in-one automation tool, designed to be extensible."
+sidebarTitle: "Product overview"
+title: "Inboxfm Connect"
+icon: "plug"
+description: "Integration infrastructure for AI agents and SaaS products: connect customers' accounts and execute tools on their behalf."
 ---
 
+Inboxfm Connect is building a self-hostable integration layer for applications and AI agents. Your product authenticates its customers and owns their experience. Connect supplies the account connection, integration discovery, and action execution infrastructure.
 
+It is an independent fork of [Activepieces](https://github.com/activepieces/activepieces), with an inherited TypeScript integration catalog and a headless runtime. The dashboard is an operator console for integrations, connections, API keys, and MCP configuration.
+
+## The customer journey
+
+1. Your customer signs into your application.
+2. Your trusted backend creates a short-lived Connect session for that customer's `externalUserId` and allowed integrations.
+3. The customer opens the returned connection URL and authorizes their third-party account.
+4. Your backend discovers a tool and executes it using that customer's connection.
+5. Your application presents the result and handles errors, reconnect, and revocation.
+
+Keep project API keys on your backend. Derive customer identity from your authenticated session rather than accepting an arbitrary user ID from the browser. For OAuth providers, configure your own provider application, callback URL, permissions, and required approvals.
+
+## Start with the developer interface
 
 <CardGroup cols={2}>
-  <Card
-    href="/flows/building-flows"
-    title="Learn Concepts"
-    icon="shapes"
-    color="#8143E3"
-  >
-    Learn how to work with Inboxfm Connect
+  <Card href="/connect-sdk/overview" title="Connect SDK" icon="code">
+    Create connection sessions, discover tools, and execute actions from your backend. During the preview, use the documented workspace or local tarball installation path.
   </Card>
-  <Card
-    href="https://www.inboxfm-connect.com/integrations"
-    title="Pieces"
-    icon="puzzle-piece"
-    color="#8143E3"
-  >
-    Browse available pieces
+  <Card href="/connect-sdk/reference" title="SDK contracts" icon="book">
+    Review request types, methods, errors, pagination, timeouts, and retry behavior.
   </Card>
-  <Card
-    href="/install/overview"
-    title="Install"
-    icon="server"
-    color="#8143E3"
-  >
-    Learn how to install Inboxfm Connect
+  <Card href="/mcp/overview" title="Project MCP infrastructure" icon="plug">
+    Configure MCP access for project resources. Customer-scoped delegation and account isolation have a separate delivery track.
   </Card>
-    <Card
-    href="/build-pieces/building-pieces/development-setup"
-    title="Build pieces"
-    icon="code"
-    color="#8143E3"
-  >
-    How to Build Pieces and Contribute 
+  <Card href="https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/docs/PRODUCT_DIRECTION.md" title="Product direction and readiness" icon="map">
+    Read the research, current capabilities, gaps, and the acceptance milestone for the embedded integration product.
   </Card>
 </CardGroup>
 
+## Development preview
 
-# 🔥 Why Inboxfm Connect is Different:
+The repository contains Connect API keys, external-user sessions, operator-configured OAuth apps, connection infrastructure, prebuilt action execution, a TypeScript SDK implementation, and project MCP support. Public SDK availability, a verified external-customer OAuth journey, delegated per-user MCP access, and a general credential-aware API proxy are separate delivery gates.
 
-- **💖 Loved by Everyone**: Intuitive interface and great experience for both technical and non-technical users with a quick learning curve.
-  
+The source retains MIT and restricted Enterprise material. Read [LICENSING.md](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/LICENSING.md) before deployment or redistribution. Existing edition flags and passing tests do not grant extra rights. The planned Community dependency cleanup is tracked in [#25](https://github.com/Mihir-Rabari/inboxfm-connect/issues/25).
 
-![](/resources/templates.gif)
-- **🌐 Open Ecosystem:** All pieces are open source and available on npmjs.com, **60% of the pieces are contributed by the community**.
+Some inherited reference pages still describe upstream workflows or edition features. The fork's dashboard does not include the upstream visual flow builder; use the current [architecture guide](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/ARCHITECTURE.md) and [roadmap](https://github.com/Mihir-Rabari/inboxfm-connect/issues/63) when deciding what to build.
 
-- **🛠️  Pieces are written in Typescript**: Pieces are npm packages in TypeScript, offering full customization with the best developer experience, including **hot reloading** for **local** piece development on your machine. 😎
+## Contribute to the Connect milestone
 
-
-![](/resources/create-action.png)
-
-
-- **🤖 AI-Ready**: Native AI pieces and agents are built into Inboxfm Connect. Integrating AI into your flows is seamless and simple—experiment with popular providers, or quickly create custom agents using our easy-to-use AI SDK.
-
-- **🏢 Enterprise-Ready**: Developers set up the tools, and anyone in the organization can use the no-code builder. Full customization from branding to control.
-
-- **🔒 Secure by Design**: Self-hosted and network-gapped for maximum security and control over your data.
-
-- **🧠 Human in Loop**: Delay execution for a period of time or require approval. These are just pieces built on top of the piece framework, and you can build many pieces like that. 🎨
+Start with the [external-user acceptance journey](https://github.com/Mihir-Rabari/inboxfm-connect/issues/212), [SDK delivery](https://github.com/Mihir-Rabari/inboxfm-connect/issues/32), [customer-scoped MCP](https://github.com/Mihir-Rabari/inboxfm-connect/issues/214), or [API proxy design](https://github.com/Mihir-Rabari/inboxfm-connect/issues/213). Check existing work, branch from `dev`, and open your PR into `dev`. See the [contribution guide](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/CONTRIBUTING.md).

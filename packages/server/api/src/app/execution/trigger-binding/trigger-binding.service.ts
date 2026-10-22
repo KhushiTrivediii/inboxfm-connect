@@ -1,5 +1,5 @@
-import { ActivepiecesError, apId, ErrorCode, isNil, SeekPage } from '@inboxfm-connect/core-utils'
-import { scheduler } from '@inboxfm-connect/scheduler'
+import { ActivepiecesError, apId, ErrorCode, isNil, SeekPage, tryCatch } from '@inboxfm-connect/core-utils'
+import { cronParser, scheduler } from '@inboxfm-connect/scheduler'
 import { apLogger } from '@inboxfm-connect/server-utils'
 import {
     CreateTriggerBindingRequest,
@@ -16,7 +16,12 @@ import {
     UpdateTriggerBindingRequest,
     WorkerJobType,
 } from '@inboxfm-connect/shared'
+import { FastifyBaseLogger } from 'fastify'
+import { MoreThan } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
+import { getTriggerBindingTickLockKey } from '../../database/redis/keys'
+import { distributedStore } from '../../database/redis-connections'
+import { domainHelper } from '../../helper/domain-helper'
 import { userInteractionWatcher } from '../../helper/user-interaction/user-interaction-watcher'
 import { projectExecutionConcurrencyGuard } from '../concurrency/project-execution-concurrency-guard'
 import { executionService } from '../execution.service'
@@ -28,6 +33,22 @@ import { TriggerBindingEntity, TriggerBindingSchema } from './trigger-binding-en
  * the initialized one.
  */
 const triggerBindingRepo = repoFactory<TriggerBindingSchema>(TriggerBindingEntity)
+
+/**
+ * Boot-path re-registration reads enabled bindings in keyset batches
+ * (`id > cursor, take`) instead of one unbounded cross-tenant `findBy`, so a
+ * replica restart pins at most one batch in memory rather than the global
+ * enabled-row count. 500 follows the MAX_PAGE_SIZE pagination convention
+ * (see tables/record/record.service.ts).
+ */
+const RE_REGISTER_BATCH_SIZE = 500
+
+/**
+ * Sentinel primary key for the pre-scan DB reachability probe in
+ * `reRegisterEnabledSchedules`: it is longer than the 21-char `apId()`
+ * column, so it can never match a row.
+ */
+const DB_AVAILABILITY_PROBE_ID = 'boot-scan-db-availability-probe'
 
 export const triggerBindingService = {
     async create({ request, projectId, platformId }: CreateParams): Promise<TriggerBinding> {
@@ -136,6 +157,17 @@ export const triggerBindingService = {
             await executeEngineHook({ binding: saved, hookType: TriggerHookType.ON_DISABLE })
             await unsyncTriggerSchedule(saved.id)
         }
+        else if (oldStatus === TriggerBindingStatus.ENABLED && saved.status === TriggerBindingStatus.ENABLED && touchesSchedule(request)) {
+            // An update that keeps the binding enabled but changes WHEN it fires must
+            // re-register the in-memory jobs: the scheduler closures captured the cron
+            // expression at registration time, so without this a changed cron keeps
+            // firing on the old schedule, and a removed cron/renewCron keeps firing
+            // forever, until the next process restart. Validate before unsyncing so an
+            // invalid expression/timezone rejects the request with the previous schedule intact.
+            validateBindingSchedule(saved)
+            await unsyncTriggerSchedule(saved.id)
+            await syncTriggerSchedule(saved)
+        }
 
         return saved
     },
@@ -226,29 +258,196 @@ export const triggerBindingService = {
 
         await triggerBindingRepo().delete({ id, projectId, platformId })
     },
+
+    async reRegisterEnabledSchedules({ log }: { log: FastifyBaseLogger }): Promise<{ registered: number, skipped: number, total: number }> {
+        // Reachability probe before registering anything: it matches no row (the
+        // sentinel id cannot exist) and only fails when the database itself does.
+        // It preserves the single-query failure envelope of the unbatched version
+        // — a DB that is down at scan start logs the same error once and
+        // registers nothing — which a batched scan that dies mid-loop could no
+        // longer guarantee on its own.
+        try {
+            await triggerBindingRepo().findBy({ status: TriggerBindingStatus.ENABLED, id: DB_AVAILABILITY_PROBE_ID })
+        }
+        catch (error) {
+            log.error({ error }, '[triggerBindingService#reRegisterEnabledSchedules] Failed to query enabled trigger bindings from database')
+            return { registered: 0, skipped: 0, total: 0 }
+        }
+
+        // Semantics preserved from the unbatched version: every enabled binding
+        // still registers, a per-binding registration failure skips only that
+        // binding (same warn log), and a query failure logs the same error once
+        // and yields the counts so far — {0, 0, 0} when the very first batch
+        // fails, exactly like the single-query version. The keyset cursor is
+        // `id`, which registration never rewrites, so batching cannot skip or
+        // repeat a row.
+        let registered = 0
+        let skipped = 0
+        let total = 0
+        let cursor: string | null = null
+        try {
+            while (true) {
+                const bindings: TriggerBindingSchema[] = await triggerBindingRepo().find({
+                    where: {
+                        status: TriggerBindingStatus.ENABLED,
+                        ...(isNil(cursor) ? {} : { id: MoreThan(cursor) }),
+                    },
+                    order: { id: 'ASC' },
+                    take: RE_REGISTER_BATCH_SIZE,
+                })
+                for (const binding of bindings) {
+                    try {
+                        await syncTriggerSchedule(binding)
+                        registered += 1
+                    }
+                    catch (error) {
+                        log.warn({ error, binding: { id: binding.id } }, '[triggerBindingService#reRegisterEnabledSchedules] Skipping schedule that failed to register')
+                        skipped += 1
+                    }
+                }
+                total += bindings.length
+                if (bindings.length < RE_REGISTER_BATCH_SIZE) {
+                    break
+                }
+                cursor = bindings[bindings.length - 1].id
+            }
+        }
+        catch (error) {
+            log.error({ error }, '[triggerBindingService#reRegisterEnabledSchedules] Failed to query enabled trigger bindings from database')
+        }
+        return { registered, skipped, total }
+    },
+}
+
+async function claimTriggerTick(bindingId: string, cronType: 'run' | 'renew', cronExpression: string, timezone?: string): Promise<boolean> {
+    const key = getTriggerBindingTickLockKey(bindingId, cronType)
+    let ttlSeconds = 55
+    try {
+        const next = cronParser.computeNextTick({ cronExpression, timezone: timezone ?? 'UTC' })
+        const diffSeconds = Math.floor((next.getTime() - Date.now()) / 1000)
+        ttlSeconds = Math.max(1, Math.min(55, diffSeconds - 1))
+    }
+    catch {
+        ttlSeconds = 55
+    }
+    const result = await tryCatch(() => distributedStore.putIfAbsent(key, 1, ttlSeconds))
+    if (result.error === null) {
+        return result.data
+    }
+    // If Redis is temporarily down or unreachable, fail-open (return true) so
+    // scheduled executions are not dropped entirely. While this may cause redundant
+    // executions across replicas during a Redis outage, it guarantees execution liveness.
+    return true
+}
+
+// The scheduler closures registered by syncTriggerSchedule capture these values at
+// registration time; every other binding field is re-read from the database on each
+// fire, so only these require a schedule re-registration when the row changes.
+function getScheduleSettings(binding: TriggerBinding): { cronExpr: string | null, renewCron: string | null, timezone: string } {
+    const cronExpr = typeof binding.settings?.cronExpression === 'string' ? binding.settings.cronExpression : null
+    const renewCron = typeof binding.settings?.renewCronExpression === 'string' ? binding.settings.renewCronExpression : null
+    const timezone = typeof binding.settings?.timezone === 'string' ? binding.settings.timezone : 'UTC'
+    return { cronExpr, renewCron, timezone }
+}
+
+function touchesSchedule(request: UpdateTriggerBindingRequest): boolean {
+    return request.settings !== undefined
+        || request.pieceName !== undefined
+        || request.pieceVersion !== undefined
+}
+
+function isValidTimezone(timezone: string): boolean {
+    try {
+        new Intl.DateTimeFormat(undefined, { timeZone: timezone })
+        return true
+    }
+    catch {
+        return false
+    }
+}
+
+function validateBindingSchedule(binding: TriggerBinding): void {
+    const { cronExpr, renewCron, timezone } = getScheduleSettings(binding)
+    // node-cron builds an Intl.DateTimeFormat for the timezone, which throws a raw
+    // RangeError for an invalid one — surfacing as a 500 on create/update and as a
+    // silently unregistered binding on boot. Reject it with a clean VALIDATION error
+    // instead (mirrors scheduledTaskService.isValidTimezone).
+    if ((cronExpr !== null || renewCron !== null) && !isValidTimezone(timezone)) {
+        throw new ActivepiecesError({
+            code: ErrorCode.VALIDATION,
+            params: { message: `Invalid timezone: ${timezone}` },
+        })
+    }
+    for (const [field, expression] of [['cronExpression', cronExpr], ['renewCronExpression', renewCron]] as const) {
+        if (expression !== null && !cronParser.validateCronExpression(expression)) {
+            throw new ActivepiecesError({
+                code: ErrorCode.VALIDATION,
+                params: { message: `Invalid ${field} cron expression: ${expression}` },
+            })
+        }
+    }
 }
 
 async function syncTriggerSchedule(binding: TriggerBinding): Promise<void> {
-    const cronExpr = typeof binding.settings?.cronExpression === 'string' ? binding.settings.cronExpression : null
+    const { cronExpr, renewCron, timezone } = getScheduleSettings(binding)
+    validateBindingSchedule(binding)
     if (cronExpr) {
+        if (!cronParser.validateCronExpression(cronExpr)) {
+            throw new ActivepiecesError({
+                code: ErrorCode.VALIDATION,
+                params: { message: `Invalid cron expression: ${cronExpr}` },
+            })
+        }
         await scheduler.cron({
             name: `trigger-cron-${binding.id}`,
             cronExpression: cronExpr,
+            timezone,
             fn: async () => {
+                const current = await triggerBindingRepo().findOneBy({ id: binding.id })
+                if (!current || current.status !== TriggerBindingStatus.ENABLED) {
+                    await unsyncTriggerSchedule(binding.id)
+                    return
+                }
+                const isLeader = await claimTriggerTick(binding.id, 'run', cronExpr, timezone)
+                if (!isLeader) {
+                    return
+                }
                 await triggerBindingService.executeRun({ id: binding.id })
             },
         })
     }
 
-    const renewCron = typeof binding.settings?.renewCronExpression === 'string' ? binding.settings.renewCronExpression : null
     if (renewCron) {
-        await scheduler.cron({
-            name: `trigger-renew-${binding.id}`,
-            cronExpression: renewCron,
-            fn: async () => {
-                await triggerBindingService.renew({ id: binding.id, projectId: binding.projectId, platformId: binding.platformId })
-            },
-        })
+        if (!cronParser.validateCronExpression(renewCron)) {
+            await scheduler.cancel(`trigger-cron-${binding.id}`)
+            throw new ActivepiecesError({
+                code: ErrorCode.VALIDATION,
+                params: { message: `Invalid renew cron expression: ${renewCron}` },
+            })
+        }
+        try {
+            await scheduler.cron({
+                name: `trigger-renew-${binding.id}`,
+                cronExpression: renewCron,
+                timezone,
+                fn: async () => {
+                    const current = await triggerBindingRepo().findOneBy({ id: binding.id })
+                    if (!current || current.status !== TriggerBindingStatus.ENABLED) {
+                        await unsyncTriggerSchedule(binding.id)
+                        return
+                    }
+                    const isLeader = await claimTriggerTick(binding.id, 'renew', renewCron, timezone)
+                    if (!isLeader) {
+                        return
+                    }
+                    await triggerBindingService.renew({ id: binding.id, projectId: binding.projectId, platformId: binding.platformId })
+                },
+            })
+        }
+        catch (error) {
+            await scheduler.cancel(`trigger-cron-${binding.id}`)
+            throw error
+        }
     }
 }
 
@@ -259,7 +458,7 @@ async function unsyncTriggerSchedule(id: string): Promise<void> {
 
 const engineHookLog = apLogger.create({ bindings: {} })
 
-async function executeEngineHook<HT extends TriggerHookType>({ binding, hookType, triggerPayload }: ExecuteEngineHookParams<HT>): Promise<ExecuteTriggerResponse<HT>> {
+export async function executeEngineHook<HT extends TriggerHookType>({ binding, hookType, triggerPayload }: ExecuteEngineHookParams<HT>): Promise<ExecuteTriggerResponse<HT>> {
     const piece: PiecePackage = {
         pieceName: binding.pieceName,
         pieceVersion: binding.pieceVersion,
@@ -287,7 +486,9 @@ async function executeEngineHook<HT extends TriggerHookType>({ binding, hookType
             propertySettings: binding.propertySettings,
             status: binding.status,
         },
-        webhookUrl: `http://localhost:3000/v1/trigger-bindings/${binding.id}/webhook`,
+        webhookUrl: await domainHelper.getPublicApiUrl({
+            path: `v1/trigger-bindings/${binding.id}/run`,
+        }),
         triggerPayload,
         piece,
         requestId: apId(),
@@ -340,7 +541,7 @@ type ExecuteRunParams = {
     triggerPayload?: unknown
 }
 
-type ExecuteEngineHookParams<HT extends TriggerHookType> = {
+export type ExecuteEngineHookParams<HT extends TriggerHookType> = {
     binding: TriggerBinding
     hookType: HT
     triggerPayload?: unknown

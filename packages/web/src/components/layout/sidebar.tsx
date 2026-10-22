@@ -17,6 +17,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   DropdownMenu,
@@ -79,6 +80,7 @@ const navGroups: NavGroup[] = [
 ]
 
 export function Sidebar({ className }: { className?: string }) {
+  const { t } = useTranslation()
   const { user, currentProject, projects, setCurrentProject, signOut } = useAuth()
   const { setTheme, isDark } = useTheme()
 
@@ -106,14 +108,14 @@ export function Sidebar({ className }: { className?: string }) {
             <DropdownMenuTrigger className="flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-left hover:bg-muted text-foreground transition-colors outline-none cursor-pointer">
               <div className="flex flex-col truncate">
                 <span className="text-xs font-bold leading-tight truncate">
-                  {currentProject?.displayName || 'InboxFM Main Project'}
+                  {currentProject?.displayName || t('No Project')}
                 </span>
-                <span className="text-[10px] text-muted-foreground leading-tight">Developer Console</span>
+                <span className="text-[10px] text-muted-foreground leading-tight">{t('Developer Console')}</span>
               </div>
               <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0 ml-1" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuLabel className="text-xs">Projects</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs">{t('Projects')}</DropdownMenuLabel>
               {projects.map((proj) => (
                 <DropdownMenuItem
                   key={proj.id}
@@ -122,13 +124,13 @@ export function Sidebar({ className }: { className?: string }) {
                 >
                   <span className="truncate">{proj.displayName}</span>
                   {proj.id === currentProject?.id && (
-                    <span className="ml-auto text-[10px] text-primary font-semibold">Active</span>
+                    <span className="ml-auto text-[10px] text-primary font-semibold">{t('Active')}</span>
                   )}
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-xs text-muted-foreground">
-                Manage projects in Settings
+                {t('Manage projects in Settings')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -139,7 +141,7 @@ export function Sidebar({ className }: { className?: string }) {
           {navGroups.map((group) => (
             <div key={group.label} className="space-y-1">
               <h4 className="px-2 text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-wider">
-                {group.label}
+                {t(group.label)}
               </h4>
               <div className="space-y-0.5 pt-0.5">
                 {group.items.map((item) => (
@@ -157,7 +159,7 @@ export function Sidebar({ className }: { className?: string }) {
                     }
                   >
                     <item.icon className="h-4 w-4 shrink-0 stroke-[1.75]" />
-                    <span className="truncate">{item.title}</span>
+                    <span className="truncate">{t(item.title)}</span>
                     {item.badge && (
                       <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                         {item.badge}
@@ -173,20 +175,20 @@ export function Sidebar({ className }: { className?: string }) {
         {/* Footer Area: Theme Toggle & User Pill */}
         <div className="border-t border-border p-3 space-y-2">
           <div className="flex items-center justify-between px-2 py-1 text-xs text-muted-foreground">
-            <span className="text-[11px] font-medium">Theme</span>
+            <span className="text-[11px] font-medium">{t('Theme')}</span>
             <div className="flex items-center gap-1">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => setTheme(isDark ? 'light' : 'dark')}
                     className="flex h-6 w-6 items-center justify-center rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                    aria-label="Toggle theme"
+                    aria-label={t('Toggle theme')}
                   >
                     {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top">
-                  <p>{isDark ? 'Switch to light mode' : 'Switch to dark mode'}</p>
+                  <p>{isDark ? t('Switch to light mode') : t('Switch to dark mode')}</p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -201,10 +203,10 @@ export function Sidebar({ className }: { className?: string }) {
               </Avatar>
               <div className="flex flex-col truncate flex-1">
                 <span className="text-xs font-medium text-foreground truncate leading-tight">
-                  {user?.firstName ? `${user.firstName} ${user.lastName || ''}` : 'Developer'}
+                  {user?.firstName ? `${user.firstName} ${user.lastName || ''}` : t('Developer')}
                 </span>
                 <span className="text-[10px] text-muted-foreground truncate leading-tight">
-                  {user?.email || 'developer@inboxfm.local'}
+                  {user?.email || 'Not signed in'}
                 </span>
               </div>
               <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -213,15 +215,15 @@ export function Sidebar({ className }: { className?: string }) {
               <DropdownMenuLabel className="text-xs font-normal">
                 <div className="flex flex-col space-y-0.5">
                   <p className="text-xs font-semibold text-foreground">
-                    {user?.firstName ? `${user.firstName} ${user.lastName || ''}` : 'Developer'}
+                    {user?.firstName ? `${user.firstName} ${user.lastName || ''}` : t('Developer')}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">{user?.email}</p>
+                  <p className="text-[11px] text-muted-foreground">{user?.email || 'Not signed in'}</p>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={signOut} className="text-xs text-destructive cursor-pointer gap-2">
                 <LogOut className="h-3.5 w-3.5" />
-                <span>Sign out</span>
+                <span>{t('Sign out')}</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

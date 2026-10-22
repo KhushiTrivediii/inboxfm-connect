@@ -168,7 +168,7 @@ export default function ActionsPage() {
     isSearchMode
   )
 
-  const pieces = useMemo(() => integrationsQuery.data ?? [], [integrationsQuery.data])
+  const pieces = useMemo(() => integrationsQuery.data?.data ?? [], [integrationsQuery.data])
   const summariesByName = useMemo(
     () => new Map(pieces.map((piece) => [piece.name, piece])),
     [pieces]

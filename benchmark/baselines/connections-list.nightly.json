@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "scenario": "connections-list",
+  "tier": "nightly",
+  "shape": {
+    "concurrency": 4,
+    "requestsPerRound": 200,
+    "rounds": 5,
+    "workers": 0,
+    "apps": 1
+  },
+  "recordedFrom": null,
+  "metrics": {}
+}

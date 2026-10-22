@@ -1,4 +1,4 @@
-import { isNil, Nullable, PlatformUsageMetric } from '@inboxfm-connect/core-utils'
+import { formErrors, isNil, Nullable, PlatformUsageMetric } from '@inboxfm-connect/core-utils'
 import { z } from 'zod'
 import { AiCreditsAutoTopUpState, PlanName, PlatformPlanWithOnlyLimits, TeamProjectsLimit } from '../../management/platform'
 import { PiecesFilterType } from '../../management/project'
@@ -16,6 +16,12 @@ export type ProjectPlanLimits = {
 export enum ApSubscriptionStatus {
     ACTIVE = 'active',
     CANCELED = 'canceled',
+    PAST_DUE = 'past_due',
+    UNPAID = 'unpaid',
+    INCOMPLETE = 'incomplete',
+    INCOMPLETE_EXPIRED = 'incomplete_expired',
+    TRIALING = 'trialing',
+    PAUSED = 'paused',
 }
 
 export const METRIC_TO_LIMIT_MAPPING = {
@@ -27,12 +33,12 @@ export const METRIC_TO_USAGE_MAPPING = {
 } as const
 
 export const UpdateActiveFlowsAddonParamsSchema = z.object({
-    newActiveFlowsLimit: z.number(),
+    newActiveFlowsLimit: z.number().int().min(1, formErrors.activeFlowsLimitMin).max(10000, formErrors.activeFlowsLimitMax),
 })
 export type UpdateActiveFlowsAddonParams = z.infer<typeof UpdateActiveFlowsAddonParamsSchema>
 
 export const CreateCheckoutSessionParamsSchema = z.object({
-    newActiveFlowsLimit: z.number(),
+    newActiveFlowsLimit: z.number().int().min(1, formErrors.activeFlowsLimitMin).max(10000, formErrors.activeFlowsLimitMax),
 })
 export type CreateSubscriptionParams = z.infer<typeof CreateCheckoutSessionParamsSchema>
 

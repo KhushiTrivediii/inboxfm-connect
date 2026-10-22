@@ -66,6 +66,21 @@ export const ConnectionEntity = new EntitySchema<ConnectionSchema>({
             nullable: false,
             default: false,
         },
+        // Health-check bookkeeping (issue #188): when the connection was last
+        // explicitly tested, the verdict of that check, and the readable failure
+        // reason. Null until the first test runs.
+        testedAt: {
+            type: String,
+            nullable: true,
+        },
+        testedStatus: {
+            type: String,
+            nullable: true,
+        },
+        testedMessage: {
+            type: String,
+            nullable: true,
+        },
     },
     indices: [
         {

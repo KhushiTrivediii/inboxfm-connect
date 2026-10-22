@@ -21,6 +21,23 @@ export const askGpt = createAction({
             description: 'The name of your model deployment.',
             required: true,
         }),
+        model: Property.StaticDropdown({
+            displayName: 'Model',
+            description:
+                'The model behind the deployment name. Deployment names are arbitrary labels and cannot be resolved to a model with the data-plane API, so this is the only way the context guard can know the real window. Leave empty to keep the legacy conservative (2048-token) history budget.',
+            required: false,
+            options: {
+                options: [
+                    { label: 'gpt-4o', value: 'gpt-4o' },
+                    { label: 'gpt-4o-mini', value: 'gpt-4o-mini' },
+                    { label: 'gpt-4.1', value: 'gpt-4.1' },
+                    { label: 'gpt-4.1-mini', value: 'gpt-4.1-mini' },
+                    { label: 'gpt-4', value: 'gpt-4' },
+                    { label: 'gpt-35-turbo', value: 'gpt-35-turbo' },
+                    { label: 'gpt-35-turbo-16k', value: 'gpt-35-turbo-16k' },
+                ],
+            },
+        }),
         prompt: Property.LongText({
             displayName: 'Question',
             required: true,
@@ -132,21 +149,39 @@ export const askGpt = createAction({
 
         const completion = await openai.getChatCompletions(propsValue.deploymentId, [...roles, ...messageHistory], completionOptions);
 
-        const responseText = completion.choices[0].message?.content;
+        const responseText = completion.choices[0].message?.content ?? '';
 
         // Add response to message history
-        messageHistory = [...messageHistory, responseText];
+        // The stored history holds { role, content } objects; appending a bare
+        // string would corrupt the shape and be rejected by the API next turn.
+        // `content` can be undefined when the model filters the response; fall
+        // back to '' so the stored shape stays valid instead of throwing on
+        // undefined.length in the estimator next turn.
+        messageHistory = [
+            ...messageHistory,
+            { role: 'assistant', content: responseText ?? '' },
+        ];
 
         // Check message history token size
         // System limit is 32K tokens, we can probably make it bigger but this is a safe spot
-        const tokenLength = await calculateMessagesTokenSize(messageHistory, '');
+        // The roles/system messages are sent on every call ([...roles, ...messageHistory]),
+        // so they consume request context the history-only estimate never saw. Include
+        // their tokens in the budget and hand the same combined size to reduceContextSize
+        // so the reduced history actually fits alongside the system prompt.
+        // The model prop lets the guard budget against the deployment's real
+        // context window (issue #377); without it we keep the legacy
+        // conservative behavior ('' falls back to 2048).
+        const model = propsValue.model ?? '';
+        const rolesTokenLength = await calculateMessagesTokenSize(roles, model);
+        const tokenLength = await calculateMessagesTokenSize(messageHistory, model);
         if (propsValue.memoryKey) {
             // If tokens exceed 90% system limit or 90% of model limit - maxTokens, reduce history token size
-            if (exceedsHistoryLimit(tokenLength, '', propsValue.maxTokens)) {
+            if (exceedsHistoryLimit(tokenLength + rolesTokenLength, model, propsValue.maxTokens)) {
                 messageHistory = await reduceContextSize(
                     messageHistory,
-                    '',
-                    propsValue.maxTokens
+                    model,
+                    propsValue.maxTokens,
+                    rolesTokenLength
                 );
             }
             // Store history

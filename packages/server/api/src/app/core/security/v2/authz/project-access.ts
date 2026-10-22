@@ -1,4 +1,4 @@
-import { ActivepiecesError, ApId, ErrorCode, isNil, Permission, ProjectId, ProjectRole, RoleType, UserId } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, ApId, ErrorCode, isNil, Permission, ProjectId, ProjectRole, RoleType, spreadIfDefined, UserId } from '@inboxfm-connect/core-utils'
 import { DefaultProjectRole, PlatformRole, Principal, PrincipalType } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { Brackets } from 'typeorm'
@@ -60,7 +60,7 @@ export const communityProjectAccess = {
                         params: {
                             message: 'Engine is not allowed to access this project',
                             projectId,
-                            engineProjectId: principal.projectId,
+                            ...spreadIfDefined('engineProjectId', principal.projectId),
                         },
                     })
                 }

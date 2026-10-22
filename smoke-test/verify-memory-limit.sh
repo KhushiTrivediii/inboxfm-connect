@@ -1,95 +1,78 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Verifies that a flow that exhausts the sandbox memory reliably ends with flow run status
-# MEMORY_LIMIT_EXCEEDED. Expects a flow created by benchmark/setup.sh with
-# CODE_INPUT_SUM="$(cat benchmark/oom-expression.txt)" on a stack running
-# AP_EXECUTION_MODE=SANDBOX_CODE_ONLY. The expression builds ~50MB inside the 128MB v8
-# isolate (an array of refs to one big string), and the engine's outRef.copy() then
-# materializes every element separately in the ENGINE heap (~3GB) — the engine process dies
-# on the sandbox memory limit, which is how code-only engines OOM in production.
+# Sandbox memory-limit detection for the headless API. Each run sends Text Helper `concat`
+# a small request (~NUM_TEXTS one-char texts joined by a SEPARATOR_CHARS-long separator)
+# whose output is ~NUM_TEXTS * SEPARATOR_CHARS chars, far above the engine heap, so the
+# engine child dies on --max-old-space-size. The API must turn that into a clean
+# ENGINE_OPERATION_FAILURE carrying SANDBOX_MEMORY_ISSUE, and the next ordinary execute must
+# succeed on a fresh sandbox: an engine OOM must never take the app process down with it.
+#
+# Needs a stack started with a sandbox memory limit well below the output size, e.g.
+# AP_SANDBOX_MEMORY_LIMIT=262144 (256 MB) with the defaults below (~450 MB output). Keep the
+# output under V8's max string length (~536M chars) or join() throws a RangeError instead
+# of exhausting the heap.
 
-FLOW_ID="${1:?Usage: verify-memory-limit.sh <flow_id> [base_url] [num_runs]}"
-BASE_URL="${2:-localhost:8080}"
-NUM_RUNS="${3:-3}"
-RUN_TIMEOUT_SECONDS=180
+NUM_RUNS="${1:-3}"
+NUM_TEXTS="${OOM_NUM_TEXTS:-4501}"
+SEPARATOR_CHARS="${OOM_SEPARATOR_CHARS:-100000}"
 
-API="http://$BASE_URL/api/v1"
-BENCH_EMAIL="${BENCH_EMAIL:-bench@activepieces.com}"
+source "$(dirname "$0")/common.sh"
+require_bench_env
 
 echo "=== Memory Limit Exceeded Detection Test ==="
-echo "Flow ID:  $FLOW_ID"
-echo "Base URL: $BASE_URL"
+echo "Base URL: $BENCH_BASE_URL"
 echo "Runs:     $NUM_RUNS"
+echo "Output:   ~$(( (NUM_TEXTS - 1) * SEPARATOR_CHARS / 1000000 ))M chars"
 echo ""
 
-# Sign in with the fixed benchmark credentials created by benchmark/setup.sh
-SIGNIN_RESPONSE=$(curl -s "$API/authentication/sign-in" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"${BENCH_EMAIL}\",\"password\":\"BenchmarkPass1\"}")
-TOKEN=$(echo "$SIGNIN_RESPONSE" | jq -r '.token // empty')
-PROJECT_ID=$(echo "$SIGNIN_RESPONSE" | jq -r '.projectId // empty')
-
-if [ -z "$TOKEN" ] || [ -z "$PROJECT_ID" ]; then
-  echo "FAIL: could not sign in as $BENCH_EMAIL"
-  echo "$SIGNIN_RESPONSE"
-  exit 1
-fi
-AUTH="Authorization: Bearer $TOKEN"
-
-list_runs() {
-  curl -s --max-time 30 "$API/flow-runs?projectId=$PROJECT_ID&flowId=$FLOW_ID&limit=$((NUM_RUNS + 5))" -H "$AUTH"
-}
-
-count_runs() {
-  list_runs | jq '.data | length'
-}
-
-latest_run_status() {
-  list_runs | jq -r '.data[0].status // empty'
-}
+OOM_BODY=$(mktemp)
+trap 'rm -f "$OOM_BODY"' EXIT
+jq -n \
+  --arg projectId "$BENCH_PROJECT_ID" \
+  --arg connectionId "$BENCH_CONNECTION_ID" \
+  --argjson numTexts "$NUM_TEXTS" \
+  --argjson separatorChars "$SEPARATOR_CHARS" \
+  '{projectId: $projectId, integration: "@inboxfm-connect/piece-text-helper", tool: "concat", connectionId: $connectionId, input: {texts: [range($numTexts) | "a"], separator: ("x" * $separatorChars)}}' \
+  > "$OOM_BODY"
 
 PASS=0
 FAIL=0
-BASELINE_COUNT=$(count_runs)
-echo "Existing runs before test: $BASELINE_COUNT"
-echo ""
 
 for i in $(seq 1 "$NUM_RUNS"); do
   echo "--- Run $i/$NUM_RUNS ---"
-  EXPECTED_COUNT=$((BASELINE_COUNT + i))
 
-  HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+  RESPONSE=$(curl -s -w '\n%{http_code}' --max-time 180 \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"test":true}' \
-    "http://$BASE_URL/api/v1/webhooks/$FLOW_ID")
-  echo "  Webhook fired (HTTP $HTTP_CODE)"
+    -H "Authorization: Bearer $BENCH_API_KEY" \
+    --data-binary "@$OOM_BODY" \
+    "$BENCH_BASE_URL/v1/execute")
+  BODY=$(echo "$RESPONSE" | sed '$d')
+  STATUS=$(echo "$RESPONSE" | tail -n 1)
 
-  STATUS=""
-  for _ in $(seq 1 "$RUN_TIMEOUT_SECONDS"); do
-    CURRENT_COUNT=$(count_runs)
-    if [ "$CURRENT_COUNT" -ge "$EXPECTED_COUNT" ]; then
-      STATUS=$(latest_run_status)
-      case "$STATUS" in
-        RUNNING|QUEUED|PAUSED|"") ;;
-        *) break ;;
-      esac
-    fi
-    sleep 1
-  done
-
-  if [ "$STATUS" = "MEMORY_LIMIT_EXCEEDED" ]; then
-    echo "  PASS: run ended with status MEMORY_LIMIT_EXCEEDED"
+  if [ "$STATUS" != "200" ] && echo "$BODY" | jq -e '.code == "ENGINE_OPERATION_FAILURE" and (.params.message | tostring | contains("SANDBOX_MEMORY_ISSUE"))' > /dev/null 2>&1; then
+    echo "  PASS: HTTP $STATUS with SANDBOX_MEMORY_ISSUE"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: run ended with status '${STATUS:-<never finished>}' (expected MEMORY_LIMIT_EXCEEDED)"
+    echo "  FAIL: HTTP $STATUS, body=$(echo "$BODY" | head -c 500) (expected ENGINE_OPERATION_FAILURE / SANDBOX_MEMORY_ISSUE)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  RECOVERY=$(execute_concat "[\"recovered\",\"$i\"]" "-")
+  RECOVERY_BODY=$(echo "$RECOVERY" | sed '$d')
+  RECOVERY_STATUS=$(echo "$RECOVERY" | tail -n 1)
+  if [ "$RECOVERY_STATUS" = "200" ] && [ "$RECOVERY_BODY" = "\"recovered-$i\"" ]; then
+    echo "  PASS: next execute succeeded on a fresh sandbox"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: next execute returned HTTP $RECOVERY_STATUS, body=$RECOVERY_BODY"
     FAIL=$((FAIL + 1))
   fi
   echo ""
 done
 
-echo "=== Results: $PASS passed, $FAIL failed out of $NUM_RUNS ==="
+echo "=== Results: $PASS passed, $FAIL failed ==="
 
 if [ "$FAIL" -gt 0 ]; then
   exit 1

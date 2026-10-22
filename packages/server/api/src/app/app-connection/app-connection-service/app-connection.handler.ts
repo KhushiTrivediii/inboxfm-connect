@@ -1,6 +1,7 @@
-import { isNil, PlatformId, ProjectId } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, ErrorCode, isNil, PlatformId, ProjectId } from '@inboxfm-connect/core-utils'
 import { PropertyType } from '@inboxfm-connect/pieces-framework'
-import { AppConnection, AppConnectionStatus, AppConnectionType, AppConnectionValue, EngineResponse, EngineResponseStatus, ExecuteRefreshTokenAuthResponse, WorkerJobType } from '@inboxfm-connect/shared'
+import { AppConnection, AppConnectionStatus, AppConnectionType, AppConnectionValue, EngineResponseStatus, ExecuteRefreshTokenAuthResponse, WorkerJobType } from '@inboxfm-connect/shared'
+import { isAxiosError } from 'axios'
 import dayjs from 'dayjs'
 import { FastifyBaseLogger } from 'fastify'
 import { lru, LRU } from 'tiny-lru'
@@ -49,20 +50,23 @@ export const appConnectionHandler = (_log: FastifyBaseLogger) => ({
                     pieceVersion: connection.pieceVersion,
                 })
                 log.info({ pieceName: connection.pieceName, externalId: connection.externalId }, '[custom-auth-refresh] submitting token refresh job')
-                const engineResponse = await userInteractionWatcher.submitAndWaitForResponse<EngineResponse<ExecuteRefreshTokenAuthResponse>>({
-                    piece,
-                    platformId: connection.platformId,
-                    auth: connection.value,
-                    jobType: WorkerJobType.EXECUTE_TOKEN_REFRESH,
-                }, log)
-                if (engineResponse.status === EngineResponseStatus.TIMEOUT) {
-                    log.warn({ pieceName: connection.pieceName }, '[custom-auth-refresh] token refresh timed out — using existing credentials')
-                    return connection
+                let refreshResult: ExecuteRefreshTokenAuthResponse
+                try {
+                    refreshResult = await userInteractionWatcher.submitAndWaitForResponse<ExecuteRefreshTokenAuthResponse>({
+                        piece,
+                        projectId,
+                        platformId: connection.platformId,
+                        auth: connection.value,
+                        jobType: WorkerJobType.EXECUTE_TOKEN_REFRESH,
+                    }, log)
                 }
-                if (engineResponse.status !== EngineResponseStatus.OK) {
-                    throw new CustomAuthRefreshError(`Custom auth token refresh failed: ${engineResponse.error ?? 'unknown engine error'}`)
+                catch (err) {
+                    if (err instanceof ActivepiecesError && err.error.code === ErrorCode.ENGINE_OPERATION_FAILURE && err.error.params.status === EngineResponseStatus.TIMEOUT) {
+                        log.warn({ pieceName: connection.pieceName }, '[custom-auth-refresh] token refresh timed out — using existing credentials')
+                        return connection
+                    }
+                    throw new CustomAuthRefreshError(`Custom auth token refresh failed: ${err instanceof Error ? err.message : 'unknown engine error'}`)
                 }
-                const refreshResult = engineResponse.response
                 if (refreshResult.skipped) {
                     // Piece no longer has onRefreshToken (e.g. piece was updated) — clear
                     // the token so the next needRefresh call re-checks piece metadata.
@@ -158,6 +162,113 @@ export const appConnectionHandler = (_log: FastifyBaseLogger) => ({
         }
         return connection
     },
+    /**
+     * Health check for POST /v1/app-connections/:id/test (issue #188). Unlike
+     * lockAndRefreshConnection, which is best-effort and swallows refresh errors so
+     * executions keep running, this reports an explicit verdict: it only claims a
+     * connection is healthy when the credentials decrypt and a needed refresh actually
+     * succeeded. The lock key matches lockAndRefreshConnection's, so a health check and
+     * a concurrent execution-triggered refresh serialize instead of racing.
+     */
+    async lockAndTestConnection({
+        platformId,
+        projectId,
+        externalId,
+        log,
+    }: {
+        platformId: PlatformId
+        projectId: ProjectId
+        externalId: string
+        log: FastifyBaseLogger
+    }): Promise<TestConnectionOutcome> {
+        return distributedLock(log).runExclusive({
+            key: `${platformId}_${externalId}`,
+            timeoutInSeconds: 60,
+            fn: async (): Promise<TestConnectionOutcome> => {
+                const encryptedAppConnection = await appConnectionsRepo().findOneBy({
+                    projectIds: ArrayContains([projectId]),
+                    externalId,
+                })
+                if (isNil(encryptedAppConnection)) {
+                    return {
+                        ok: false,
+                        markRowError: false,
+                        message: 'The connection could not be found. Refresh the page and try again.',
+                    }
+                }
+
+                let appConnection: AppConnection
+                try {
+                    appConnection = await this.decryptConnection(encryptedAppConnection)
+                }
+                catch (e) {
+                    exceptionHandler.handle(e, log)
+                    return {
+                        ok: false,
+                        markRowError: true,
+                        message: 'The stored credentials could not be decrypted. Reconnect the app to fix this connection.',
+                    }
+                }
+
+                // A health check is an explicit, user-triggered verification, so it must not
+                // trust the stored ERROR short-circuit in needRefresh (which exists so flow
+                // executions stop hammering a known-bad token). Overriding the status makes a
+                // stale token on an ERROR row get a real refresh attempt — the connection can
+                // still be revived — instead of rubber-stamping the previous verdict.
+                let needsRefresh: boolean
+                try {
+                    needsRefresh = await this.needRefresh({ ...appConnection, status: AppConnectionStatus.ACTIVE }, log)
+                }
+                catch (e) {
+                    exceptionHandler.handle(e, log)
+                    return {
+                        ok: false,
+                        markRowError: false,
+                        message: 'The app for this connection could not be loaded, so the check could not run. Verify the app is installed.',
+                    }
+                }
+
+                if (!needsRefresh) {
+                    if (appConnection.status === AppConnectionStatus.ACTIVE) {
+                        // Nothing refreshable to verify (api keys, basic auth, valid oauth
+                        // tokens) — the value decrypting is the check that ran.
+                        return { ok: true, markRowError: false }
+                    }
+                    return {
+                        ok: false,
+                        markRowError: appConnection.status === AppConnectionStatus.ERROR,
+                        message: appConnection.status === AppConnectionStatus.MISSING
+                            ? 'The connection has no credentials yet. Connect the app first.'
+                            : 'The connection failed a previous check and has nothing refreshable to verify. Reconnect the app.',
+                    }
+                }
+
+                try {
+                    const refreshedAppConnection = await this.refresh(appConnection, projectId, log)
+                    await appConnectionsRepo().update(refreshedAppConnection.id, {
+                        status: AppConnectionStatus.ACTIVE,
+                        value: await encryptUtils.encryptObject(refreshedAppConnection.value),
+                    })
+                    return { ok: true, markRowError: false }
+                }
+                catch (e) {
+                    exceptionHandler.handle(e, log)
+                    const isDefiniteFailure = oauth2Util(log).isUserError(e) || e instanceof CustomAuthRefreshError
+                    if (isDefiniteFailure) {
+                        await appConnectionsRepo().update(appConnection.id, {
+                            status: AppConnectionStatus.ERROR,
+                            updated: dayjs().toISOString(),
+                        })
+                    }
+                    return {
+                        ok: false,
+                        markRowError: isDefiniteFailure,
+                        message: formatRefreshFailureMessage({ e, log }),
+                    }
+                }
+            },
+        })
+    },
     async needRefresh(connection: AppConnection, log: FastifyBaseLogger): Promise<boolean> {
         if (connection.status === AppConnectionStatus.ERROR) {
             return false
@@ -227,5 +338,37 @@ class CustomAuthRefreshError extends Error {
         super(message)
         this.name = 'CustomAuthRefreshError'
     }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null
+}
+
+// Turns a refresh failure into one readable sentence for the health-check response.
+// Provider responses are external input: only the short `error`/`error_description`
+// strings are surfaced, never raw payloads.
+function formatRefreshFailureMessage({ e, log }: { e: unknown, log: FastifyBaseLogger }): string {
+    if (isAxiosError(e)) {
+        const data: unknown = e.response?.data
+        const providerError = isRecord(data) ? data : {}
+        const error = typeof providerError.error === 'string' ? providerError.error : undefined
+        const errorDescription = typeof providerError.error_description === 'string' ? providerError.error_description : undefined
+        if (oauth2Util(log).isUserError(e)) {
+            return `The app rejected the stored credentials${errorDescription ? `: ${errorDescription}` : ` (error: ${error})`}. Reconnect the app to fix this connection.`
+        }
+        return `The app could not be reached to verify the connection${error ? ` (error: ${error})` : ''}. Try again in a moment.`
+    }
+    if (e instanceof CustomAuthRefreshError) {
+        return 'The app could not refresh the custom auth token. Reconnect the app to fix this connection.'
+    }
+    return 'The connection could not be verified. Try again in a moment.'
+}
+
+export type TestConnectionOutcome = {
+    ok: boolean
+    // Whether the row's `status` should be flipped to ERROR — only definite failures
+    // (the app rejected the credentials); transient errors leave executions retrying.
+    markRowError: boolean
+    message?: string
 }
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TriggerBindingDetailPage from './triggers-detail'
 import EditTriggerBindingPage from './triggers-edit'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
-import { ALL_SUMMARIES, githubMetadata } from '@/test/fixtures/integrations'
+import { ALL_SUMMARIES, githubMetadata, seekPage } from '@/test/fixtures/integrations'
 import { automationConnection, githubTriggerBinding } from '@/test/fixtures/automations'
 import { Execution, TriggerBinding } from '@/lib/api/types'
 
@@ -77,7 +77,7 @@ function installApi(options: {
       return json(binding)
     }
     if (url.pathname === '/api/v1/integrations') {
-      return json(ALL_SUMMARIES)
+      return json(seekPage(ALL_SUMMARIES))
     }
     if (url.pathname === '/api/v1/integrations/github') {
       return json(githubMetadata())

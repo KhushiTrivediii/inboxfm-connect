@@ -50,7 +50,7 @@ async function installPieces(rootWorkspace: string, pieces: PiecePackage[], incl
         log.error({
             rootWorkspace,
             invalidPieces: invalidPieces.map(piece => `${piece.pieceName}@${piece.pieceVersion}`),
-        }, '[pieceInstaller] Skipping pieces with invalid package names to protect the shared lockfile')
+        }, '[pieceInstaller] Skipping pieces with invalid package names or versions to protect the shared lockfile')
     }
     const { piecesToInstall } = await partitionPiecesToInstall(rootWorkspace, validPieces)
 
@@ -147,10 +147,24 @@ export function isValidPackageName(name: string): boolean {
     return VALID_SCOPED_NAME_REGEX.test(name) || VALID_UNSCOPED_NAME_REGEX.test(name)
 }
 
+// The version is the other half of the on-disk piece folder (`<workspace>/pieces/<name>-<version>`):
+// path.join normalizes `/` and `..` segments in it exactly like it does for the name, so a version
+// such as `1.0.0/../../..` escapes the workspace the same way. Upstream the version arrives as a
+// plain z.string() (PiecePackage, CreateTriggerBindingRequest), and the trigger-hook path builds the
+// package straight from the binding row — bypassing pieceCache's exact-version gate — so this must be
+// enforced here, at the same boundary the name already is.
+export function isValidPieceVersion(version: string): boolean {
+    return !version.includes('..') && /^[^/\\]+$/.test(version)
+}
+
+function isValidPiecePackage(piece: PiecePackage): boolean {
+    return isValidPackageName(piece.pieceName) && isValidPieceVersion(piece.pieceVersion)
+}
+
 function partitionValidPieceNames(pieces: PiecePackage[]): { validPieces: PiecePackage[], invalidPieces: PiecePackage[] } {
     return {
-        validPieces: pieces.filter(piece => isValidPackageName(piece.pieceName)),
-        invalidPieces: pieces.filter(piece => !isValidPackageName(piece.pieceName)),
+        validPieces: pieces.filter(isValidPiecePackage),
+        invalidPieces: pieces.filter((piece) => !isValidPiecePackage(piece)),
     }
 }
 

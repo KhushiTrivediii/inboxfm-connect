@@ -1,11 +1,12 @@
-import { ActivepiecesError, ErrorCode, isNil, LocalesEnum } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, ErrorCode, isNil, LocalesEnum, SeekPage } from '@inboxfm-connect/core-utils'
 import { PieceMetadataModel, PieceMetadataModelSummary } from '@inboxfm-connect/pieces-framework'
-import { ALL_PRINCIPAL_TYPES, EngineResponse, GetPieceRequestParams, GetPieceRequestQuery, GetPieceRequestWithScopeParams, ListPiecesRequestQuery, PieceCategory, PieceOptionRequest, Principal, PrincipalType, RegistryPiecesRequestQuery, WorkerJobType } from '@inboxfm-connect/shared'
+import { ALL_PRINCIPAL_TYPES, GetPieceRequestParams, GetPieceRequestQuery, GetPieceRequestWithScopeParams, ListPiecesRequestQuery, PieceCategory, PieceOptionRequest, Principal, PrincipalType, RegistryPiecesRequestQuery, WorkerJobType } from '@inboxfm-connect/shared'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
 import { z } from 'zod'
 import { ProjectResourceType } from '../../core/security/authorization/common'
 import { securityAccess } from '../../core/security/authorization/fastify-security'
+import { paginationHelper } from '../../helper/pagination/pagination-utils'
 import { userInteractionWatcher } from '../../helper/user-interaction/user-interaction-watcher'
 import { pieceSyncService } from '../piece-sync-service'
 import { getPiecePackageWithoutArchive, pieceMetadataService } from './piece-metadata-service'
@@ -24,7 +25,7 @@ const basePiecesController: FastifyPluginAsyncZod = async (app) => {
         },
     )
 
-    app.get('/', ListPiecesRequest, async (req): Promise<PieceMetadataModelSummary[]> => {
+    app.get('/', ListPiecesRequest, async (req): Promise<SeekPage<PieceMetadataModelSummary>> => {
         const query = req.query
 
         const oldSyncCall = !isNil(query.release)
@@ -52,12 +53,13 @@ const basePiecesController: FastifyPluginAsyncZod = async (app) => {
             suggestionType: query.suggestionType,
             locale: query.locale as LocalesEnum | undefined,
         })
-        return pieceMetadataSummary.map((piece) => {
+        const mappedPieces = pieceMetadataSummary.map((piece) => {
             return {
                 ...piece,
                 i18n: undefined,
             }
         })
+        return paginatePieces(mappedPieces, query.cursor, query.limit, query)
     })
 
     app.get(
@@ -120,7 +122,7 @@ const basePiecesController: FastifyPluginAsyncZod = async (app) => {
         async (req) => {
             const projectId = req.projectId
             const platform = req.principal.platform
-            const { response } = await userInteractionWatcher.submitAndWaitForResponse<EngineResponse<unknown>>({
+            return userInteractionWatcher.submitAndWaitForResponse<unknown>({
                 jobType: WorkerJobType.EXECUTE_PROPERTY,
                 platformId: platform.id,
                 projectId,
@@ -131,10 +133,172 @@ const basePiecesController: FastifyPluginAsyncZod = async (app) => {
                 searchValue: req.body.searchValue,
                 piece: await getPiecePackageWithoutArchive(req.log, platform.id, req.body),
             }, req.log)
-            return response
         },
     )
 
+}
+
+const DEFAULT_PAGE_SIZE = 20
+
+type PieceCursorPayload = {
+    name: string
+    index: number
+    queryHash?: string
+}
+
+function normalizeBooleanFlag(val: unknown): boolean {
+    return val === true || val === 'true'
+}
+
+function computeQueryFingerprint(query?: Record<string, unknown>): string {
+    if (!query) {
+        return ''
+    }
+    const relevantKeys = [
+        'searchQuery',
+        'sortBy',
+        'orderBy',
+        'suggestionType',
+        'categories',
+        'edition',
+        'locale',
+        'projectId',
+    ]
+    const normalized: Record<string, unknown> = {
+        includeHidden: normalizeBooleanFlag(query.includeHidden),
+        includeTags: normalizeBooleanFlag(query.includeTags),
+    }
+    for (const key of relevantKeys.sort()) {
+        const val = query[key]
+        if (val !== undefined && val !== null && val !== '') {
+            normalized[key] = Array.isArray(val) ? [...val].sort() : val
+        }
+    }
+    return Buffer.from(JSON.stringify(normalized)).toString('base64')
+}
+
+function encodePieceCursor(payload: PieceCursorPayload): string {
+    return Buffer.from(JSON.stringify(payload)).toString('base64')
+}
+
+function decodePieceCursor(cursorStr: string): PieceCursorPayload | null {
+    try {
+        const decoded = Buffer.from(cursorStr, 'base64').toString('utf8')
+        const parsed = JSON.parse(decoded)
+        if (typeof parsed !== 'object' || parsed === null || typeof parsed.name !== 'string' || typeof parsed.index !== 'number') {
+            return null
+        }
+        return parsed as PieceCursorPayload
+    }
+    catch {
+        return null
+    }
+}
+
+function paginatePieces(
+    pieces: PieceMetadataModelSummary[],
+    cursorRequest?: string,
+    limitRequest?: number,
+    activeQuery?: Record<string, unknown>,
+): SeekPage<PieceMetadataModelSummary> {
+    if (limitRequest === undefined && cursorRequest === undefined) {
+        return paginationHelper.createPage(pieces, { afterCursor: null, beforeCursor: null })
+    }
+
+    const rawLimit = limitRequest ?? DEFAULT_PAGE_SIZE
+    const limit = Math.max(1, Math.min(Math.floor(rawLimit) || DEFAULT_PAGE_SIZE, 500))
+    const currentQueryHash = computeQueryFingerprint(activeQuery)
+    const decodedCursor = paginationHelper.decodeCursor(cursorRequest)
+
+    let startIndex = 0
+    let endIndex = pieces.length
+
+    if (decodedCursor.nextCursor) {
+        const payload = decodePieceCursor(decodedCursor.nextCursor)
+        if (payload) {
+            // Stale cursor query check
+            if (payload.queryHash && payload.queryHash !== currentQueryHash) {
+                // Restart at first page
+                startIndex = 0
+                endIndex = Math.min(limit, pieces.length)
+            }
+            else {
+                let foundIdx = -1
+                if (payload.index >= 0 && payload.index < pieces.length && pieces[payload.index].name === payload.name) {
+                    foundIdx = payload.index
+                }
+                else {
+                    foundIdx = pieces.findIndex((p) => p.name === payload.name)
+                }
+                if (foundIdx !== -1) {
+                    startIndex = foundIdx + 1
+                    startIndex = Math.max(0, Math.min(startIndex, pieces.length))
+                    endIndex = Math.min(startIndex + limit, pieces.length)
+                }
+                else {
+                    // Anchor piece not found in list -> fallback to first page
+                    startIndex = 0
+                    endIndex = Math.min(limit, pieces.length)
+                }
+            }
+        }
+        else {
+            // Malformed next cursor -> fallback to first page
+            startIndex = 0
+            endIndex = Math.min(limit, pieces.length)
+        }
+    }
+    else if (decodedCursor.previousCursor) {
+        const payload = decodePieceCursor(decodedCursor.previousCursor)
+        if (payload) {
+            // Stale cursor query check
+            if (payload.queryHash && payload.queryHash !== currentQueryHash) {
+                // Restart at first page
+                startIndex = 0
+                endIndex = Math.min(limit, pieces.length)
+            }
+            else {
+                let foundIdx = -1
+                if (payload.index >= 0 && payload.index < pieces.length && pieces[payload.index].name === payload.name) {
+                    foundIdx = payload.index
+                }
+                else {
+                    foundIdx = pieces.findIndex((p) => p.name === payload.name)
+                }
+                if (foundIdx !== -1) {
+                    endIndex = foundIdx
+                    startIndex = Math.max(0, endIndex - limit)
+                }
+                else {
+                    // Anchor piece not found in list -> fallback to first page
+                    startIndex = 0
+                    endIndex = Math.min(limit, pieces.length)
+                }
+            }
+        }
+        else {
+            // Malformed previous cursor -> fallback to first page
+            startIndex = 0
+            endIndex = Math.min(limit, pieces.length)
+        }
+    }
+    else {
+        startIndex = 0
+        endIndex = Math.min(limit, pieces.length)
+    }
+
+    const data = pieces.slice(startIndex, endIndex)
+    const hasMore = endIndex < pieces.length
+    const hasPrevious = startIndex > 0
+
+    const afterCursor = (data.length > 0 && hasMore)
+        ? encodePieceCursor({ name: data[data.length - 1].name, index: startIndex + data.length - 1, queryHash: currentQueryHash })
+        : null
+    const beforeCursor = (data.length > 0 && hasPrevious)
+        ? encodePieceCursor({ name: data[0].name, index: startIndex, queryHash: currentQueryHash })
+        : null
+
+    return paginationHelper.createPage(data, { afterCursor, beforeCursor })
 }
 
 function getPlatformId(principal: Principal): string | undefined {
@@ -217,3 +381,12 @@ const DeletePieceRequest = {
         }),
     },
 }
+
+export const pieceMetadataTesting = {
+    computeQueryFingerprint,
+    paginatePieces,
+    decodePieceCursor,
+    encodePieceCursor,
+    normalizeBooleanFlag,
+}
+

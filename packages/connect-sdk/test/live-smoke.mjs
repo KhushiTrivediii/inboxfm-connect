@@ -15,6 +15,9 @@ assert(session.token && session.connectUrl, 'Connect session response is incompl
 const connections = await client.listConnections({ externalUserId })
 assert(Array.isArray(connections.data), 'Connection list response is incomplete')
 
+const tools = await client.listTools({ integration: '@inboxfm-connect/piece-text-helper' })
+assert(tools.some((tool) => tool.name === 'concat'), 'Text Helper tool list does not include concat')
+
 const execution = await client.execute({
     integration: '@inboxfm-connect/piece-text-helper',
     tool: 'concat',
@@ -22,4 +25,4 @@ const execution = await client.execute({
     input: { texts: ['smoke', 'ready'], separator: '-' },
 })
 assert.equal(execution, 'smoke-ready')
-console.log('Packed SDK passed authenticated Connect session, list, and Text Helper execution against the configured server')
+console.log('Packed SDK passed authenticated Connect session, connection list, tool list, and Text Helper execution against the configured server')

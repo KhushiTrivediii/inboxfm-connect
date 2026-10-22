@@ -172,6 +172,44 @@ afterAll(async () => {
         })
     })
 
+    describeWithAuth('POST /v1/tables/:id/duplicate (Duplicate)', () => app!, (setup) => {
+        it('should duplicate table with default copy name and schema', async () => {
+            const ctx = await setup()
+            const table = await createAndSaveTable(ctx)
+
+            const response = await ctx.post(`/v1/tables/${table.id}/duplicate`, {})
+
+            expect(response?.statusCode).toBe(StatusCodes.CREATED)
+            const body = response?.json()
+            expect(body.id).not.toBe(table.id)
+            expect(body.externalId).not.toBe(table.externalId)
+            expect(body.name).toBe(`${table.name} (Copy)`)
+            expect(body.projectId).toBe(ctx.project.id)
+        })
+
+        it('should duplicate table with custom name', async () => {
+            const ctx = await setup()
+            const table = await createAndSaveTable(ctx)
+
+            const response = await ctx.post(`/v1/tables/${table.id}/duplicate`, {
+                name: 'Custom Cloned Table',
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.CREATED)
+            const body = response?.json()
+            expect(body.name).toBe('Custom Cloned Table')
+        })
+
+        it('should return 404 for non-existent table', async () => {
+            const ctx = await setup()
+
+            const response = await ctx.post(`/v1/tables/${apId()}/duplicate`, {})
+
+            expect(response?.statusCode).toBe(StatusCodes.NOT_FOUND)
+        })
+    })
+
+
     describeWithAuth('GET /v1/tables (List)', () => app!, (setup) => {
         it('should list tables for project', async () => {
             const ctx = await setup()

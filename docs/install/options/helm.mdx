@@ -26,7 +26,7 @@ postgresql:
   port: 5432
   useSSL: true  # Enable SSL if required
   auth:
-    database: "activepieces"
+    database: "inboxfm-connect"
     username: "postgres"
     password: "your-password"
     # Or use external secret reference:
@@ -99,25 +99,25 @@ redis:
 
 ```bash
 git clone https://github.com/Mihir-Rabari/inboxfm-connect.git
-cd activepieces
+cd inboxfm-connect
 ```
 
 ### 2. Install Dependencies
 
 ```bash
-helm dependency update
+helm dependency update deploy/inboxfm-connect-helm
 ```
 
 ### 3. Create a Values File
 
-Create a `my-values.yaml` file with your configuration. You can use the [example values file](https://github.com/Mihir-Rabari/inboxfm-connect/blob/main/deploy/activepieces-helm/values.yaml) as a reference.
+Create a `my-values.yaml` file with your configuration. You can use the [example values file](https://github.com/Mihir-Rabari/inboxfm-connect/blob/main/deploy/inboxfm-connect-helm/values.yaml) as a reference.
 The Helm chart has sensible defaults for required values while leaving the optional ones empty, but you should customize these core values for production
 
 
 ### 4. Install Inboxfm Connect
 
 ```bash
-helm install activepieces deploy/activepieces-helm -f my-values.yaml
+helm install inboxfm-connect deploy/inboxfm-connect-helm -f my-values.yaml
 ```
 
 ### 5. Verify Installation
@@ -144,20 +144,22 @@ kubectl get services
 
 ```bash
 # Update dependencies
-helm dependency update
+helm dependency update deploy/inboxfm-connect-helm
 
 # Upgrade release
-helm upgrade activepieces deploy/activepieces-helm -f my-values.yaml
+helm upgrade inboxfm-connect deploy/inboxfm-connect-helm -f my-values.yaml
 
-# Check upgrade status
-kubectl rollout status deployment/activepieces
+# Check upgrade status (default Argo Rollout)
+kubectl argo rollouts status rollout/inboxfm-connect
+# Or if workloadType is set to statefulset:
+# kubectl rollout status statefulset/inboxfm-connect
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Pod won't start**: Check logs with `kubectl logs deployment/activepieces`
+1. **Pod won't start**: Check logs with `kubectl logs -l app.kubernetes.io/name=inboxfm-connect`
 2. **Database connection**: Verify PostgreSQL credentials and connectivity
 3. **Frontend URL**: Ensure `frontendUrl` is accessible from external sources
 4. **Webhooks not working**: Check ingress configuration and DNS resolution
@@ -166,10 +168,10 @@ kubectl rollout status deployment/activepieces
 
 ```bash
 # View logs
-kubectl logs deployment/activepieces -f
+kubectl logs -l app.kubernetes.io/name=inboxfm-connect -f
 
 # Port forward for testing
-kubectl port-forward svc/activepieces 4200:80 --namespace default
+kubectl port-forward svc/inboxfm-connect 4200:80 --namespace default
 
 # Get all resources
 kubectl get all --namespace default
@@ -186,15 +188,15 @@ Inboxfm Connect supports three editions:
 Set the edition in your values file:
 
 ```yaml
-activepieces:
-  edition: "ce"  # or "ee" for Enterprise Edition
+inboxfmConnectConfig:
+  AP_EDITION: "ce"  # or "ee" for Enterprise Edition
 ```
 
 For Enterprise Edition features and licensing, visit the [Platform Admin overview](/admin-guide/overview).
 
 ## Environment Variables
 
-For a complete list of configuration options, see the [Environment Variables](/install/reference/environment-variables) documentation. Most environment variables can be configured through the Helm values file under the `activepieces` section.
+For a complete list of configuration options, see the [Environment Variables](/install/reference/environment-variables) documentation. Most environment variables can be configured through the Helm values file under the `inboxfmConnectConfig` or `inboxfmConnectEnvVariables` section.
 
 ## Execution Modes
 
@@ -203,8 +205,8 @@ Understanding execution modes is crucial for security and performance. See the [
 ## Uninstalling
 
 ```bash
-helm uninstall activepieces
+helm uninstall inboxfm-connect
 
 # Clean up persistent volumes (optional)
-kubectl delete pvc -l app.kubernetes.io/instance=activepieces
+kubectl delete pvc -l app.kubernetes.io/instance=inboxfm-connect
 ```

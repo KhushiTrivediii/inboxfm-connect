@@ -87,7 +87,7 @@ export default function IntegrationsPage() {
   } = useIntegrations(queryParams)
   const { data: categories, isLoading: isCategoriesLoading } = useIntegrationCategories()
 
-  const pieces = integrations ?? []
+  const pieces = integrations?.data ?? []
   const hasActiveFilters = searchInput.trim().length > 0 || selectedCategory !== 'ALL'
 
   const clearFilters = () => {

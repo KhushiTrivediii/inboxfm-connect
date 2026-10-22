@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import TriggersPage from './index'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
 import { stubApi, StubRoute } from '@/test/api-stub'
-import { ALL_SUMMARIES, githubMetadata } from '@/test/fixtures/integrations'
+import { ALL_SUMMARIES, githubMetadata, seekPage } from '@/test/fixtures/integrations'
 import { PieceMetadata } from '@/lib/api/types'
 
 function slackMetadata(): PieceMetadata {
@@ -29,7 +29,7 @@ function routes(options: { metadata?: Record<string, PieceMetadata> } = {}): Stu
   return [
     {
       match: (url) => url.pathname === '/api/v1/integrations',
-      respond: () => ({ status: 200, body: ALL_SUMMARIES }),
+      respond: () => ({ status: 200, body: seekPage(ALL_SUMMARIES) }),
     },
     {
       match: (url) => url.pathname.startsWith('/api/v1/integrations/'),

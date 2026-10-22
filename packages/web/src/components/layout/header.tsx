@@ -1,4 +1,5 @@
 import { Bell, BookOpen, Command as CmdIcon, Search } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,6 +10,7 @@ export interface HeaderProps {
 }
 
 export function Header({ onOpenCommandPalette }: HeaderProps) {
+  const { t } = useTranslation()
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -21,7 +23,7 @@ export function Header({ onOpenCommandPalette }: HeaderProps) {
           >
             <div className="flex items-center gap-2">
               <Search className="h-3.5 w-3.5" />
-              <span>Search integrations, tools, routes...</span>
+              <span>{t('Search integrations, tools, routes...')}</span>
             </div>
             <kbd className="inline-flex items-center gap-0.5 rounded border border-border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground">
               <CmdIcon className="h-2.5 w-2.5" />
@@ -34,7 +36,7 @@ export function Header({ onOpenCommandPalette }: HeaderProps) {
         <div className="flex items-center gap-3">
           <Badge variant="outline" className="text-[11px] font-medium border-border/80 gap-1.5 py-0.5">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            <span>Dev Environment</span>
+            <span>{t('Dev Environment')}</span>
           </Badge>
 
           <Tooltip>
@@ -46,7 +48,7 @@ export function Header({ onOpenCommandPalette }: HeaderProps) {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>Developer Documentation & SDK</p>
+              <p>{t('Developer Documentation & SDK')}</p>
             </TooltipContent>
           </Tooltip>
 
@@ -57,7 +59,7 @@ export function Header({ onOpenCommandPalette }: HeaderProps) {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>No new notifications</p>
+              <p>{t('No new notifications')}</p>
             </TooltipContent>
           </Tooltip>
         </div>

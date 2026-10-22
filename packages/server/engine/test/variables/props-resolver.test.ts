@@ -142,6 +142,33 @@ describe('Props resolver', () => {
         expect(resolvedInput).toEqual(['Alice Smith', 'Bob Doe'])
     })
 
+    test('merge flatten array paths keeps $ characters in resolved values', async ()=>{
+        const stateWithDollarValues = await ExecutionContext.empty().upsertStep(
+            'trigger',
+            GenericStepOutput.create({
+                type: FlowTriggerType.PIECE,
+                status: StepOutputStatus.SUCCEEDED,
+                input: {},
+                output: {
+                    users: [
+                        {
+                            name: 'Alice',
+                        },
+                        {
+                            name: 'Bob',
+                        },
+                    ],
+                    lastNames: [
+                        'Doe$&',
+                        'Smith',
+                    ],
+                },
+            }),
+        )
+        const { resolvedInput } = await propsResolverService.resolve({ unresolvedInput: '{{flattenNestedKeys(trigger.output, [\'users\',\'name\'])}} {{trigger.output.lastNames}}', executionState: stateWithDollarValues })
+        expect(resolvedInput).toEqual(['Alice Doe$&', 'Bob Smith'])
+    })
+
     test('Test resolve steps variables', async () => {
         const { resolvedInput } = await propsResolverService.resolve({ unresolvedInput: '{{trigger.output.name}}', executionState })
         expect(resolvedInput).toEqual(
@@ -874,5 +901,62 @@ describe('Array Flatter Processor', () => {
             { id: '1', name: 'item1' },
         ])
         expect(errors).toEqual({})
+    })
+})
+
+describe('Props resolver - bracket connection path', () => {
+    const SECRET = 'top-secret-value'
+
+    beforeEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    const mockConnectionFetch = (value: Record<string, unknown>) => {
+        vi.spyOn(global, 'fetch').mockResolvedValue(new Response(
+            JSON.stringify({
+                id: 'conn-1',
+                name: 'myconn',
+                status: 'ACTIVE',
+                value,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ))
+    }
+
+    it('resolves the path after a bracket connection name', async () => {
+        mockConnectionFetch({ type: 'SECRET_TEXT', secret_text: SECRET })
+        const { resolvedInput } = await propsResolverService.resolve({
+            unresolvedInput: "{{connections['myconn'].secret_text}}",
+            executionState,
+        })
+        expect(resolvedInput).toBe(SECRET)
+    })
+
+    it('resolves nested paths after a bracket connection name', async () => {
+        mockConnectionFetch({ type: 'OAUTH2', accessToken: 'tok', user: { email: 'a@b.c' } })
+        const { resolvedInput } = await propsResolverService.resolve({
+            unresolvedInput: "{{connections['myconn'].user.email}}",
+            executionState,
+        })
+        expect(resolvedInput).toBe('a@b.c')
+    })
+
+    it('returns the whole connection when the bracket form has no path', async () => {
+        const value = { type: 'OAUTH2', accessToken: 'tok' }
+        mockConnectionFetch(value)
+        const { resolvedInput } = await propsResolverService.resolve({
+            unresolvedInput: "{{connections['myconn']}}",
+            executionState,
+        })
+        expect(resolvedInput).toEqual(value)
+    })
+
+    it('resolves the path after a dotted connection name (regression guard)', async () => {
+        mockConnectionFetch({ type: 'SECRET_TEXT', secret_text: SECRET })
+        const { resolvedInput } = await propsResolverService.resolve({
+            unresolvedInput: '{{connections.myconn.secret_text}}',
+            executionState,
+        })
+        expect(resolvedInput).toBe(SECRET)
     })
 })

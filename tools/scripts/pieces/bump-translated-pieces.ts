@@ -147,7 +147,7 @@ function main(): void {
   console.log('Finding pieces with translation changes compared to main...');
   
   const piecesWithChanges: string[] = [];
-  const piecesDir = 'packages/pieces/community';
+  const piecesDir = 'packages/integrations/community';
   
   // Get all piece directories
   const pieceDirs = getPieceDirectories(piecesDir);

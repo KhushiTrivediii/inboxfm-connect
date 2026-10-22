@@ -153,11 +153,29 @@ export default class Paginator<Entity extends ObjectLiteral> {
         const clonedBuilder = new SelectQueryBuilder<Entity>(builder)
 
         if (!this.isUnlimited()) {
+            // Issue #411 (CodeAnt follow-up): an undecodable cursor must degrade
+            // to first-page semantics, not stay flagged as an after/before
+            // cursor with empty filter keys — that both reverses the result
+            // set (beforeCursor branch) and emits misleading next/previous
+            // links. Null the raw cursor when decoding yields nothing, so the
+            // rest of paginate() behaves exactly like an uncursored first page.
             if (this.hasAfterCursor()) {
-                Object.assign(cursors, this.decode(this.afterCursor!))
+                const decoded = this.decode(this.afterCursor!)
+                if (Object.keys(decoded).length === 0) {
+                    this.afterCursor = null
+                }
+                else {
+                    Object.assign(cursors, decoded)
+                }
             }
             else if (this.hasBeforeCursor()) {
-                Object.assign(cursors, this.decode(this.beforeCursor!))
+                const decoded = this.decode(this.beforeCursor!)
+                if (Object.keys(decoded).length === 0) {
+                    this.beforeCursor = null
+                }
+                else {
+                    Object.assign(cursors, decoded)
+                }
             }
 
             if (Object.keys(cursors).length > 0) {
@@ -304,16 +322,25 @@ export default class Paginator<Entity extends ObjectLiteral> {
             }
         }
 
-        const cursors: CursorParam = {}
-        const columns = atob(cursor).split(',')
-        columns.forEach((column) => {
-            const [key, raw] = column.split(':')
-            const type = this.getEntityPropertyType(key)
-            const value = decodeByType(type, raw)
-            cursors[key] = value
-        })
+        // Same containment as the composite path (issue #411): the cursor is
+        // attacker-controlled query input, and this chain throws on invalid
+        // base64, unknown column keys, and malformed values. An undecodable
+        // cursor means "start from the beginning", not a 500.
+        try {
+            const cursors: CursorParam = {}
+            const columns = atob(cursor).split(',')
+            columns.forEach((column) => {
+                const [key, raw] = column.split(':')
+                const type = this.getEntityPropertyType(key)
+                const value = decodeByType(type, raw)
+                cursors[key] = value
+            })
 
-        return cursors
+            return cursors
+        }
+        catch {
+            return {}
+        }
     }
 
     private getEntityPropertyType(key: string): string {

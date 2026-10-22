@@ -65,26 +65,26 @@ describe('createSandboxRuntime concurrency', () => {
 
     it('builds N boxes (one manager per workerIndex)', async () => {
         const { createSandboxManager } = await import('../../../src/lib/sandbox-manager')
-        createSandboxRuntime({ concurrency: 3, basePath: '/tmp', getSettings: () => ({} as never), log })
+        createSandboxRuntime({ concurrency: 3, basePath: '/tmp', getSettings: () => ({} as never) })
         expect(createSandboxManager).toHaveBeenCalledTimes(3)
         expect(vi.mocked(createSandboxManager).mock.calls.map(([arg]) => arg.boxId)).toEqual([1, 2, 3])
     })
 
     it('routes each execute to its own box by workerIndex', async () => {
-        const runtime = createSandboxRuntime({ concurrency: 3, basePath: '/tmp', getSettings: () => ({} as never), log })
+        const runtime = createSandboxRuntime({ concurrency: 3, basePath: '/tmp', getSettings: () => ({} as never) })
         await runtime.execute(buildExecuteParams(0))
         await runtime.execute(buildExecuteParams(2))
         expect(acquiredBoxIds).toEqual([1, 3])
     })
 
     it('getActiveExecutors flattens all boxes', async () => {
-        const runtime = createSandboxRuntime({ concurrency: 2, basePath: '/tmp', getSettings: () => ({} as never), log })
+        const runtime = createSandboxRuntime({ concurrency: 2, basePath: '/tmp', getSettings: () => ({} as never) })
         const executors = runtime.getActiveExecutors()
         expect(executors.map((e) => e.boxId)).toEqual([1, 2])
     })
 
     it('throws VALIDATION when workerIndex is out of bounds', async () => {
-        const runtime = createSandboxRuntime({ concurrency: 2, basePath: '/tmp', getSettings: () => ({} as never), log })
+        const runtime = createSandboxRuntime({ concurrency: 2, basePath: '/tmp', getSettings: () => ({} as never) })
         const error = await runtime.execute(buildExecuteParams(5)).catch((e: unknown) => e)
         expect(error).toBeInstanceOf(ActivepiecesError)
         expect((error as ActivepiecesError).error.code).toBe(ErrorCode.VALIDATION)
@@ -92,7 +92,7 @@ describe('createSandboxRuntime concurrency', () => {
 
     it('defaults to a single box when concurrency is omitted', async () => {
         const { createSandboxManager } = await import('../../../src/lib/sandbox-manager')
-        createSandboxRuntime({ basePath: '/tmp', getSettings: () => ({} as never), log })
+        createSandboxRuntime({ basePath: '/tmp', getSettings: () => ({} as never) })
         expect(createSandboxManager).toHaveBeenCalledTimes(1)
     })
 })

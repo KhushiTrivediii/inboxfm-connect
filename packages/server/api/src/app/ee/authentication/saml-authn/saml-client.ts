@@ -92,7 +92,7 @@ const resolveIdpMetadata = async (idpMetadata: string): Promise<string> => {
 
 const createSp = ({ privateKey, acsUrl }: CreateSpArgs): saml.ServiceProviderInstance => {
     return saml.ServiceProvider({
-        entityID: 'Activepieces',
+        entityID: 'Inboxfm Connect',
         authnRequestsSigned: false,
         wantMessageSigned: true,
         wantLogoutResponseSigned: true,

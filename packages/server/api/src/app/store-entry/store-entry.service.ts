@@ -8,21 +8,28 @@ const storeEntryRepo = repoFactory<StoreEntry>(StoreEntryEntity)
 export const storeEntryService = {
     async upsert({ projectId, request }: { projectId: ProjectId, request: PutStoreEntryRequest }): Promise<StoreEntry | null> {
         const value = sanitizeObjectForPostgresql(request.value)
-        const insertResult = await storeEntryRepo().upsert({
-            id: apId(),
-            key: request.key,
-            value,
-            projectId,
-        }, ['projectId', 'key'])
+        // TypeORM's `upsert()` puts every column we supply that is not part of the conflict target
+        // into `ON CONFLICT ... DO UPDATE SET`, so supplying `id` would rewrite the primary key on
+        // every overwrite. The insert is built directly with an explicit overwrite list so only
+        // `value` changes (`updated` is appended to the set clause by TypeORM itself). The row is
+        // then read back, because `InsertResult.identifiers` echoes the `id` generated for this
+        // call rather than the one already stored for an existing key.
+        await storeEntryRepo()
+            .createQueryBuilder()
+            .insert()
+            .values({
+                id: apId(),
+                key: request.key,
+                value,
+                projectId,
+            })
+            .orUpdate(['value'], ['projectId', 'key'])
+            .execute()
 
-        return {
+        return storeEntryRepo().findOneBy({
             projectId,
             key: request.key,
-            value,
-            id: insertResult.identifiers[0].id,
-            created: insertResult.generatedMaps[0].created,
-            updated: insertResult.generatedMaps[0].updated,
-        }
+        })
     },
     async getOne({
         projectId,

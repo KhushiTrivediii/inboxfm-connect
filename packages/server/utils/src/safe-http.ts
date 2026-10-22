@@ -5,23 +5,33 @@ import axios, { AxiosError, AxiosInstance, AxiosRequestConfig } from 'axios'
 import axiosRetry from 'axios-retry'
 import { RequestFilteringHttpAgent, RequestFilteringHttpsAgent } from 'request-filtering-agent'
 
-function parseAllowListFromEnv(): string[] {
+export function parseAllowListFromEnv(): string[] {
     const raw = process.env['AP_SSRF_ALLOW_LIST']
     if (!raw) return []
     return raw.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-function buildAgents({ allowList, httpsAgentOptions }: BuildAgentsParams): SsrfAgents {
+function buildAgents({ allowList, httpAgentOptions, httpsAgentOptions }: BuildAgentsParams): SsrfAgents {
     const filteringOptions = {
         keepAlive: true,
+        allowIPAddressList: allowList,
+    }
+    const pinnedSecurityOptions = {
         allowPrivateIPAddress: false,
         allowLoopbackIPAddress: false,
         allowMetaIPAddress: false,
-        allowIPAddressList: allowList,
     }
     return {
-        httpAgent: new RequestFilteringHttpAgent(filteringOptions),
-        httpsAgent: new RequestFilteringHttpsAgent({ ...filteringOptions, ...httpsAgentOptions }),
+        httpAgent: new RequestFilteringHttpAgent({
+            ...filteringOptions,
+            ...httpAgentOptions,
+            ...pinnedSecurityOptions,
+        }),
+        httpsAgent: new RequestFilteringHttpsAgent({
+            ...filteringOptions,
+            ...httpsAgentOptions,
+            ...pinnedSecurityOptions,
+        }),
     }
 }
 
@@ -44,12 +54,20 @@ function attachSsrfErrorInterceptor(instance: AxiosInstance): AxiosInstance {
     return instance
 }
 
-function createAxios(config?: AxiosRequestConfig, { httpsAgentOptions }: SafeAxiosOptions = {}): AxiosInstance {
+// Issue #371: axios's default is NO timeout, so any safeHttp caller that forgets
+// an explicit timeout can hang its request handler indefinitely on a stalled
+// upstream. Bound that here with a conservative default; an explicit caller
+// value still wins because ...config spreads after it.
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+
+function createAxios(config?: AxiosRequestConfig, { httpAgentOptions, httpsAgentOptions }: SafeAxiosOptions = {}): AxiosInstance {
     const { httpAgent, httpsAgent } = buildAgents({
         allowList: parseAllowListFromEnv(),
+        httpAgentOptions,
         httpsAgentOptions,
     })
     return attachSsrfErrorInterceptor(axios.create({
+        timeout: DEFAULT_REQUEST_TIMEOUT_MS,
         ...config,
         httpAgent,
         httpsAgent,
@@ -93,10 +111,12 @@ export type SsrfAgents = {
 }
 
 export type SafeAxiosOptions = {
+    httpAgentOptions?: http.AgentOptions
     httpsAgentOptions?: https.AgentOptions
 }
 
 type BuildAgentsParams = {
     allowList: string[]
+    httpAgentOptions?: http.AgentOptions
     httpsAgentOptions?: https.AgentOptions
 }

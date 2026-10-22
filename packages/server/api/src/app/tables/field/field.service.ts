@@ -98,13 +98,17 @@ export const fieldService = {
     },
 
     async getAllByTableIds({ projectId, tableIds }: GetAllByTableIdsParams): Promise<Map<string, Field[]>> {
+        const result = new Map<string, Field[]>()
+        if (isNil(tableIds) || tableIds.length === 0) {
+            return result
+        }
+
         const fields = await fieldRepo().find({
             where: { projectId, tableId: In(tableIds) },
             order: {
                 position: 'ASC',
             },
         })
-        const result = new Map<string, Field[]>()
         for (const tableId of tableIds) {
             result.set(tableId, [])
         }

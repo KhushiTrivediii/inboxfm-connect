@@ -1,7 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { type ApLogger } from '@inboxfm-connect/server-utils'
 import { FlowActionType, FlowTriggerType, FlowVersion, FlowVersionState, LATEST_FLOW_SCHEMA_VERSION, PackageType, PieceType, WorkerToApiContract } from '@inboxfm-connect/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -66,7 +66,9 @@ describe('flowProvisioning.resolve', () => {
         const getFlowVersion = vi.fn()
         const getPiece = vi.fn()
         const apiClient = {
-            async getFlowBundle() { return { kind: 'inline', data: Buffer.from(JSON.stringify(manifest), 'utf8') } },
+            async getFlowBundle() {
+                return { kind: 'inline', data: Buffer.from(JSON.stringify(manifest), 'utf8') } 
+            },
             getFlowVersion, getPiece,
         } as unknown as WorkerToApiContract
 
@@ -85,9 +87,13 @@ describe('flowProvisioning.resolve', () => {
     it('bundle fetch error → falls back to resolve (never fails the run)', async () => {
         const getFlowVersion = vi.fn(async () => flowWithPiece())
         const apiClient = {
-            async getFlowBundle() { throw new Error('rpc/s3 down') },
+            async getFlowBundle() {
+                throw new Error('rpc/s3 down') 
+            },
             getFlowVersion,
-            async getPiece() { return httpPiece },
+            async getPiece() {
+                return httpPiece 
+            },
         } as unknown as WorkerToApiContract
 
         const resolved = await flowProvisioning(fakeLog, apiClient, uniqueBasePath(), getSettings).resolve({ flow, platformId: 'plat1' })
@@ -98,8 +104,12 @@ describe('flowProvisioning.resolve', () => {
 
     it('miss + flow not found → flow-not-found', async () => {
         const apiClient = {
-            async getFlowBundle() { return null },
-            async getFlowVersion() { return null },
+            async getFlowBundle() {
+                return null 
+            },
+            async getFlowVersion() {
+                return null 
+            },
         } as unknown as WorkerToApiContract
 
         const resolved = await flowProvisioning(fakeLog, apiClient, uniqueBasePath(), getSettings).resolve({ flow, platformId: 'plat1' })
@@ -108,9 +118,15 @@ describe('flowProvisioning.resolve', () => {
 
     it('miss + LOCKED flow with resolvable piece → ready, pieces resolved, needsPublish=true', async () => {
         const apiClient = {
-            async getFlowBundle() { return null },
-            async getFlowVersion() { return flowWithPiece() },
-            async getPiece() { return httpPiece },
+            async getFlowBundle() {
+                return null 
+            },
+            async getFlowVersion() {
+                return flowWithPiece() 
+            },
+            async getPiece() {
+                return httpPiece 
+            },
         } as unknown as WorkerToApiContract
 
         const resolved = await flowProvisioning(fakeLog, apiClient, uniqueBasePath(), getSettings).resolve({ flow, platformId: 'plat1' })
@@ -126,9 +142,15 @@ describe('flowProvisioning.resolve', () => {
 
     it('miss + DRAFT flow → ready but no publish handle', async () => {
         const apiClient = {
-            async getFlowBundle() { return null },
-            async getFlowVersion() { return flowWithPiece({ state: FlowVersionState.DRAFT }) },
-            async getPiece() { return httpPiece },
+            async getFlowBundle() {
+                return null 
+            },
+            async getFlowVersion() {
+                return flowWithPiece({ state: FlowVersionState.DRAFT }) 
+            },
+            async getPiece() {
+                return httpPiece 
+            },
         } as unknown as WorkerToApiContract
 
         const resolved = await flowProvisioning(fakeLog, apiClient, uniqueBasePath(), getSettings).resolve({ flow, platformId: 'plat1' })
@@ -138,9 +160,15 @@ describe('flowProvisioning.resolve', () => {
     it('miss + missing piece → disabled and the flow is disabled via apiClient', async () => {
         const disableFlow = vi.fn(async () => undefined)
         const apiClient = {
-            async getFlowBundle() { return null },
-            async getFlowVersion() { return flowWithPiece() },
-            async getPiece() { return null },
+            async getFlowBundle() {
+                return null 
+            },
+            async getFlowVersion() {
+                return flowWithPiece() 
+            },
+            async getPiece() {
+                return null 
+            },
             disableFlow,
         } as unknown as WorkerToApiContract
 

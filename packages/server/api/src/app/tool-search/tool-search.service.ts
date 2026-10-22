@@ -157,7 +157,9 @@ async function keywordSearch({ objectKind, query, opts, log }: KeywordSearchPara
         suggestionType: objectKind === 'action' ? SuggestionType.ACTION : SuggestionType.TRIGGER,
     })
 
-    const results = pieces.flatMap((piece) => {
+    const filteredPieces = isNil(opts.pieceName) ? pieces : pieces.filter((piece) => piece.name === opts.pieceName)
+
+    const results = filteredPieces.flatMap((piece) => {
         const suggestions = objectKind === 'action' ? (piece.suggestedActions ?? []) : (piece.suggestedTriggers ?? [])
         return suggestions.map((object): ToolSearchObjectResult => ({
             pieceName: piece.name,

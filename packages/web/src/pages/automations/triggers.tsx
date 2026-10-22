@@ -45,7 +45,7 @@ export default function TriggerBindingsPage() {
 
   const integrationsByName = useMemo(() => {
     const map: Record<string, PieceSummary> = {}
-    for (const piece of integrationsQuery.data ?? []) {
+    for (const piece of integrationsQuery.data?.data ?? []) {
       map[piece.name] = piece
     }
     return map

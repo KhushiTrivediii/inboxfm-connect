@@ -1,67 +1,62 @@
+import { safeHttp } from '@inboxfm-connect/server-utils'
 import { system } from '../../../../helper/system/system'
 import { AppSystemProp } from '../../../../helper/system/system-props'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
+const httpClient = safeHttp.createAxios({ validateStatus: () => true })
+
 export const openRouterApi = {
     async createKey(request: CreateKeyRequest): Promise<CreateKeyResponse> {
         const apiKey = system.getOrThrow(AppSystemProp.OPENROUTER_PROVISION_KEY)
 
-        const res = await fetch(`${OPENROUTER_BASE_URL}/keys`, {
-            method: 'POST',
+        const res = await httpClient.post<CreateKeyResponse>(`${OPENROUTER_BASE_URL}/keys`, request, {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(request),
         })
 
-        if (!res.ok) {
-            const text = await res.text()
-            throw new Error(`[OpenRouter] createKey error: ${res.status} ${text}`)
+        if (res.status < 200 || res.status >= 300) {
+            throw new Error(`[OpenRouter] createKey error: ${res.status} ${responseBodyText(res.data)}`)
         }
 
-        return res.json()
+        return res.data
     },
 
     async updateKey(request: UpdateKeyRequest): Promise<UpdateKeyResponse> {
         const apiKey = system.getOrThrow(AppSystemProp.OPENROUTER_PROVISION_KEY)
         const { hash, ...rest } = request
 
-        const res = await fetch(`${OPENROUTER_BASE_URL}/keys/${hash}`, {
-            method: 'PATCH',
+        const res = await httpClient.patch<UpdateKeyResponse>(`${OPENROUTER_BASE_URL}/keys/${hash}`, rest, {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(rest),
         })
 
-        if (!res.ok) {
-            const text = await res.text()
-            throw new Error(`[OpenRouter] updateKey error: ${res.status} ${text}`)
+        if (res.status < 200 || res.status >= 300) {
+            throw new Error(`[OpenRouter] updateKey error: ${res.status} ${responseBodyText(res.data)}`)
         }
 
-        return res.json()
+        return res.data
     },
 
     async getKey(request: GetKeyRequest): Promise<GetKeyResponse> {
         const apiKey = system.getOrThrow(AppSystemProp.OPENROUTER_PROVISION_KEY)
 
-        const res = await fetch(`${OPENROUTER_BASE_URL}/keys/${request.hash}`, {
-            method: 'GET',
+        const res = await httpClient.get<GetKeyResponse>(`${OPENROUTER_BASE_URL}/keys/${request.hash}`, {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 'Content-Type': 'application/json',
             },
         })
 
-        if (!res.ok) {
-            const text = await res.text()
-            throw new Error(`[OpenRouter] getKey error: ${res.status} ${text}`)
+        if (res.status < 200 || res.status >= 300) {
+            throw new Error(`[OpenRouter] getKey error: ${res.status} ${responseBodyText(res.data)}`)
         }
 
-        return res.json()
+        return res.data
     },
 
     async listKeys(request: ListKeysRequest): Promise<ListKeysResponse> {
@@ -76,20 +71,22 @@ export const openRouterApi = {
         }
         const url = `${OPENROUTER_BASE_URL}/keys?${params.toString()}`
 
-        const res = await fetch(url, {
-            method: 'GET',
+        const res = await httpClient.get<ListKeysResponse>(url, {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
             },
         })
 
-        if (!res.ok) {
-            const text = await res.text()
-            throw new Error(`[OpenRouter] listKeys error: ${res.status} ${text}`)
+        if (res.status < 200 || res.status >= 300) {
+            throw new Error(`[OpenRouter] listKeys error: ${res.status} ${responseBodyText(res.data)}`)
         }
 
-        return res.json()
+        return res.data
     },
+}
+
+function responseBodyText(data: unknown): string {
+    return typeof data === 'string' ? data : JSON.stringify(data)
 }
 
 type CreateKeyRequest = {

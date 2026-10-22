@@ -85,6 +85,12 @@ export const streamToBuffer = (stream: any) => {
 };
 
 export const calculateTokensFromString = (string: string, model: string) => {
+  // Legacy stored history rows can carry null/undefined content; counting
+  // them as zero tokens keeps estimation (and the reduce loop) stable
+  // instead of throwing on string.length of undefined (issue #379).
+  if (typeof string !== 'string') {
+    return 0;
+  }
   try {
     const encoder = encoding_for_model(model as any);
     const tokens = encoder.encode(string);
@@ -117,20 +123,31 @@ export const calculateMessagesTokenSize = async (
 export const reduceContextSize = async (
   messages: any[],
   model: string,
-  maxTokens: number
+  maxTokens: number,
+  // Roles/system messages ride along on every request but are not part of the
+  // history being reduced; subtract their tokens from the budget so what
+  // remains actually fits alongside the system prompt (issue #379).
+  rolesTokenLength = 0
 ) => {
   // TODO: Summarize context instead of cutoff
-  const cutoffSize = Math.round(messages.length * 0.1);
-  const cutoffMessages = messages.splice(cutoffSize, messages.length - 1);
-
-  if (
-    (await calculateMessagesTokenSize(cutoffMessages, model)) >
-    maxTokens / 1.5
+  let currentMessages = [...messages];
+  while (
+    (await calculateMessagesTokenSize(currentMessages, model)) >
+      maxTokens / 1.5 - rolesTokenLength
   ) {
-    reduceContextSize(cutoffMessages, model, maxTokens);
+    if (currentMessages.length <= 1) {
+      // A single message (or none) that still exceeds the budget - which
+      // goes negative when roles alone consume it - can only be dropped
+      // entirely; returning it would ship an oversized context anyway
+      // (issue #379, roles-budget follow-up).
+      currentMessages = [];
+      break;
+    }
+    const cutoffSize = Math.max(1, Math.round(currentMessages.length * 0.1));
+    currentMessages = currentMessages.slice(cutoffSize);
   }
 
-  return cutoffMessages;
+  return currentMessages;
 };
 
 export const exceedsHistoryLimit = (

@@ -1,0 +1,199 @@
+---
+title: "SDK Reference"
+icon: "book"
+description: "Methods, options, types, and errors of @inboxfm-connect/sdk"
+---
+
+Everything on this page is exported from `@inboxfm-connect/sdk`. For a walkthrough, see [Connect SDK](/connect-sdk/overview).
+
+## `new InboxFM(options)`
+
+```ts
+import { InboxFM } from '@inboxfm-connect/sdk'
+
+const inboxfm = new InboxFM({ baseUrl, apiKey, projectId })
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `baseUrl` | `string` | required | API root including `/api`, e.g. `https://connect.example.com/api`. Trailing slashes are removed. |
+| `apiKey` | `string` | required | Project-scoped Connect API key (`cak-...`). Sent as `Authorization: Bearer <apiKey>`. |
+| `projectId` | `string` | required | The project the key belongs to. Added to every request. |
+| `timeoutMs` | `number` | `10000` | Default per-attempt timeout. |
+| `maxAttempts` | `number` | `3` | Upper bound on attempts, including the first, for a retryable request. |
+| `retryBaseDelayMs` | `number` | `250` | Base delay for exponential backoff. |
+| `retryMaxDelayMs` | `number` | `4000` | Cap on a single backoff delay. |
+
+A client is bound to one project. To work with several projects, create one client per project, each with that project's key.
+
+## Request options
+
+Every method also accepts these fields alongside its own parameters (type `ConnectRequestOptions`):
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `signal` | `AbortSignal` | Cancels the request, including any pending retry wait. Rejects with category `aborted`. |
+| `timeoutMs` | `number` | Overrides the client's default timeout for this call. |
+| `retryable` | `boolean` | Overrides whether network errors, timeouts, and 5xx responses are retried for this call. See [Retries](#retries). |
+| `idempotencyKey` | `string` | Sent as the `Idempotency-Key` header. The server does not deduplicate on it yet, so it does not make a mutation safe to retry. |
+
+## Methods
+
+### `createConnectSession(params)`
+
+`POST /v1/connect-sessions`. Creates a single-use, short-lived session and returns the URL where the end-user authorizes an integration.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `externalUserId` | `string` | Your identifier for the end-user. The resulting connection is stored with this `externalId`. |
+| `allowedPieceNames` | `string[]` | Optional. Integrations the user may connect in this session. Omit to allow any. |
+| `expiresInSeconds` | `number` | Optional. Positive integer up to `3600`. Defaults to `900` on the server. |
+
+Returns `CreateConnectSessionResult`: `{ token: string, connectUrl: string, expiresAt: string }`.
+
+The session stops working when it expires or when the user creates one connection with it.
+
+### `listConnections(params)`
+
+`GET /v1/connections`. Lists the connections an end-user has in the client's project.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `externalUserId` | `string` | The end-user whose connections to list. |
+| `pieceName` | `string` | Optional. Only connections for this integration. |
+| `limit` | `number` | Optional. Page size. The server defaults to `10`. |
+| `cursor` | `string` | Optional. The `next` or `previous` cursor from an earlier page. |
+
+Returns `ListConnectionsResult`: `{ data: Connection[], next: string | null, previous: string | null }`.
+
+`Connection` includes `id`, `displayName`, `pieceName`, `pieceVersion`, `externalId`, `status` (`ACTIVE`, `MISSING`, or `ERROR`), `type`, `scope`, `projectIds`, `metadata`, `created`, and `updated`. It never contains credentials.
+
+### `listTools(params)`
+
+`GET /v1/integrations/:name`. Lists the tools (actions) an integration exposes on your instance.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `integration` | `string` | Integration name, e.g. `@inboxfm-connect/piece-slack`. It is URL-encoded for you. |
+| `version` | `string` | Optional. A specific integration version. Defaults to the latest version compatible with your server. |
+
+Returns `Tool[]`:
+
+```ts
+type Tool = {
+  name: string              // pass as `tool` to execute()
+  displayName: string
+  description: string
+  requireAuth: boolean
+  audience?: 'human' | 'ai' | 'both'
+  aiMetadata?: { description?: string, idempotent?: boolean }
+  inputs: ToolInput[]
+}
+
+type ToolInput = {
+  name: string              // key in execute()'s `input`
+  displayName: string
+  description?: string
+  type: 'SHORT_TEXT' | 'NUMBER' | 'CHECKBOX' | 'DROPDOWN' | 'JSON' | ... // full union in the type declarations
+  required: boolean
+}
+```
+
+`listTools` returns a summary for choosing a tool and building its `input`. It leaves out dropdown options, nested array and object sub-fields, and output schemas. `aiMetadata.idempotent` tells you whether the integration author marked a tool as safe to repeat. Use it when deciding whether to pass `retryable: true` to `execute`.
+
+### `execute(params)`
+
+`POST /v1/execute`. Runs one tool synchronously against a connection and returns its output.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `integration` | `string` | Integration name. |
+| `tool` | `string` | A `Tool.name` from `listTools`. |
+| `input` | `Record<string, unknown>` | Tool inputs keyed by `ToolInput.name`. |
+| `connectionId` | `string` | Optional. The connection to use. |
+| `externalUserId` | `string` | Optional. Used when `connectionId` is omitted: the server picks this user's connection for `integration`. |
+
+Pass either `connectionId` or `externalUserId`. If you pass neither, the request fails with category `validation`. If you pass `externalUserId` and the user has no connection for that integration, it fails with category `not_found`.
+
+Returns `Promise<unknown>`: the tool's raw output. When the tool run fails, the call rejects with code `ENGINE_OPERATION_FAILURE`, and `error.params.message` has the failure reason. The server returns this as HTTP 400, so the category is `validation`. Check `code` to tell a failed tool run apart from a rejected request.
+
+### `deleteConnection(params)`
+
+`DELETE /v1/connections/:id`.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `connectionId` | `string` | The connection to delete. |
+
+Returns `Promise<void>`.
+
+## Errors
+
+Every failed call rejects with a `ConnectError`.
+
+```ts
+import { ConnectError } from '@inboxfm-connect/sdk'
+
+try {
+  await inboxfm.execute({ integration, tool, connectionId, input })
+}
+catch (error) {
+  if (error instanceof ConnectError) {
+    console.error(error.category, error.status, error.code, error.params)
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `category` | One of the categories below. |
+| `status` | HTTP status, when the server responded. |
+| `code` | The server's error code, e.g. `ENTITY_NOT_FOUND`. Typed as `ServerErrorCode`: the known codes, plus any other `string` from a newer server. |
+| `params` | The server's error details, when present. |
+| `retryable` | Whether the failure is transient in principle. The SDK may still not retry it. See [Retries](#retries). |
+| `retryAfterMs` | Parsed from `Retry-After`, when the server sent one. |
+| `requestId` | Read from the `x-request-id` response header, when the server sends one. |
+
+| Category | Cause |
+|----------|-------|
+| `authentication` | 401 or 403: the API key is invalid, expired, or not allowed to access this project. |
+| `validation` | Other 4xx, or a 409 with code `VALIDATION`. Covers rejected payloads and failed tool runs (`ENGINE_OPERATION_FAILURE`). |
+| `not_found` | 404. |
+| `conflict` | 409 with any code except `VALIDATION`. |
+| `rate_limit` | 429. |
+| `server` | 5xx. |
+| `network` | The request never got a response. |
+| `timeout` | No response within `timeoutMs`. |
+| `aborted` | Your `signal` fired. |
+| `unknown` | Anything else. |
+
+`ConnectError.toJSON()` never includes the API key, so you can log errors safely.
+
+## Retries
+
+The SDK retries only when repeating the request cannot duplicate a side effect:
+
+| Method | Retries on network error, timeout, 5xx | Retries on 429 |
+|--------|----------------------------------------|----------------|
+| `listConnections`, `listTools` | Yes | Yes |
+| `deleteConnection` | Yes (repeating a delete gives the same result) | Yes |
+| `createConnectSession`, `execute` | No, unless you pass `retryable: true` | Yes |
+
+A 429 is always retried because the server rejected the request before running it. The wait honors `Retry-After`. Otherwise it uses exponential backoff with full jitter, bounded by `retryBaseDelayMs` and `retryMaxDelayMs`. A request makes at most `maxAttempts` attempts.
+
+## Supported connection types
+
+In a connect session, end-users can create these connection types:
+
+- **Secret text** (API key), **basic auth**, and **custom auth**: the user enters the credentials directly.
+- **OAuth2**: only when the platform operator has configured an OAuth app for that integration. The user never sees a client ID or secret. If no app is configured, the server rejects the attempt to connect that integration.
+
+Integrations that need other auth types cannot be connected through a connect session.
+
+## Types
+
+The request and response types are generated from the Zod schemas the server validates with, so they cannot drift from the API. The package exports `InboxFMOptions`, `ConnectRequestOptions`, `CreateConnectSessionParams`, `CreateConnectSessionResult`, `ListConnectionsParams`, `ListConnectionsResult`, `ConnectionsPage`, `Connection`, `ListToolsParams`, `Tool`, `ToolInput`, `ExecuteParams`, `DeleteConnectionParams`, `ConnectErrorCategory`, `ConnectErrorOptions`, and `ServerErrorCode`.
+
+## Compatibility and versioning
+
+The SDK follows semver and is `0.x`: a minor release can change behavior, and a patch release cannot. Each release is listed in the package [changelog](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/packages/connect-sdk/CHANGELOG.md). The server versions each SDK line supports are listed in the package [README](https://github.com/Mihir-Rabari/inboxfm-connect/tree/dev/packages/connect-sdk#server-compatibility).

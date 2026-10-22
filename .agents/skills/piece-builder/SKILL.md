@@ -26,14 +26,14 @@ description: Builds Activepieces pieces (integrations) with actions and triggers
 
 ### Step 2: PLAN
 
-- **Location:** `packages/pieces/community/` by default; `packages/pieces/custom/` only if the user says "custom piece". See Piece Types below.
+- **Location:** `packages/integrations/community/` by default; `packages/integrations/custom/` only if the user says "custom piece". See Piece Types below.
 - Choose the correct auth type — see Quick Auth Reference below
 - Select the most useful actions (CRUD, search, list) and triggers (webhook if supported, polling otherwise)
 - **Ask the user** if OAuth2 config is unclear, there are >10 possible actions, or API behavior is ambiguous
 
 ### Step 3: SCAFFOLD
 
-Create this structure under `packages/pieces/community/<name>/`:
+Create this structure under `packages/integrations/community/<name>/`:
 
 ```
 src/
@@ -128,7 +128,7 @@ Add third-party SDKs to `dependencies` with a pinned version (e.g. `"stripe": "1
 
 The condensed rules in this file (Quick Auth Reference, Quick Piece Definition Template, UX Quality, Output Quality) cover the common case. Open a reference file when you need a concrete copy-ready example for the specific pattern you're building.
 
-**When you need a pattern, read the relevant reference file — do not grep other pieces in the codebase.** The reference files contain copy-ready examples for every common case. Searching `packages/pieces/community/` surfaces inconsistent older code and wastes context.
+**When you need a pattern, read the relevant reference file — do not grep other pieces in the codebase.** The reference files contain copy-ready examples for every common case. Searching `packages/integrations/community/` surfaces inconsistent older code and wastes context.
 
 | When you reach for it | Open this file |
 |---|---|
@@ -150,7 +150,7 @@ The condensed rules in this file (Quick Auth Reference, Quick Piece Definition T
 - [ ] Add `createCustomApiCallAction` to `actions: [...]`
 - [ ] Register in `tsconfig.base.json` at repo root (insert **alphabetically** — build fails without this):
     ```json
-    "@activepieces/piece-<name>": ["packages/pieces/community/<name>/src/index.ts"]
+    "@activepieces/piece-<name>": ["packages/integrations/community/<name>/src/index.ts"]
     ```
 
 **Build and lint:**
@@ -186,9 +186,9 @@ Rule of thumb: **any removal is breaking, any new required prop is breaking, eve
 
 | Location | Purpose |
 |---|---|
-| `packages/pieces/community/` | Third-party integrations (Slack, Stripe, etc.) — use this for almost all work |
-| `packages/pieces/core/` | Built-in platform utilities (HTTP, Store, Math, etc.) — do NOT recreate these |
-| `packages/pieces/custom/` | Private customer-specific pieces |
+| `packages/integrations/community/` | Third-party integrations (Slack, Stripe, etc.) — use this for almost all work |
+| `packages/integrations/core/` | Built-in platform utilities (HTTP, Store, Math, etc.) — do NOT recreate these |
+| `packages/integrations/custom/` | Private customer-specific pieces |
 
 Full reference: [piece-types.md](piece-types.md) — includes all `PieceCategory` values and the list of existing core pieces.
 

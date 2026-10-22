@@ -1,24 +1,28 @@
 import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { AppShell } from './app-shell'
 import { AuthProvider } from '@/lib/auth/auth-context'
 import { ThemeProvider } from '@/lib/theme/theme-provider'
-import { mount, waitFor } from '@/test/test-utils'
+import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
 
 function renderShell(page?: React.ReactElement): HTMLElement {
+  const queryClient = createTestQueryClient()
   return mount(
-    <ThemeProvider defaultTheme="light">
-      <AuthProvider>
-        <MemoryRouter initialEntries={['/']}>
-          <Routes>
-            <Route path="/" element={<AppShell />}>
-              {page ? <Route index element={page} /> : null}
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </AuthProvider>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider defaultTheme="light">
+        <AuthProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route path="/" element={<AppShell />}>
+                {page ? <Route index element={page} /> : null}
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   )
 }
 

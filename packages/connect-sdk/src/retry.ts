@@ -1,4 +1,4 @@
-import { ConnectError } from './errors'
+import { connectErrorFactory, ConnectError } from './errors'
 
 async function withRetry<T>({ fn, shouldRetry, maxAttempts, baseDelayMs, maxDelayMs, signal }: WithRetryOptions<T>): Promise<T> {
     let attempt = 0
@@ -14,8 +14,19 @@ async function withRetry<T>({ fn, shouldRetry, maxAttempts, baseDelayMs, maxDela
             }
             const retryAfterMs = error instanceof ConnectError ? error.retryAfterMs : undefined
             const delayMs = retryAfterMs ?? computeBackoffDelay({ attempt, baseDelayMs, maxDelayMs })
-            await sleep({ delayMs, signal })
+            await sleepOrThrowAborted({ delayMs, signal })
         }
+    }
+}
+
+// A caller aborting while the SDK waits between attempts must still surface as a
+// ConnectError, not the raw AbortSignal reason, or `instanceof ConnectError` checks miss it.
+async function sleepOrThrowAborted({ delayMs, signal }: { delayMs: number, signal?: AbortSignal }): Promise<void> {
+    try {
+        await sleep({ delayMs, signal })
+    }
+    catch {
+        throw connectErrorFactory.fromAbort()
     }
 }
 

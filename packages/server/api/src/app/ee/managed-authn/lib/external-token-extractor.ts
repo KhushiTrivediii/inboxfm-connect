@@ -72,7 +72,7 @@ export const externalTokenExtractor = (log: FastifyBaseLogger) => {
 const getSigningKey = async ({
     signingKeyId,
 }: GetSigningKeyParams): Promise<SigningKey> => {
-    const signingKey = await signingKeyService.get({
+    const signingKey = await signingKeyService.getById({
         id: signingKeyId,
     })
 

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ApEnvironment, ExecutionMode, NetworkMode } from '@inboxfm-connect/shared'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { createSandboxMock, isolateProcessMock, simpleProcessMock, getGlobalCacheCommonPathMock, getGlobalCodeCachePathMock, getEnginePathMock } = vi.hoisted(() => ({
     createSandboxMock: vi.fn(),
@@ -35,7 +35,6 @@ import { createSandboxForJob } from '../../../src/lib/create-sandbox-for-job'
 type Settings = {
     PUBLIC_URL: string
     TRIGGER_TIMEOUT_SECONDS: number
-    TRIGGER_HOOKS_TIMEOUT_SECONDS: number
     PAUSED_FLOW_TIMEOUT_DAYS: number
     EXECUTION_MODE: string
     FLOW_TIMEOUT_SECONDS: number
@@ -51,7 +50,6 @@ type Settings = {
     OTEL_ENABLED: boolean
     FILE_STORAGE_LOCATION: string
     S3_USE_SIGNED_URLS: string
-    EVENT_DESTINATION_TIMEOUT_SECONDS: number
     EDITION: string
     NETWORK_MODE: NetworkMode
     SSRF_ALLOW_LIST: string[]
@@ -62,7 +60,6 @@ function buildSettings(overrides: Partial<Settings> = {}): Settings {
     const base: Settings = {
         PUBLIC_URL: 'http://localhost:3000',
         TRIGGER_TIMEOUT_SECONDS: 60,
-        TRIGGER_HOOKS_TIMEOUT_SECONDS: 60,
         PAUSED_FLOW_TIMEOUT_DAYS: 30,
         EXECUTION_MODE: ExecutionMode.SANDBOX_PROCESS,
         FLOW_TIMEOUT_SECONDS: 600,
@@ -78,7 +75,6 @@ function buildSettings(overrides: Partial<Settings> = {}): Settings {
         OTEL_ENABLED: false,
         FILE_STORAGE_LOCATION: '/tmp',
         S3_USE_SIGNED_URLS: 'false',
-        EVENT_DESTINATION_TIMEOUT_SECONDS: 30,
         EDITION: 'community',
         NETWORK_MODE: NetworkMode.UNRESTRICTED,
         SSRF_ALLOW_LIST: [],
@@ -186,8 +182,8 @@ describe('createSandboxForJob', () => {
         it('only propagates env vars that exist in process.env (no undefined leak)', () => {
             const originalProcessEnv = { ...process.env }
             try {
-                process.env.PROPAGATED_YES = 'forwarded'
-                delete process.env.PROPAGATED_NO
+                process.env['PROPAGATED_YES'] = 'forwarded'
+                delete process.env['PROPAGATED_NO']
                 const settings = buildSettings({
                     SANDBOX_PROPAGATED_ENV_VARS: ['PROPAGATED_YES', 'PROPAGATED_NO'],
                 })

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { isNil } from '@inboxfm-connect/core-utils'
 import { AiMetadata, Audience, ErrorHandlingOptionsParam, type OutputSchema, PieceMetadata, PieceMetadataModel, WebhookRenewConfiguration } from '@inboxfm-connect/pieces-framework'
 import { ApplyLicenseKeyByEmailRequestBody, ExactVersionType, IncreaseAICreditsForPlatformRequestBody, PackageType, PieceCategory, PieceType, TriggerStrategy, TriggerTestStrategy, WebhookHandshakeConfiguration } from '@inboxfm-connect/shared'
@@ -16,13 +17,24 @@ import { adminPlatformService } from './admin-platform.service'
 const API_KEY_HEADER = 'api-key'
 const API_KEY = system.get(AppSystemProp.API_KEY)
 
+// Constant-time key comparison: a plain `!==` returns at the first differing
+// byte and leaks a prefix-based timing signal to unauthenticated probes
+// (see issue #369). timingSafeEqual is flat for equal-length buffers; the
+// length check first avoids its throw — the length itself is not secret
+// material. Mirrors the sandbox WS handshake pattern in sandbox.ts.
 async function checkCertainKeyPreHandler(
     req: FastifyRequest,
     res: FastifyReply,
 ): Promise<void> {
 
     const key = req.headers[API_KEY_HEADER] as string | undefined
-    if (key !== API_KEY || isNil(API_KEY)) {
+    if (isNil(key) || isNil(API_KEY)) {
+        await res.status(StatusCodes.FORBIDDEN).send({ message: 'Forbidden' })
+        throw new Error('Forbidden')
+    }
+    const a = Buffer.from(key)
+    const b = Buffer.from(API_KEY)
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
         await res.status(StatusCodes.FORBIDDEN).send({ message: 'Forbidden' })
         throw new Error('Forbidden')
     }

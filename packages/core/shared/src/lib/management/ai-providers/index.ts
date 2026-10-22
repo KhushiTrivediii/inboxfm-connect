@@ -1,4 +1,4 @@
-import { AIProviderName, BaseModelSchema } from '@inboxfm-connect/core-utils'
+import { AIProviderName, BaseModelSchema, formErrors, outboundUrlPolicy } from '@inboxfm-connect/core-utils'
 import { z } from 'zod'
 
 export enum AIProviderModelType {
@@ -60,17 +60,33 @@ export const ProviderModelConfig = z.object({
 export type ProviderModelConfig = z.infer<typeof ProviderModelConfig>
 
 export const OpenAICompatibleProviderConfig = z.object({
-    apiKeyHeader: z.string(),
-    baseUrl: z.string(),
+    apiKeyHeader: z.string()
+        .min(1, { message: formErrors.invalidAiProviderApiKeyHeader })
+        .max(outboundUrlPolicy.MAX_HTTP_HEADER_NAME_LENGTH, { message: formErrors.invalidAiProviderApiKeyHeader })
+        .refine((value) => outboundUrlPolicy.isValidHttpHeaderName(value), {
+            message: formErrors.invalidAiProviderApiKeyHeader,
+        }),
+    baseUrl: z.string().refine((value) => outboundUrlPolicy.classifyOutboundUrl({ url: value }).ok, {
+        message: formErrors.invalidAiProviderBaseUrl,
+    }),
     models: z.array(ProviderModelConfig),
-    defaultHeaders: z.record(z.string(), z.string()).optional(),
+    defaultHeaders: z.record(
+        z.string().refine((value) => outboundUrlPolicy.isValidHttpHeaderName(value), {
+            message: formErrors.invalidAiProviderApiKeyHeader,
+        }),
+        z.string(),
+    ).optional(),
 })
 export type OpenAICompatibleProviderConfig = z.infer<typeof OpenAICompatibleProviderConfig>
 
 
 export const CloudflareGatewayProviderConfig = z.object({
-    accountId: z.string(),
-    gatewayId: z.string(),
+    accountId: z.string().regex(/^[a-zA-Z0-9_-]+$/, {
+        message: formErrors.invalidCloudflareAccountId,
+    }),
+    gatewayId: z.string().regex(/^[a-zA-Z0-9_-]+$/, {
+        message: formErrors.invalidCloudflareGatewayId,
+    }),
     models: z.array(ProviderModelConfig),
     vertexProject: z.string().optional(),
     vertexRegion: z.string().optional(),
@@ -80,10 +96,12 @@ export type CloudflareGatewayProviderConfig = z.infer<typeof CloudflareGatewayPr
 export const DEFAULT_AZURE_API_VERSION = '2024-10-21'
 
 export const AzureProviderConfig = z.object({
-    resourceName: z.string(),
+    resourceName: z.string().regex(/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,62}[a-zA-Z0-9])$/, {
+        message: formErrors.invalidAzureResourceName,
+    }),
     apiVersion: z.preprocess(
         (v) => (typeof v === 'string' && v.trim().length === 0 ? undefined : v),
-        z.string().optional(),
+        z.string().regex(/^[a-zA-Z0-9_.-]+$/).optional(),
     ),
 })
 export type AzureProviderConfig = z.infer<typeof AzureProviderConfig>
@@ -222,6 +240,62 @@ export type AIProviderModel = z.infer<typeof AIProviderModel>
 
 export const CreateAIProviderRequest = ProviderConfigUnion
 export type CreateAIProviderRequest = z.infer<typeof CreateAIProviderRequest>
+
+const TestProviderConfigUnion = z.discriminatedUnion('provider', [
+    z.object({
+        provider: z.literal(AIProviderName.OPENAI),
+        config: OpenAIProviderConfig,
+        auth: OpenAIProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.OPENROUTER),
+        config: OpenRouterProviderConfig,
+        auth: OpenRouterProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.ANTHROPIC),
+        config: AnthropicProviderConfig,
+        auth: AnthropicProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.AZURE),
+        config: AzureProviderConfig,
+        auth: AzureProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.GOOGLE),
+        config: GoogleProviderConfig,
+        auth: GoogleProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.CLOUDFLARE_GATEWAY),
+        config: CloudflareGatewayProviderConfig,
+        auth: CloudflareGatewayProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.CUSTOM),
+        config: OpenAICompatibleProviderConfig,
+        auth: OpenAICompatibleProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.ACTIVEPIECES),
+        config: ActivePiecesProviderConfig,
+        auth: ActivePiecesProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.BEDROCK),
+        config: BedrockProviderConfig,
+        auth: BedrockProviderAuthConfig,
+    }),
+    z.object({
+        provider: z.literal(AIProviderName.MISTRAL),
+        config: MistralProviderConfig,
+        auth: MistralProviderAuthConfig,
+    }),
+])
+
+export const TestAIProviderRequest = TestProviderConfigUnion
+export type TestAIProviderRequest = z.infer<typeof TestAIProviderRequest>
 
 
 export const UpdateAIProviderRequest = z.object({

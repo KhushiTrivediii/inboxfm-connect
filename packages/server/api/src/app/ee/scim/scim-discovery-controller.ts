@@ -74,7 +74,7 @@ export const scimDiscoveryController: FastifyPluginAsyncZod = async (app) => {
                 id: 'Group',
                 name: 'Group',
                 endpoint: '/Groups',
-                description: 'Group (mapped to Activepieces Projects)',
+                description: 'Group (mapped to Inboxfm Connect Projects)',
                 schema: SCIM_GROUP_SCHEMA,
                 meta: {
                     resourceType: 'ResourceType',
@@ -205,7 +205,7 @@ export const scimDiscoveryController: FastifyPluginAsyncZod = async (app) => {
                 schemas: [SCIM_SCHEMA_SCHEMA],
                 id: SCIM_GROUP_SCHEMA,
                 name: 'Group',
-                description: 'Group (mapped to Activepieces Projects)',
+                description: 'Group (mapped to Inboxfm Connect Projects)',
                 attributes: [
                     {
                         name: 'displayName',

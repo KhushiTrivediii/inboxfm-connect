@@ -25,7 +25,7 @@ const PROJECT = testProject()
 function signIn({ user = testUser() }: { user?: User } = {}): void {
   apiClient.setToken('test-token')
   apiClient.setProjectId(PROJECT.id)
-  localStorage.setItem('ap-user', JSON.stringify(user))
+  sessionStorage.setItem('ap-user', JSON.stringify(user))
 }
 
 function renderApiKeysPage(): HTMLElement {
@@ -125,6 +125,7 @@ async function setNameInput(value: string): Promise<void> {
 describe('API Keys page', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     document.body.innerHTML = ''
     vi.restoreAllMocks()
     apiClient.setToken(null)

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ApEnvironment, ExecutionMode, NetworkMode } from '@inboxfm-connect/shared'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../src/lib/create-sandbox-for-job', () => ({
     createSandboxForJob: vi.fn().mockReturnValue({
@@ -27,7 +27,6 @@ function buildSettings({ executionMode, environment }: { executionMode: string, 
     return {
         PUBLIC_URL: 'http://localhost:3000',
         TRIGGER_TIMEOUT_SECONDS: 60,
-        TRIGGER_HOOKS_TIMEOUT_SECONDS: 60,
         PAUSED_FLOW_TIMEOUT_DAYS: 30,
         EXECUTION_MODE: executionMode,
         FLOW_TIMEOUT_SECONDS: 600,
@@ -43,7 +42,6 @@ function buildSettings({ executionMode, environment }: { executionMode: string, 
         OTEL_ENABLED: false,
         FILE_STORAGE_LOCATION: '/tmp',
         S3_USE_SIGNED_URLS: 'false',
-        EVENT_DESTINATION_TIMEOUT_SECONDS: 30,
         EDITION: 'community',
         NETWORK_MODE: NetworkMode.UNRESTRICTED,
         SSRF_ALLOW_LIST: [] as string[],

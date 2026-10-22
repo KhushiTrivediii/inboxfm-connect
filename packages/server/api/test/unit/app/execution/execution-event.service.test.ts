@@ -1,7 +1,7 @@
 import { tryCatch } from '@inboxfm-connect/core-utils'
 import { ExecutionEvent, ExecutionEventType } from '@inboxfm-connect/shared'
-import { describe, expect, it } from 'vitest'
-import { executionEventService } from '../../../../src/app/execution/execution-event.service'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { __resetMemoryTtlSweepForTests, executionEventService } from '../../../../src/app/execution/execution-event.service'
 import { pubsub } from '../../../../src/app/helper/pubsub'
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -109,6 +109,132 @@ describe('ExecutionEvent Service', () => {
 
             await executionEventService.unsubscribe({ executionId })
         })
+
+        it('delivers cross-replica events exactly once after a close-and-reconnect cycle', async () => {
+            const executionId = 'exec_test_reconnect_cross_replica'
+            const receivedViewer1: ExecutionEvent[] = []
+            const receivedViewer2: ExecutionEvent[] = []
+
+            const listener1 = (e: ExecutionEvent) => receivedViewer1.push(e)
+            const listener2 = (e: ExecutionEvent) => receivedViewer2.push(e)
+
+            // Viewer 1 subscribes
+            await executionEventService.subscribe({
+                executionId,
+                listener: listener1,
+            })
+
+            // Viewer 1 disconnects (last listener tears down channel)
+            await executionEventService.unsubscribe({
+                executionId,
+                listener: listener1,
+            })
+
+            // Viewer 2 subscribes (reconnect on same execution)
+            await executionEventService.subscribe({
+                executionId,
+                listener: listener2,
+            })
+
+            const crossReplicaEvent: ExecutionEvent = {
+                id: `${executionId}:1001`,
+                executionId,
+                type: ExecutionEventType.ExecutionCompleted,
+                timestamp: new Date().toISOString(),
+                payload: { executionId, output: { success: true } },
+            }
+
+            const { error: publishError } = await tryCatch(() => pubsub.publish(`execution:${executionId}:events`, JSON.stringify(crossReplicaEvent)))
+
+            if (publishError) {
+                await executionEventService.unsubscribe({ executionId, listener: listener2 })
+                return
+            }
+
+            await waitUntil(() => receivedViewer2.length === 1)
+
+            // Crucial: Viewer 2 receives exactly 1 event; Viewer 1 receives 0 events after disconnect
+            expect(receivedViewer2).toHaveLength(1)
+            expect(receivedViewer2[0].id).toBe(crossReplicaEvent.id)
+            expect(receivedViewer1).toHaveLength(0)
+
+            await executionEventService.unsubscribe({ executionId, listener: listener2 })
+        })
+    })
+
+    describe('Multi-listener subscription isolation & lifecycle (#158)', () => {
+        it('unsubscribes only the specified listener and keeps other listeners active', async () => {
+            const executionId = 'exec_multi_listener_test'
+            const eventsA: ExecutionEvent[] = []
+            const eventsB: ExecutionEvent[] = []
+
+            const listenerA = (e: ExecutionEvent) => eventsA.push(e)
+            const listenerB = (e: ExecutionEvent) => eventsB.push(e)
+
+            await executionEventService.subscribe({ executionId, listener: listenerA })
+            await executionEventService.subscribe({ executionId, listener: listenerB })
+
+            const event1 = await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.ExecutionStarted,
+                payload: { executionId, step: 1 },
+            })
+
+            expect(eventsA).toHaveLength(1)
+            expect(eventsB).toHaveLength(1)
+            expect(eventsA[0].id).toBe(event1.id)
+            expect(eventsB[0].id).toBe(event1.id)
+
+            // Unsubscribe listener A only
+            await executionEventService.unsubscribe({ executionId, listener: listenerA })
+
+            const event2 = await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.PlannerStarted,
+                payload: { executionId, step: 2 },
+            })
+
+            // Listener A did not receive event 2; Listener B received both events
+            expect(eventsA).toHaveLength(1)
+            expect(eventsB).toHaveLength(2)
+            expect(eventsB[1].id).toBe(event2.id)
+
+            // Unsubscribe listener B
+            await executionEventService.unsubscribe({ executionId, listener: listenerB })
+
+            await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.ExecutionCompleted,
+                payload: { executionId, step: 3 },
+            })
+
+            // Neither received event 3
+            expect(eventsA).toHaveLength(1)
+            expect(eventsB).toHaveLength(2)
+        })
+
+        it('unsubscribing without listener reference clears all listeners', async () => {
+            const executionId = 'exec_clear_all_test'
+            const eventsA: ExecutionEvent[] = []
+            const eventsB: ExecutionEvent[] = []
+
+            const listenerA = (e: ExecutionEvent) => eventsA.push(e)
+            const listenerB = (e: ExecutionEvent) => eventsB.push(e)
+
+            await executionEventService.subscribe({ executionId, listener: listenerA })
+            await executionEventService.subscribe({ executionId, listener: listenerB })
+
+            await executionEventService.unsubscribe({ executionId })
+
+            await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.ExecutionStarted,
+                payload: { executionId },
+            })
+
+            expect(eventsA).toHaveLength(0)
+            expect(eventsB).toHaveLength(0)
+        })
     })
 
     describe('Forbidden Graph Fields Audit', () => {
@@ -129,5 +255,138 @@ describe('ExecutionEvent Service', () => {
                 expect(keys).not.toContain(forbiddenKey)
             }
         })
+    })
+})
+
+
+// Force the memory fallback deterministically (codeant finding on #393):
+// with a live Redis the suite would exercise the Redis path instead, and
+// the cap/eviction behavior under test would never run.
+import { redisConnections } from '../../../../src/app/database/redis-connections'
+
+describe('memory fallback eviction (issue #392)', () => {
+    beforeEach(() => {
+        vi.spyOn(redisConnections, 'useExisting').mockRejectedValue(new Error('redis unavailable (test)'))
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('critical events still land past the cap but never grow the list unbounded', async () => {
+        const executionId = 'exec_critical_cap_test'
+        const criticalType = ExecutionEventType.ExecutionCompleted
+        // fill past the cap with non-critical events; the cap drops them at 1000
+        for (let i = 0; i < 1005; i++) {
+            await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.PlannerStarted,
+                payload: { i },
+            })
+        }
+        const before = await executionEventService.readEventHistory({ executionId })
+        expect(before.length).toBe(1000)
+        // critical events must land even when the list is at the cap
+        const critical = await executionEventService.emit({
+            executionId,
+            type: criticalType,
+            payload: { done: true },
+        })
+        const after = await executionEventService.readEventHistory({ executionId })
+        expect(after.some((e) => e.id === critical.id)).toBe(true)
+        // and the list must not have grown: oldest non-critical was dropped
+        expect(after.length).toBe(1000)
+    })
+
+    it('sweeps memory-fallback history once the TTL elapses (fake timers, issue #392)', async () => {
+        __resetMemoryTtlSweepForTests()
+        vi.useFakeTimers()
+        try {
+            const executionId = 'exec_ttl_sweep_test'
+            await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.PlannerStarted,
+                payload: { i: 0 },
+            })
+            const fresh = await executionEventService.readEventHistory({ executionId })
+            expect(fresh).toHaveLength(1)
+
+            // advance past EVENT_TTL_SECONDS + one sweep interval: the interval
+            // fires ~61 times, and every tick after the TTL sees lastActivity
+            // older than the cutoff and evicts history, sequence and mutex state
+            await vi.advanceTimersByTimeAsync(3600_000 + 60_000)
+
+            const swept = await executionEventService.readEventHistory({ executionId })
+            expect(swept).toHaveLength(0)
+        } finally {
+            __resetMemoryTtlSweepForTests()
+            vi.useRealTimers()
+            __resetMemoryTtlSweepForTests()
+        }
+    })
+})
+
+describe('memory fallback history isolation', () => {
+    beforeEach(() => {
+        vi.spyOn(redisConnections, 'useExisting').mockRejectedValue(new Error('redis unavailable (test)'))
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('does not let a later emit mutate a snapshot a caller is still holding', async () => {
+        const executionId = 'exec_snapshot_isolation_test'
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.PlannerStarted,
+            payload: { i: 0 },
+        })
+
+        // getEventsSince with no lastEventId forwards readEventHistory's result
+        // verbatim - this is the array the SSE backfill serializes.
+        const snapshot = await executionEventService.getEventsSince({ executionId })
+        expect(snapshot).toHaveLength(1)
+
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.ExecutionCompleted,
+            payload: { done: true },
+        })
+
+        // The already-returned snapshot must not grow behind the caller's back.
+        expect(snapshot).toHaveLength(1)
+
+        const fresh = await executionEventService.getEventsSince({ executionId })
+        expect(fresh).toHaveLength(2)
+    })
+
+    it('does not let a caller corrupt stored history by mutating the returned array', async () => {
+        const executionId = 'exec_caller_mutation_test'
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.PlannerStarted,
+            payload: { i: 0 },
+        })
+
+        const borrowed = await executionEventService.readEventHistory({ executionId })
+        borrowed.length = 0
+
+        const stored = await executionEventService.readEventHistory({ executionId })
+        expect(stored).toHaveLength(1)
+    })
+
+    it('returns a distinct array on every read', async () => {
+        const executionId = 'exec_distinct_snapshot_test'
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.PlannerStarted,
+            payload: { i: 0 },
+        })
+
+        const first = await executionEventService.readEventHistory({ executionId })
+        const second = await executionEventService.readEventHistory({ executionId })
+
+        expect(first).not.toBe(second)
     })
 })

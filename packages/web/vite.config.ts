@@ -71,9 +71,15 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    include: ['@inboxfm-connect/shared'],
+  },
   build: {
     outDir: '../../dist/packages/web',
     emptyOutDir: true,
+    commonjsOptions: {
+      include: [/packages[\\/]core[\\/]shared/, /node_modules/],
+    },
     // 'hidden': maps are still emitted for the Sentry upload above, but the
     // bundled JS carries no //# sourceMappingURL comment — the Dockerfile always
     // strips the .map files before shipping, so a comment pointing at them would

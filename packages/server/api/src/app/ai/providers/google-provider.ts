@@ -1,4 +1,4 @@
-import { httpClient, HttpMethod } from '@inboxfm-connect/pieces-common'
+import { safeHttp } from '@inboxfm-connect/server-utils'
 import { AIProviderModel, AIProviderModelType, GoogleProviderAuthConfig, GoogleProviderConfig } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { AIProviderStrategy } from './ai-provider'
@@ -9,15 +9,17 @@ export const googleProvider: AIProviderStrategy<GoogleProviderAuthConfig, Google
         await googleProvider.listModels(authConfig, config)
     },
     async listModels(authConfig: GoogleProviderAuthConfig, _config: GoogleProviderConfig): Promise<AIProviderModel[]> {
-        const res = await httpClient.sendRequest<{ models: GoogleModel[] }>({
-            url: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000',
-            method: HttpMethod.GET,
-            headers: {
-                'x-goog-api-key': authConfig.apiKey,
-                'Content-Type': 'application/json',
+        const client = safeHttp.createAxios()
+        const res = await client.get<{ models: GoogleModel[] }>(
+            'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000',
+            {
+                headers: {
+                    'x-goog-api-key': authConfig.apiKey,
+                    'Content-Type': 'application/json',
+                },
             },
-        })
-        return res.body.models.map((model: GoogleModel) => ({
+        )
+        return (res.data.models ?? []).map((model: GoogleModel) => ({
             id: stripModelsPrefix(model.name),
             name: model.displayName,
             type: model.name.includes('image') ? AIProviderModelType.IMAGE : AIProviderModelType.TEXT,

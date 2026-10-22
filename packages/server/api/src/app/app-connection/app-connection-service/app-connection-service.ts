@@ -1,12 +1,14 @@
 import { ActivepiecesError, apId, Cursor, ErrorCode, isNil, Metadata, PlatformId, ProjectId, SeekPage, spreadIfDefined, unique } from '@inboxfm-connect/core-utils'
-import { ApEdition, ApEnvironment, AppConnection, AppConnectionId, AppConnectionOwners, AppConnectionScope, AppConnectionStatus, AppConnectionType, AppConnectionValue, AppConnectionWithoutSensitiveData, EngineResponse, EngineResponseStatus, ExecuteValidateAuthResponse, MAX_PLATFORM_APP_CONNECTION_OWNERS, OAuth2GrantType, PlatformAppConnectionOwner, PlatformAppConnectionOwnersResponse, PlatformAppConnectionProjectInfo, PlatformAppConnectionsListItem, PlatformRole, UpsertAppConnectionRequestBody, User, UserIdentity, UserWithMetaInformation, WorkerJobType } from '@inboxfm-connect/shared'
+import { ApEdition, ApEnvironment, AppConnection, AppConnectionId, AppConnectionOwners, AppConnectionScope, AppConnectionStatus, AppConnectionType, AppConnectionValue, AppConnectionWithoutSensitiveData, ExecuteValidateAuthResponse, MAX_PLATFORM_APP_CONNECTION_OWNERS, OAuth2GrantType, PlatformAppConnectionOwner, PlatformAppConnectionOwnersResponse, PlatformAppConnectionProjectInfo, PlatformAppConnectionsListItem, PlatformRole, UpsertAppConnectionRequestBody, User, UserIdentity, UserWithMetaInformation, WorkerJobType } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import semver from 'semver'
 import { ArrayContains, Equal, FindOperator, FindOptionsWhere, ILike, In } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
+import { distributedLock } from '../../database/redis-connections'
 import { projectMemberService } from '../../ee/projects/project-members/project-member.service'
 import { containsSecretManagerReference, secretManagersService } from '../../ee/secret-managers/secret-managers.service'
 import { encryptUtils } from '../../helper/encryption'
+import { exceptionHandler } from '../../helper/exception-handler'
 import { buildPaginator } from '../../helper/pagination/build-paginator'
 import { paginationHelper } from '../../helper/pagination/pagination-utils'
 import { system } from '../../helper/system/system'
@@ -23,9 +25,66 @@ import {
     AppConnectionSchema,
 } from '../app-connection.entity'
 import { appConnectionHandler } from './app-connection.handler'
+import type { TestConnectionOutcome } from './app-connection.handler'
 import { oauth2Handler } from './oauth2'
 import { oauth2Util } from './oauth2/oauth2-util'
 export const appConnectionsRepo = repoFactory(AppConnectionEntity)
+
+// Upsert race guard (issue F29): app_connection has no unique index on
+// (platformId, externalId, scope), so two overlapping upserts of the same
+// connection both read "no existing row" and insert two rows with different
+// ids. Serialize the whole read-modify-write behind the distributed lock
+// (RedLock runExclusive - the same mutex app-connection.handler already
+// uses for token refresh). Unlike a bare SET NX + re-read, runExclusive
+// makes the loser's lookup happen strictly after the winner's commit, and
+// it releases the lock when the winner finishes instead of holding it for
+// the full TTL. Fail-open on lock unavailability so a Redis outage never
+// blocks connection creation.
+function buildUpsertLockKey({ externalId, scope, platformId, projectIds }: { externalId: string, scope: string, platformId: string, projectIds: string[] | null }): string {
+    // ArrayContains semantics are order-insensitive, so the lock key must be
+    // too: ['p1','p2'] and ['p2','p1'] address the same row and must share one
+    // mutex. Sort + dedupe to get one canonical key per connection.
+    const canonicalProjectIds = isNil(projectIds) ? 'no-projects' : [...new Set(projectIds)].sort().join(',')
+    return ['app-connection', 'upsert', platformId, externalId, scope, canonicalProjectIds].join(':')
+}
+
+async function runUpsertExclusiveOrWithoutLock<T>({ externalId, scope, platformId, projectIds, fn, log }: {
+    externalId: string
+    scope: string
+    platformId: string
+    projectIds: string[] | null
+    fn: () => Promise<T>
+    log: FastifyBaseLogger
+}): Promise<T> {
+    const key = buildUpsertLockKey({ externalId, scope, platformId, projectIds })
+    let fnSettled = false
+    try {
+        return await distributedLock(log).runExclusive({
+            key,
+            timeoutInSeconds: 60,
+            fn: async () => {
+                try {
+                    return await fn()
+                }
+                finally {
+                    // Mark settled on EVERY exit path (throw AND success), not
+                    // just the throw path: a lock-infra error surfacing after a
+                    // successful fn (e.g. a release failure propagating out of
+                    // RedLock's using()) must not take the fail-open branch and
+                    // run fn a second time. (Reviewer hardening, #410 round 2.)
+                    fnSettled = true
+                }
+            },
+        })
+    }
+    catch (error) {
+        if (fnSettled) {
+            throw error
+        }
+        log.warn({ error, lockKey: key }, 'App connection upsert lock unavailable - failing open')
+        return fn()
+    }
+}
 
 export const appConnectionService = (log: FastifyBaseLogger) => ({
     async upsert(params: UpsertParams): Promise<AppConnectionWithoutSensitiveData> {
@@ -63,41 +122,54 @@ export const appConnectionService = (log: FastifyBaseLogger) => ({
             ...value,
         })
 
-        const existingConnection = await appConnectionsRepo().findOneBy({
+        // Serialize overlapping upserts of the same connection (issue F29).
+        // runExclusive releases the lock when the winner's upsert commits, so
+        // the loser's lookup below happens strictly after that commit and
+        // finds the winner's row instead of inserting a duplicate.
+        return runUpsertExclusiveOrWithoutLock({
             externalId,
             scope,
             platformId,
-            ...(projectIds ? { projectIds: ArrayContains(projectIds) } : {}),
-        })
-
-        const newId = existingConnection?.id ?? apId()
-        const connection = {
-            displayName,
-            ...spreadIfDefined('ownerId', ownerId),
-            status: status ?? AppConnectionStatus.ACTIVE,
-            value: encryptedConnectionValue,
-            externalId,
-            pieceName,
-            type,
-            id: newId,
-            scope,
             projectIds,
-            platformId,
-            ...spreadIfDefined('metadata', metadata),
-            ...spreadIfDefined('preSelectForNewProjects', preSelectForNewProjects),
-            pieceVersion,
-        }
+            log,
+            fn: async () => {
+                const existingConnection = await appConnectionsRepo().findOneBy({
+                    externalId,
+                    scope,
+                    platformId,
+                    ...(projectIds ? { projectIds: ArrayContains(projectIds) } : {}),
+                })
 
-        await appConnectionsRepo().upsert(connection, ['id'])
+                const newId = existingConnection?.id ?? apId()
+                const connection = {
+                    displayName,
+                    ...spreadIfDefined('ownerId', ownerId),
+                    status: status ?? AppConnectionStatus.ACTIVE,
+                    value: encryptedConnectionValue,
+                    externalId,
+                    pieceName,
+                    type,
+                    id: newId,
+                    scope,
+                    projectIds,
+                    platformId,
+                    ...spreadIfDefined('metadata', metadata),
+                    ...spreadIfDefined('preSelectForNewProjects', preSelectForNewProjects),
+                    pieceVersion,
+                }
 
-        const updatedConnection = await appConnectionsRepo().findOneByOrFail({
-            id: newId,
-            platformId,
-            ...(projectIds ? { projectIds: ArrayContains(projectIds) } : {}),
-            scope,
+                await appConnectionsRepo().upsert(connection, ['id'])
+
+                const updatedConnection = await appConnectionsRepo().findOneByOrFail({
+                    id: newId,
+                    platformId,
+                    ...(projectIds ? { projectIds: ArrayContains(projectIds) } : {}),
+                    scope,
+                })
+                log.info({ connection: { id: newId }, piece: { name: pieceName }, platform: { id: platformId }, isNew: isNil(existingConnection) }, 'App connection upserted')
+                return this.removeSensitiveData(updatedConnection)
+            },
         })
-        log.info({ connection: { id: newId }, piece: { name: pieceName }, platform: { id: platformId }, isNew: isNil(existingConnection) }, 'App connection upserted')
-        return this.removeSensitiveData(updatedConnection)
     },
     async update(params: UpdateParams): Promise<AppConnectionWithoutSensitiveData> {
         const { projectIds, id, request, scope, platformId } = params
@@ -113,6 +185,17 @@ export const appConnectionService = (log: FastifyBaseLogger) => ({
             ...(projectIds ? { projectIds: ArrayContains(projectIds) } : {}),
         }
 
+        const existingConnection = await appConnectionsRepo().findOneBy(filter)
+        if (isNil(existingConnection)) {
+            throw new ActivepiecesError({
+                code: ErrorCode.ENTITY_NOT_FOUND,
+                params: {
+                    entityType: 'AppConnection',
+                    entityId: id,
+                },
+            })
+        }
+
         await appConnectionsRepo().update(filter, {
             displayName: request.displayName,
             ...spreadIfDefined('projectIds', request.projectIds),
@@ -120,8 +203,65 @@ export const appConnectionService = (log: FastifyBaseLogger) => ({
             ...spreadIfDefined('preSelectForNewProjects', request.preSelectForNewProjects),
         })
 
-        const updatedConnection = await appConnectionsRepo().findOneByOrFail(filter)
+        const updatedConnection = await appConnectionsRepo().findOneBy(filter)
+        if (isNil(updatedConnection)) {
+            throw new ActivepiecesError({
+                code: ErrorCode.ENTITY_NOT_FOUND,
+                params: {
+                    entityType: 'AppConnection',
+                    entityId: id,
+                },
+            })
+        }
         return this.removeSensitiveData(updatedConnection)
+    },
+    async testConnection({ id, projectId, platformId }: TestConnectionParams): Promise<TestConnectionResult> {
+        const encryptedAppConnection = await appConnectionsRepo().findOne({
+            where: {
+                id,
+                platformId,
+                projectIds: ArrayContains([projectId]),
+            },
+        })
+        if (isNil(encryptedAppConnection)) {
+            throw new ActivepiecesError({
+                code: ErrorCode.ENTITY_NOT_FOUND,
+                params: {
+                    entityType: 'AppConnection',
+                    entityId: id,
+                },
+            })
+        }
+        const testedAt = new Date().toISOString()
+        let outcome: TestConnectionOutcome
+        try {
+            outcome = await appConnectionHandler(log).lockAndTestConnection({
+                platformId,
+                projectId,
+                externalId: encryptedAppConnection.externalId,
+                log,
+            })
+        }
+        catch (error) {
+            // Infra failures (lock unavailable, db write error) must not 500 the
+            // route — the check failed, but the connection is not proven bad.
+            exceptionHandler.handle(error, log)
+            outcome = {
+                ok: false,
+                markRowError: false,
+                message: 'The connection could not be tested. Try again in a moment.',
+            }
+        }
+        log.info({ connection: { id }, ok: outcome.ok, markRowError: outcome.markRowError }, 'App connection health check finished')
+        return markConnectionTested({
+            id,
+            testedAt,
+            rowStatus: outcome.ok
+                ? AppConnectionStatus.ACTIVE
+                : (outcome.markRowError ? AppConnectionStatus.ERROR : null),
+            verdict: outcome.ok ? AppConnectionStatus.ACTIVE : AppConnectionStatus.ERROR,
+            message: outcome.message,
+        })
     },
     async getOne({
         projectId,
@@ -390,6 +530,52 @@ const fetchProjectsForPlatform = async (projectIds: string[], platformId: string
     return new Map(projects.map((project) => [project.id, { id: project.id, displayName: project.displayName, type: project.type }]))
 }
 
+async function markConnectionTested({ id, testedAt, rowStatus, verdict, message }: {
+    id: AppConnectionId
+    testedAt: string
+    // The row's health status to write, or null to leave it alone — a transient
+    // failure (network blip, lock outage) is not evidence the connection is bad,
+    // so it must not stop executions from retrying a refresh.
+    rowStatus: AppConnectionStatus | null
+    // The health check's own verdict, always persisted with the timestamp so the
+    // detail page can show "last tested <when>: <result>" across reloads.
+    verdict: AppConnectionStatus
+    message?: string
+}): Promise<TestConnectionResult> {
+    // Plain, unconditional write. A previous revision guarded this with
+    // `current.status !== status` and claimed it avoided clobbering a newer
+    // result, but that condition is true precisely when the stored status
+    // differs - i.e. exactly the stale case - so the guard inverted its own
+    // intent while costing an extra SELECT.
+    //
+    // Consequence, stated plainly: if two health checks race, the slower one
+    // can write its older verdict last. That is accepted - the next check
+    // self-heals the row, and a conditional write would need a compare-and-set
+    // on `testedAt` to be any safer.
+    await appConnectionsRepo().update({ id }, {
+        ...(isNil(rowStatus) ? {} : { status: rowStatus }),
+        testedAt,
+        testedStatus: verdict,
+        testedMessage: sanitizeTestMessage(message),
+    })
+    return {
+        ok: verdict === AppConnectionStatus.ACTIVE,
+        status: verdict,
+        testedAt,
+        message,
+    }
+}
+
+// The failure message can quote external provider responses (error_description)
+// and is persisted to a varchar column: strip control characters postgres
+// rejects and cap the length so an oversized provider payload can't bloat rows.
+function sanitizeTestMessage(message: string | undefined): string | null {
+    if (isNil(message)) {
+        return null
+    }
+    return message.replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, 512) || null
+}
+
 async function assertProjectIds(projectIds: ProjectId[], platformId: string): Promise<void> {
     const filteredProjects = await projectRepo().countBy({
         id: In(projectIds),
@@ -522,7 +708,7 @@ const engineValidateAuth = async (
         platformId,
     })
 
-    const engineResponse = await userInteractionWatcher.submitAndWaitForResponse<EngineResponse<ExecuteValidateAuthResponse>>({
+    const validateAuthResult = await userInteractionWatcher.submitAndWaitForResponse<ExecuteValidateAuthResponse>({
         piece: await getPiecePackageWithoutArchive(log, platformId, {
             pieceName,
             pieceVersion: pieceMetadata.version,
@@ -532,22 +718,6 @@ const engineValidateAuth = async (
         auth,
         jobType: WorkerJobType.EXECUTE_VALIDATION,
     }, log)
-
-    if (engineResponse.status !== EngineResponseStatus.OK) {
-        log.error(
-            { engineResponse },
-            'Engine validate auth failed',
-        )
-        throw new ActivepiecesError({
-            code: ErrorCode.ENGINE_OPERATION_FAILURE,
-            params: {
-                message: 'Failed to run engine validate auth',
-                context: engineResponse,
-            },
-        })
-    }
-
-    const validateAuthResult = engineResponse.response
 
     if (!validateAuthResult.valid) {
         throw new ActivepiecesError({
@@ -685,6 +855,19 @@ type EngineValidateAuthParams = {
     projectId: ProjectId | undefined
     platformId: string
     auth: AppConnectionValue
+}
+
+type TestConnectionParams = {
+    id: AppConnectionId
+    projectId: ProjectId
+    platformId: string
+}
+
+type TestConnectionResult = {
+    ok: boolean
+    status: AppConnectionStatus
+    testedAt: string
+    message?: string
 }
 
 

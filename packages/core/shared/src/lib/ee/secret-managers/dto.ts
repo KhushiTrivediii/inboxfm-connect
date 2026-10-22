@@ -40,6 +40,17 @@ export const CyberarkConjurProviderConfigSchema = z.object({
     loginId: z.string().min(1, formErrors.required),
     url: z.string().min(1, formErrors.required),
     apiKey: z.string().min(1, formErrors.required),
+    // TLS verification of the Conjur server is ON by default. Operators whose
+    // Conjur presents a self-signed certificate can explicitly opt out by setting
+    // this to true. The string forms ('true'/'false'/'') are accepted because the
+    // provider form renders this as a text field — same pattern as SCIM's
+    // `primary` boolean — with '' (left blank) meaning "not opted out".
+    skipTlsVerification: z
+        .union([
+            z.boolean(),
+            z.enum(['true', 'false', '']).transform((value) => value === 'true'),
+        ])
+        .optional(),
 })
 export type CyberarkConjurProviderConfig = z.infer<typeof CyberarkConjurProviderConfigSchema>
 

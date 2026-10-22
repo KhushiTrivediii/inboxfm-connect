@@ -1,40 +1,49 @@
-# Licensing boundary — read before touching `ee/`
+# Licensing and upstream attribution
 
-This repo is a fork of Activepieces. The root [`LICENSE`](LICENSE) file is dual:
+Inboxfm Connect is an independent fork of [Activepieces](https://github.com/activepieces/activepieces). Renaming the application does not change the licenses attached to inherited code.
 
-- Everything **outside** `packages/ee/` and `packages/server/api/src/app/ee/` is **MIT** — free to use, modify, and ship, no restrictions.
-- Everything **inside** those two directories is governed by a separate [`packages/ee/LICENSE`](packages/ee/LICENSE), copyright Activepieces Inc. That license explicitly permits modifying the code **for development and testing**, but forbids using it **in production** — for any user, under any product name — without a paid Activepieces Enterprise license.
+## Applicable notices
 
-**Forking and rebranding this repo does not change that.** The license is attached to the code, not the product name. Running `ee/`-licensed code in production for real users, without a license from Activepieces, applies exactly the same to "Inboxfm Connect" as it would to a repo still called "Activepieces."
+| Material | Applicable notice |
+| --- | --- |
+| Most source outside the restricted directories | [Root LICENSE](LICENSE): MIT Expat, with the stated exclusions and third-party terms |
+| `packages/ee/` and `packages/server/api/src/app/ee/` | [Activepieces Enterprise license](packages/ee/LICENSE) |
+| SDK | [packages/connect-sdk/LICENSE](packages/connect-sdk/LICENSE) |
+| Documentation with its own notice | [docs/LICENSE](docs/LICENSE) |
+| Adapted Code of Conduct | Creative Commons Attribution-ShareAlike 3.0 and source attribution in [.github/CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md) |
+| Other third-party components | Their original owners' applicable licenses; the root notice explicitly preserves these |
 
-## What happened here
+The original Activepieces copyright, MIT permission notice, and Enterprise license text are retained. The root and Enterprise notices were compared with the [upstream root license](https://github.com/activepieces/activepieces/blob/main/LICENSE) and [upstream Enterprise license](https://github.com/activepieces/activepieces/blob/main/packages/ee/LICENSE) during the September 2026 repository-readiness review and matched after line-ending normalization.
 
-The Connect platform (project-scoped API keys, connect sessions, the public `/connect/:token` flow) was originally built by extending four existing files inside `packages/server/api/src/app/ee/`:
+## Enterprise restrictions
 
-- `ee/api-keys/api-key-entity.ts`
-- `ee/api-keys/api-key-service.ts`
-- `ee/api-keys/api-key-module.ts`
-- `ee/authentication/project-role/rbac-service.ts`
+The Enterprise license allows copying and modifying Enterprise material for development and testing without a subscription. Production use requires a valid Activepieces Enterprise license and compliance with Activepieces' applicable terms or another agreement with Activepieces. It also restricts rights in modifications and distribution; the permissions are not equivalent to MIT.
 
-Those four files have since been **reverted to their pristine, unmodified state** — identical to what a clean Activepieces checkout ships. `ee/` in this repo is now exactly as-is, untouched, and not part of the Connect platform's dependency graph at all.
+Do not treat `AP_EDITION=ce`, a feature flag, a passing test, or a new file location as permission to use restricted code. Do not copy an Enterprise implementation into an MIT directory and call it original. Existing code relocation or replacement requires provenance review.
 
-## Where the Connect platform actually lives now
+For hackathon contributions, work outside the Enterprise directories and use local development/test environments with data and accounts you control. A production launch or redistribution containing Enterprise material requires reviewing the actual license and applicable agreement with Activepieces.
 
-All of it is original code, outside `ee/`, available on every edition (Community, Enterprise, Cloud) with no license check:
+## Current repository limitations
 
-| Module | Path | Replaces |
-|---|---|---|
-| Connect API keys | `packages/server/api/src/app/connect-api-keys/` | `ee/api-keys/` (not extended, not imported) |
-| Connect OAuth app config | `packages/server/api/src/app/connect-oauth-apps/` | `ee/oauth-apps/` (not extended, not imported) |
-| Connect sessions | `packages/server/api/src/app/connect-sessions/` | n/a, new |
-| Client SDK | `packages/connect-sdk/` | n/a, new |
-| Shared DTOs | `packages/core/shared/src/lib/connect-api-key/`, `connect-oauth-app/`, `connect-session/` | n/a, new |
+The Enterprise directories remain present. There are existing imports into them from outside those directories, including application registration and database paths, and inherited Enterprise files have been modified on this fork. Previous statements that Enterprise code was pristine or entirely absent from the dependency graph were inaccurate.
 
-Two small, deliberately-placed additions to **non-ee, MIT-licensed** core files close the security gap that the ee `rbac-service.ts` used to handle:
+The Connect API-key, OAuth configuration, session, and SDK modules have their own locations outside Enterprise directories. Their location alone does not establish an independent provenance review for every implementation. The planned removal and replacement of remaining Enterprise dependencies is tracked in [#25](https://github.com/Mihir-Rabari/inboxfm-connect/issues/25).
 
-- `packages/server/api/src/app/core/security/v2/authn/authenticate.ts` — recognizes a distinct `cak-` token prefix (vs. Activepieces' own `sk-` platform keys) and mints a principal bound to one project.
-- `packages/server/api/src/app/core/security/v2/authz/authorize.ts` — `assertServicePrincipalScope()` rejects a Connect API key trying to touch a project it isn't bound to. This runs *before* the untouched `ee/rbac-service.ts` check, so `ee/` never needed to change.
+This documentation records source and notice checks. It is not a legal clearance, an Activepieces license, or a statement that a particular deployment satisfies a separate agreement.
 
-## The rule going forward
+## Contributor responsibilities
 
-**Do not import from, extend, or otherwise depend on anything under `packages/ee/` or `packages/server/api/src/app/ee/` from Connect-platform code.** If the Connect platform needs something that already exists in `ee/` (audit logging, SSO, project roles, etc.), write an original, independent implementation the way `connect-oauth-app.entity.ts` re-implemented `oauth-app.entity.ts`'s shape rather than reusing it. `ee/` itself is left alone — it's Activepieces' own feature set, gated behind their own license, exactly as they shipped it. This repo simply doesn't build on top of it anymore.
+- Retain upstream and third-party copyright notices and license texts.
+- Keep acknowledgements in [UPSTREAM_CREDITS.md](UPSTREAM_CREDITS.md); credits supplement the required license notices.
+- Do not introduce new Enterprise imports from application or integration code.
+- Do not strip, relabel, or relocate restricted code to change its apparent license.
+- Supply only work you have the rights to contribute, under the applicable license for its location. Ask maintainers to review provenance before bringing in substantial external code.
+- Do not imply Activepieces sponsors, supports, or endorses this independent fork.
+
+## Automated checks
+
+`npm run check-licenses` validates the recorded license notice hashes and checks static imports, re-exports, literal `require()`/`import()` calls, and TypeScript import types for new references into Enterprise directories or workspace packages.
+
+[tools/ci/license-policy.json](tools/ci/license-policy.json) records existing production-source imports as debt, rather than silently declaring them safe. Test fixtures are excluded because Enterprise development/testing has separate permission. Removing a recorded dependency is allowed; expanding or changing the policy requires explicit licensing review.
+
+This guard cannot establish the provenance of copied code, inspect arbitrary dynamic paths, or grant rights under a contract. Its purpose is to catch accidental expansion and notice loss while the remaining cleanup is tracked.

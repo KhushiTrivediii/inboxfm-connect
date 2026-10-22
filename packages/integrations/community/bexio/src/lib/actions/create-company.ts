@@ -51,9 +51,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load salutations:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load salutations',
+            placeholder: 'Failed to load salutations. Check your Bexio connection.',
             options: [],
           };
         }
@@ -86,9 +87,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load titles:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load titles',
+            placeholder: 'Failed to load titles. Check your Bexio connection.',
             options: [],
           };
         }
@@ -146,9 +148,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load countries:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load countries',
+            placeholder: 'Failed to load countries. Check your Bexio connection.',
             options: [],
           };
         }
@@ -226,9 +229,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load languages:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load languages',
+            placeholder: 'Failed to load languages. Check your Bexio connection.',
             options: [],
           };
         }
@@ -261,9 +265,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load contact groups:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load contact groups',
+            placeholder: 'Failed to load contact groups. Check your Bexio connection.',
             options: [],
           };
         }
@@ -296,9 +301,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load contact sectors:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load contact sectors',
+            placeholder: 'Failed to load contact sectors. Check your Bexio connection.',
             options: [],
           };
         }
@@ -331,9 +337,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load users:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load users',
+            placeholder: 'Failed to load users. Check your Bexio connection.',
             options: [],
           };
         }
@@ -366,9 +373,10 @@ export const createCompanyAction = createAction({
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load users:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load users',
+            placeholder: 'Failed to load users. Check your Bexio connection.',
             options: [],
           };
         }

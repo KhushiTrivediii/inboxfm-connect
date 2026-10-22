@@ -5,7 +5,7 @@ import { FastifyBaseLogger } from 'fastify'
 import { In, LessThanOrEqual } from 'typeorm'
 import { repoFactory } from '../core/db/repo-factory'
 import { exceptionHandler } from '../helper/exception-handler'
-import { jwtUtils } from '../helper/jwt-utils'
+import { JwtAudience, JwtSignAlgorithm, jwtUtils } from '../helper/jwt-utils'
 import { system } from '../helper/system/system'
 import { AppSystemProp } from '../helper/system/system-props'
 import { fileCompressor } from './file-compressor'
@@ -29,6 +29,108 @@ const saveFileToDb = async (baseFile: BaseFile, data: SaveParams['data']) => {
         data,
     })
 }
+
+/**
+ * Atomically claims the right to write an engine file PUT and performs the write,
+ * with the ownership predicate carried inside the write itself (#444, per review):
+ * no check-then-write window, and no advisory lock to fail open.
+ *
+ *  1. Conditional update: only a row already inside the principal's scope can be
+ *     rewritten. `returning` is the verdict (the PGLite driver does not populate
+ *     `affected`, see #314): no returned row means "not ours" — either the id is
+ *     fresh or it belongs to another tenant, and only the re-claim below may
+ *     distinguish those.
+ *  2. Fresh insert: for a brand-new id the primary key arbitrates concurrent
+ *     first writes inside the database — `orIgnore` swallows the conflict when a
+ *     racing writer committed first.
+ *  3. Re-claim: a loser of that race re-runs the conditional update; the row now
+ *     belongs to the winner, so 0 rows → 403. This is the exact interleaving a
+ *     lock around only the guard (the first revision of this fix) left open: the
+ *     second writer used to pass an absent-row check while the winner's save was
+ *     still in flight and silently re-owned the row.
+ */
+async function saveEngineOwnedToDb(params: SaveEngineOwnedParams, baseFile: BaseFile): Promise<File> {
+    const updatedIds = await claimEngineFileForUpdate(params, baseFile)
+    if (updatedIds) {
+        return fileRepo().findOneByOrFail({ id: params.fileId })
+    }
+
+    const insertResult = await fileRepo().createQueryBuilder()
+        .insert()
+        .into(FileEntity)
+        .values({
+            id: params.fileId,
+            projectId: params.projectId,
+            platformId: params.platformId,
+            type: baseFile.type,
+            fileName: baseFile.fileName,
+            compression: baseFile.compression,
+            size: baseFile.size,
+            metadata: baseFile.metadata,
+            created: baseFile.created,
+            updated: baseFile.updated,
+            data: params.data ?? undefined,
+            location: FileLocation.DB,
+        })
+        .orIgnore()
+        .returning('id')
+        .execute()
+
+    const insertedIds = insertResult.raw as Array<{ id: string }>
+    if (Array.isArray(insertedIds) && insertedIds.length > 0) {
+        return fileRepo().findOneByOrFail({ id: params.fileId })
+    }
+
+    // The insert was ignored because a concurrent writer committed this id first.
+    // Re-claim: if that row is inside this principal's scope (an own-project retry
+    // racing itself) the update succeeds; otherwise the id is someone else's file.
+    const reClaimedIds = await claimEngineFileForUpdate(params, baseFile)
+    if (!reClaimedIds) {
+        throw new ActivepiecesError({
+            code: ErrorCode.AUTHORIZATION,
+            params: {
+                message: 'File id already exists under a different project or platform',
+            },
+        })
+    }
+    return fileRepo().findOneByOrFail({ id: params.fileId })
+}
+
+/**
+ * The conditional, owner-scoped rewrite: matches only a row already inside the
+ * principal's scope and returns its id on match (null when nothing matched).
+ */
+async function claimEngineFileForUpdate(params: SaveEngineOwnedParams, baseFile: BaseFile): Promise<Array<{ id: string }> | null> {
+    const updateResult = await fileRepo().createQueryBuilder()
+        .update()
+        .set({
+            type: baseFile.type,
+            fileName: baseFile.fileName,
+            compression: baseFile.compression,
+            size: baseFile.size,
+            metadata: baseFile.metadata,
+            projectId: baseFile.projectId,
+            platformId: baseFile.platformId,
+            updated: baseFile.updated,
+            data: params.data ?? undefined,
+        })
+        // The ownership predicate lives in the WHERE clause (#443): the row must
+        // already be inside the principal's scope. The NULL-projectId branches are
+        // deliberate — platform-scoped rows (e.g. PACKAGE_ARCHIVE) are shared
+        // assets of that platform, and rows with neither scope predate scoped
+        // writes; do not tighten without a migration.
+        .where('("projectId" = :projectId OR ("projectId" IS NULL AND ("platformId" = :platformId OR "platformId" IS NULL))) AND "id" = :fileId', {
+            fileId: params.fileId,
+            projectId: params.projectId,
+            platformId: params.platformId,
+        })
+        .returning('id')
+        .execute()
+
+    const updatedIds = updateResult.raw as Array<{ id: string }>
+    return Array.isArray(updatedIds) && updatedIds.length > 0 ? updatedIds : null
+}
+
 export const fileService = (log: FastifyBaseLogger) => ({
     async save(params: SaveParams): Promise<File> {
         const baseFile: BaseFile = {
@@ -65,6 +167,59 @@ export const fileService = (log: FastifyBaseLogger) => ({
                     exceptionHandler.handle(error, log)
                     return saveFileToDb(baseFile, params.data)
                 }
+            }
+        }
+    },
+    /**
+     * Engine PUTs over caller-supplied file ids must never re-own an existing row:
+     * the write itself decides whether the row is creatable/rewritable, so no
+     * check-then-write window exists (#443). See {@link saveEngineOwnedToDb} for the
+     * claim protocol and why the verdict is read from `returning`, not `affected`.
+     */
+    async saveEngineOwned(params: SaveEngineOwnedParams): Promise<File> {
+        const baseFile: BaseFile = {
+            id: params.fileId,
+            projectId: params.projectId,
+            platformId: params.platformId,
+            type: params.type,
+            fileName: params.fileName,
+            compression: params.compression,
+            size: params.size,
+            metadata: params.metadata,
+            created: dayjs().toISOString(),
+            updated: dayjs().toISOString(),
+        }
+        const location = getLocationForFile(params.type)
+        switch (location) {
+            case FileLocation.DB: {
+                return saveEngineOwnedToDb(params, baseFile)
+            }
+            case FileLocation.S3: {
+                // S3 mode: the row must be claimed first (same predicate, no data
+                // column), and only a winning claim may upload bytes and mark the row.
+                // A foreign row can no longer be written to at the victim's object
+                // key: the claim fails before any S3 I/O, and the loser never
+                // learns the victim's s3Key.
+                const claimedFile = await saveEngineOwnedToDb({
+                    ...params,
+                    data: null,
+                }, baseFile)
+                if (!isNil(params.data)) {
+                    const s3Key = !isNil(claimedFile.s3Key) ? claimedFile.s3Key : await s3Helper(log).constructS3Key(params.platformId, params.projectId, params.type, params.fileId)
+                    await s3Helper(log).uploadFile(s3Key, params.data)
+                    return fileRepo().save({
+                        ...baseFile,
+                        id: claimedFile.id,
+                        location: FileLocation.S3,
+                        s3Key,
+                    })
+                }
+                return fileRepo().save({
+                    ...baseFile,
+                    id: claimedFile.id,
+                    location: FileLocation.S3,
+                    s3Key: claimedFile.s3Key ?? await s3Helper(log).constructS3Key(params.platformId, params.projectId, params.type, params.fileId),
+                })
             }
         }
     },
@@ -202,6 +357,8 @@ export const fileService = (log: FastifyBaseLogger) => ({
             const decodedToken = await jwtUtils.decodeAndVerify<FileToken>({
                 jwt: token,
                 key: await jwtUtils.getJwtSecret(),
+                algorithm: JwtSignAlgorithm.HS256,
+                audience: JwtAudience.FILE_READ,
             })
             const fileType = decodedToken.fileType ?? FileType.FLOW_STEP_FILE
             if (!ALLOWED_SIGNED_FILE_TYPES.includes(fileType)) {
@@ -338,6 +495,18 @@ type SaveParams = {
     size: number
     type: FileType
     platformId?: string
+    fileName?: string
+    compression: FileCompression
+    metadata?: Record<string, string>
+}
+
+type SaveEngineOwnedParams = {
+    fileId: FileId
+    projectId: ProjectId
+    platformId: string
+    data: Buffer | null
+    size: number
+    type: FileType
     fileName?: string
     compression: FileCompression
     metadata?: Record<string, string>

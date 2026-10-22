@@ -28,6 +28,11 @@ export const distributedStoreFactory = (getRedisClient: () => Promise<Redis>) =>
         return result === 'OK'
     },
 
+    async incr(key: string): Promise<number> {
+        const redisClient = await getRedisClient()
+        return redisClient.incr(key)
+    },
+
     async delete(keys: string | string[]): Promise<void> {
         const keysArray = Array.isArray(keys) ? keys : [keys]
         if (keysArray.length === 0) return

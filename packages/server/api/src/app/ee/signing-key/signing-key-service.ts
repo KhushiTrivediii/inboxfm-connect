@@ -38,7 +38,21 @@ export const signingKeyService = {
         }
     },
 
-    async get({ id }: GetParams): Promise<SigningKey | null> {
+    async get({ id, platformId }: GetParams): Promise<SigningKey | null> {
+        // Scope to the caller's platform like delete() does: an unscoped id
+        // lookup lets one platform's admin read another platform's key row
+        // (publicKey metadata + owning platformId) by raw id (issue #375).
+        return repo().findOneBy({
+            id,
+            platformId,
+        })
+    },
+
+    async getById({ id }: GetByIdParams): Promise<SigningKey | null> {
+        // Internal trust-anchor lookup for managed-authn: the key id arrives
+        // in the JWT kid header and the platform is derived from the key row
+        // itself, so this path cannot pre-scope — it must stay unscoped, but it
+        // is not reachable from the admin REST surface.
         return repo().findOneBy({
             id,
         })
@@ -70,6 +84,11 @@ type AddParams = {
 }
 
 type GetParams = {
+    id: SigningKeyId
+    platformId: PlatformId
+}
+
+type GetByIdParams = {
     id: SigningKeyId
 }
 

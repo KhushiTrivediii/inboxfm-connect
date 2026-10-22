@@ -1,11 +1,12 @@
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ApLogger } from '@inboxfm-connect/server-utils'
 import { PackageType, PieceType } from '@inboxfm-connect/shared'
 import type { OfficialPiecePackage, PrivatePiecePackage } from '@inboxfm-connect/shared'
-import type { ApLogger } from '@inboxfm-connect/server-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isValidPackageName, isValidPieceVersion, pieceInstaller } from '../../../../src/lib/cache/pieces/piece-installer'
 
 // Module-level variable updated per test so the vi.mock factory can reference it
 let testWorkspace = ''
@@ -24,9 +25,6 @@ vi.mock('../../../../src/lib/cache/cache-paths', () => ({
         getGlobalCachePathLatestVersion: () => testWorkspace,
     }),
 }))
-
-// Import after mocks are registered
-const { pieceInstaller, isValidPackageName } = await import('../../../../src/lib/cache/pieces/piece-installer')
 
 function makePiece(name: string, version = '1.0.0'): OfficialPiecePackage {
     return {
@@ -52,12 +50,28 @@ function pieceDirPath(piece: OfficialPiecePackage | PrivatePiecePackage): string
     return join(testWorkspace, 'pieces', `${piece.pieceName}-${piece.pieceVersion}`)
 }
 
+// Filters and folder names are built with node:path, which uses the platform
+// separator — assertions must compare against the posix form or they only pass on Linux.
+function toPosix(p: string): string {
+    return p.split('\\').join('/')
+}
+
 function readyFilePath(piece: OfficialPiecePackage | PrivatePiecePackage): string {
     return join(pieceDirPath(piece), 'ready')
 }
 
 async function pathExists(p: string): Promise<boolean> {
     return access(p).then(() => true, () => false)
+}
+
+async function captureError(promise: Promise<unknown>): Promise<Error> {
+    try {
+        await promise
+        throw new Error('Expected promise to reject')
+    }
+    catch (e) {
+        return e as Error
+    }
 }
 
 const fakeLog = {
@@ -134,7 +148,7 @@ describe('pieceInstaller', () => {
             .mockResolvedValueOnce({ output: '' })                           // good individual
             .mockRejectedValueOnce(new Error('workspace:* resolve error'))  // bad individual
 
-        const error = await installer.install({ pieces: [good, bad], includeFilters: false, ...bundleSource }).catch(e => e as Error)
+        const error = await captureError(installer.install({ pieces: [good, bad], includeFilters: false, ...bundleSource }))
 
         expect(error).toBeInstanceOf(Error)
         expect(error.message).toContain('@inboxfm-connect/piece-bad@1.0.0')
@@ -155,7 +169,7 @@ describe('pieceInstaller', () => {
             .mockRejectedValueOnce(new Error('workspace:* resolve error'))  // piece-x individual
             .mockRejectedValueOnce(new Error('workspace:* resolve error'))  // piece-y individual
 
-        const error = await installer.install({ pieces: [piece1, piece2], includeFilters: false, ...bundleSource }).catch(e => e as Error)
+        const error = await captureError(installer.install({ pieces: [piece1, piece2], includeFilters: false, ...bundleSource }))
 
         expect(error).toBeInstanceOf(Error)
         expect(error.message).toContain('@inboxfm-connect/piece-x@1.0.0')
@@ -223,8 +237,8 @@ describe('pieceInstaller', () => {
         await installer.install({ pieces: [good, poison], includeFilters: true, ...bundleSource })
 
         expect(mockInstall).toHaveBeenCalledOnce()
-        expect(mockInstall.mock.calls[0]?.[0].filtersPath).toEqual([
-            expect.stringContaining('@inboxfm-connect/piece-good-1.0.0'),
+        expect((mockInstall.mock.calls[0]?.[0].filtersPath as string[]).map(toPosix)).toEqual([
+            `pieces/${good.pieceName}-${good.pieceVersion}`,
         ])
         expect(await pathExists(readyFilePath(good))).toBe(true)
     })
@@ -252,10 +266,34 @@ describe('pieceInstaller', () => {
         expect(mockInstall).toHaveBeenCalledOnce()
         const filtersPath = mockInstall.mock.calls[0]?.[0].filtersPath as string[]
         expect(filtersPath).toHaveLength(2)
-        expect(filtersPath.some(f => f.includes('@inboxfm-connect/piece-a-1.0.0'))).toBe(true)
-        expect(filtersPath.some(f => f.includes('piece-b-unscoped-1.0.0'))).toBe(true)
-        expect(filtersPath.some(f => f.includes('piece-x'))).toBe(false)
-        expect(filtersPath.some(f => f.includes('piece-y'))).toBe(false)
+        expect(filtersPath.some(f => toPosix(f).includes('@inboxfm-connect/piece-a-1.0.0'))).toBe(true)
+        expect(filtersPath.some(f => toPosix(f).includes('piece-b-unscoped-1.0.0'))).toBe(true)
+        expect(filtersPath.some(f => toPosix(f).includes('piece-x'))).toBe(false)
+        expect(filtersPath.some(f => toPosix(f).includes('piece-y'))).toBe(false)
+    })
+
+    it('skips pieces whose version escapes the workspace — a poisoned version never reaches bun', async () => {
+        // path.join(workspace, 'pieces', `name-<version>`) normalizes `..`/`/` segments in the
+        // version just like in the name, so these would land the piece folder outside the
+        // workspace (or overwrite the root package.json) if they were not skipped.
+        const good = makePiece('@inboxfm-connect/piece-ok', '1.2.3')
+        const versionEscape = makePiece('@inboxfm-connect/piece-evil', '1.0.0/../../..')
+        const versionTraversal = makePiece('@inboxfm-connect/piece-evil-2', '1.0.0/..')
+        const versionAbsolutePath = makePiece('@inboxfm-connect/piece-evil-3', '/opt/critical')
+        const installer = pieceInstaller(fakeLog, testWorkspace, fakeGetSettings)
+
+        mockInstall.mockResolvedValueOnce({ output: '' })
+
+        await installer.install({ pieces: [good, versionEscape, versionTraversal, versionAbsolutePath], includeFilters: true, ...bundleSource })
+
+        expect(mockInstall).toHaveBeenCalledOnce()
+        const filtersPath = mockInstall.mock.calls[0]?.[0].filtersPath as string[]
+        expect(filtersPath).toHaveLength(1)
+        expect(toPosix(filtersPath[0])).toContain('@inboxfm-connect/piece-ok-1.2.3')
+        // The poisoned versions never even trigger a bundle fetch.
+        expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1)
+        expect(await pathExists(join(testWorkspace, 'pieces', 'piece-evil-1.0.0'))).toBe(false)
+        expect(await pathExists(join(testWorkspace, 'package.json'))).toBe(true)
     })
 
     it('individual fallback always passes --filter path regardless of includeFilters', async () => {
@@ -277,12 +315,10 @@ describe('pieceInstaller', () => {
         expect(mockInstall.mock.calls[0]?.[0]).toMatchObject({ filtersPath: [] })
 
         // Individual calls must always include the --filter path (sequential order)
-        expect(mockInstall.mock.calls[1]?.[0]).toMatchObject({
-            filtersPath: [expect.stringContaining(`${piece1.pieceName}-${piece1.pieceVersion}`)],
-        })
-        expect(mockInstall.mock.calls[2]?.[0]).toMatchObject({
-            filtersPath: [expect.stringContaining(`${piece2.pieceName}-${piece2.pieceVersion}`)],
-        })
+        expect((mockInstall.mock.calls[1]?.[0].filtersPath as string[]).map(toPosix))
+            .toEqual([`pieces/${piece1.pieceName}-${piece1.pieceVersion}`])
+        expect((mockInstall.mock.calls[2]?.[0].filtersPath as string[]).map(toPosix))
+            .toEqual([`pieces/${piece2.pieceName}-${piece2.pieceVersion}`])
     })
 })
 
@@ -322,5 +358,35 @@ describe('isValidPackageName', () => {
         '',
     ])('rejects invalid package name %j', (name) => {
         expect(isValidPackageName(name)).toBe(false)
+    })
+})
+
+describe('isValidPieceVersion', () => {
+    it.each([
+        '1.0.0',
+        '0.0.3',
+        'latest',
+        '^1.2.3',
+        '~2.0.0',
+        '1.0.0-beta.1',
+    ])('accepts valid piece version %j', (version) => {
+        expect(isValidPieceVersion(version)).toBe(true)
+    })
+
+    it.each([
+        // path segments that escape the on-disk piece folder
+        '1.0.0/../../..',
+        '1.0.0/..',
+        '..',
+        '../1.0.0',
+        'a/b',
+        // absolute path in a version key
+        '/opt/critical',
+        // windows separators
+        '1.0.0\\..\\..',
+        // empty
+        '',
+    ])('rejects invalid piece version %j', (version) => {
+        expect(isValidPieceVersion(version)).toBe(false)
     })
 })

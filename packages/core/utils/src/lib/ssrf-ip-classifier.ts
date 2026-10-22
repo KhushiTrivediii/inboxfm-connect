@@ -48,6 +48,11 @@ function isBlockedIp({ ip, allowList }: { ip: string, allowList: string[] }): bo
     return isBlockedRange(addr)
 }
 
+function isIpLiteral(ip: string): boolean {
+    return ipaddr.isValid(ip)
+}
+
 export const ssrfIpClassifier = {
     isBlockedIp,
+    isIpLiteral,
 }

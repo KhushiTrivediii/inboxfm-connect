@@ -1,7 +1,8 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { Connection, ConnectionsPage } from '../src/api-types'
 import type { ConnectionContract } from '../src/generated/connections'
-import type { CreateConnectSessionResult, ExecuteParams, ListConnectionsResult } from '../src/index'
+import type { ToolContract, ToolInputContract } from '../src/generated/tools'
+import type { CreateConnectSessionResult, ExecuteParams, ListConnectionsResult, Tool, ToolInput } from '../src/index'
 
 describe('generated API contracts', () => {
     it('never exposes server-only fields (platformId, ownerId, owner) on the public Connection type', () => {
@@ -44,5 +45,12 @@ describe('generated API contracts', () => {
         expectTypeOf<ExecuteParams>().toHaveProperty('integration')
         expectTypeOf<ExecuteParams>().toHaveProperty('tool')
         expectTypeOf<ExecuteParams>().toHaveProperty('input')
+    })
+
+    it('derives Tool and ToolInput from the generated integration-framework contracts instead of hand-copying them', () => {
+        expectTypeOf<Omit<Tool, 'inputs'>>().toEqualTypeOf<ToolContract>()
+        expectTypeOf<Tool['inputs']>().toEqualTypeOf<ToolInput[]>()
+        expectTypeOf<Omit<ToolInput, 'name'>>().toEqualTypeOf<ToolInputContract>()
+        expectTypeOf<ToolInput['type']>().toEqualTypeOf<ToolInputContract['type']>()
     })
 })

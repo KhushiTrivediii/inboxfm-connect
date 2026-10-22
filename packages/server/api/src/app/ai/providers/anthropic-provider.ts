@@ -1,4 +1,4 @@
-import { httpClient, HttpMethod } from '@inboxfm-connect/pieces-common'
+import { safeHttp } from '@inboxfm-connect/server-utils'
 import { AIProviderModel, AIProviderModelType, AnthropicProviderAuthConfig, AnthropicProviderConfig } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { AIProviderStrategy } from './ai-provider'
@@ -9,9 +9,8 @@ export const anthropicProvider: AIProviderStrategy<AnthropicProviderAuthConfig, 
         await anthropicProvider.listModels(authConfig, config)
     },
     async listModels(authConfig: AnthropicProviderAuthConfig, _config: AnthropicProviderConfig): Promise<AIProviderModel[]> {
-        const res = await httpClient.sendRequest<{ data: AnthropicModel[] }>({
-            url: 'https://api.anthropic.com/v1/models',
-            method: HttpMethod.GET,
+        const client = safeHttp.createAxios()
+        const res = await client.get<{ data: AnthropicModel[] }>('https://api.anthropic.com/v1/models', {
             headers: {
                 'x-api-key': authConfig.apiKey,
                 'Content-Type': 'application/json',
@@ -19,7 +18,7 @@ export const anthropicProvider: AIProviderStrategy<AnthropicProviderAuthConfig, 
             },
         })
 
-        const { data } = res.body
+        const { data } = res.data
 
         return data.map((model: AnthropicModel) => ({
             id: model.id,

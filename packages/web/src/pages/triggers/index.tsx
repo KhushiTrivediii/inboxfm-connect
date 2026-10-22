@@ -148,7 +148,7 @@ export default function TriggersPage() {
 
   const piecesWithTriggers = useMemo(
     () =>
-      (integrations ?? [])
+      (integrations?.data ?? [])
         .filter((piece) => (piece.triggers ?? 0) > 0)
         .sort((a, b) => a.displayName.localeCompare(b.displayName)),
     [integrations]

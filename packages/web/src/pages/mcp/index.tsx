@@ -84,7 +84,7 @@ export default function McpPage() {
   }, [search, statusFilter, disabledSet])
 
   const callableIntegrations = useMemo(
-    () => (integrationsQuery.data ?? []).filter((piece) => piece.actions > 0),
+    () => (integrationsQuery.data?.data ?? []).filter((piece) => piece.actions > 0),
     [integrationsQuery.data]
   )
 

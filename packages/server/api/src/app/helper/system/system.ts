@@ -23,6 +23,26 @@ const systemPropDefaultValues: Partial<Record<SystemProp, string>> = {
     // flag that registers the underlying @fastify/rate-limit plugin.
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_MAX]: '10',
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_WINDOW]: '1 minute',
+    // Looser tier for the RFC 7591 MCP OAuth dynamic-registration endpoint
+    // (POST /register — see mcp-oauth-register.controller.ts). Unlike the
+    // token/revoke endpoints, register authenticates no secret, so the
+    // concern is not brute force but the unbounded one-DB-row-per-request
+    // creation it allows. A ceiling of 20/min/IP bounds that to ~28.8k
+    // rows/day per IP while staying far above legitimate use — MCP clients
+    // register once at setup, so even a bursty shared-NAT onboarding has
+    // ample headroom. Gated by the same AP_API_RATE_LIMIT_AUTHN_ENABLED flag
+    // as the other authn-surface tiers.
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_MAX]: '20',
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_WINDOW]: '1 minute',
+    // IP-scoped tier for routes that synchronously run piece code or fan out to
+    // upstream AI/search providers inside the API process (execute, executions
+    // list/create, knowledge-search, AI providers). 60/min/IP stays far above dashboard
+    // polling while capping cheap parallel-request DoS. Gated by
+    // AP_API_RATE_LIMIT_SYNC_ENABLED, which registers the same underlying
+    // @fastify/rate-limit plugin instance as the AUTHN tier.
+    [AppSystemProp.API_RATE_LIMIT_SYNC_ENABLED]: 'true',
+    [AppSystemProp.API_RATE_LIMIT_SYNC_MAX]: '60',
+    [AppSystemProp.API_RATE_LIMIT_SYNC_WINDOW]: '1 minute',
     // Per-email (not per-IP) counter on failed sign-in attempts, so credential
     // stuffing against a single account from many IPs/a botnet can't outrun the
     // per-IP tier above. 5 failed attempts / 15-minute window per email is a
@@ -32,7 +52,10 @@ const systemPropDefaultValues: Partial<Record<SystemProp, string>> = {
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_ENABLED]: 'true',
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_MAX_ATTEMPTS]: '5',
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_WINDOW_SECONDS]: '900',
-    [AppSystemProp.WORKERS]: '1',
+    // Header used to extract the client IP behind reverse proxies (e.g. 'x-real-ip').
+    // Note: When deployed behind a reverse proxy, the proxy MUST overwrite or sanitize
+    // this header to prevent untrusted clients from spoofing client IPs or draining rate-limit buckets.
+    // When the header value is absent or empty, extractClientRealIp falls back to request.ip.
     [AppSystemProp.CLIENT_REAL_IP_HEADER]: 'x-real-ip',
     [AppSystemProp.CLOUD_AUTH_ENABLED]: 'true',
     [AppSystemProp.CONFIG_PATH]: path.join(os.homedir(), '.activepieces'),
@@ -60,9 +83,6 @@ const systemPropDefaultValues: Partial<Record<SystemProp, string>> = {
     [AppSystemProp.SANDBOX_MEMORY_LIMIT]: '1048576',
     [AppSystemProp.FLOW_TIMEOUT_SECONDS]: '600',
     [AppSystemProp.TRIGGER_TIMEOUT_SECONDS]: '60',
-    [AppSystemProp.RUNS_METADATA_UPDATE_CONCURRENCY]: '2',
-    [AppSystemProp.TRIGGER_HOOKS_TIMEOUT_SECONDS]: '180',
-    [AppSystemProp.EVENT_DESTINATION_TIMEOUT_SECONDS]: '10',
     [AppSystemProp.REDIS_FAILED_JOB_RETENTION_DAYS]: '30',
     [AppSystemProp.REDIS_FAILED_JOB_RETENTION_MAX_COUNT]: '100000',
     [AppSystemProp.TELEMETRY_ENABLED]: 'true',

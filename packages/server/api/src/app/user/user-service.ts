@@ -4,8 +4,9 @@ import dayjs from 'dayjs'
 import { FastifyBaseLogger } from 'fastify'
 import { nanoid } from 'nanoid'
 import { In, IsNull } from 'typeorm'
-import { userIdentityRepository, userIdentityService } from '../authentication/user-identity/user-identity-service'
+import { userIdentityRepository } from '../authentication/user-identity/user-identity-service'
 import { repoFactory } from '../core/db/repo-factory'
+import { distributedLock } from '../database/redis-connections'
 import { projectMemberRepo } from '../ee/projects/project-role/project-role.service'
 import { buildPaginator } from '../helper/pagination/build-paginator'
 import { paginationHelper } from '../helper/pagination/pagination-utils'
@@ -16,6 +17,14 @@ import { UserEntity, UserSchema } from './user-entity'
 
 
 export const userRepo = repoFactory(UserEntity)
+
+// Postgres surfaces a unique violation as SQLSTATE 23505 on `code`, and pglite puts it
+// on `driverError.code` instead, so a matcher keyed on the message misses half the
+// supported drivers. Same shape as the other services in this package.
+const isUniqueViolation = (error: unknown): boolean => {
+    const candidate = error as { code?: unknown, driverError?: { code?: unknown } } | null
+    return candidate?.code === '23505' || candidate?.driverError?.code === '23505'
+}
 
 export const userService = (log: FastifyBaseLogger) => ({
     async create(params: CreateParams): Promise<User> {
@@ -31,26 +40,57 @@ export const userService = (log: FastifyBaseLogger) => ({
         return userRepo().save(user)
     },
     async getOrCreateWithProject({ identity, platformId }: GetOrCreateWithProjectParams): Promise<User> {
-        const user = await this.getOneByIdentityAndPlatform({
-            identityId: identity.id,
-            platformId,
-        })
-        if (isNil(user)) {
-            const newUser = await this.create({
-                identityId: identity.id,
-                platformId,
-                platformRole: PlatformRole.MEMBER,
-            })
-
-            await projectService(log).create({
-                displayName: identity.firstName + '\'s Project',
-                ownerId: newUser.id,
-                platformId,
-                type: ProjectType.PERSONAL,
-            })
-            return newUser
+        // Two sign-ins for the same identity on the same platform can both observe "no
+        // user" and provision concurrently. Both inserts then target
+        // idx_user_platform_id_email (platformId, identityId) and the loser surfaced a
+        // raw unique violation out of a sign-in path - or, when the user insert did land,
+        // a second personal project for the same person. Serialize on the natural key and
+        // re-check inside the lock; the out-of-lock read stays so a warm call never
+        // touches Redis.
+        const existing = await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })
+        if (!isNil(existing)) {
+            return existing
         }
-        return user
+
+        const key = `user:get-or-create:${platformId}:${identity.id}`
+        try {
+            return await distributedLock(log).runExclusive({
+                key,
+                timeoutInSeconds: 60,
+                fn: async () => {
+                    // Re-check under the lock: the winner of a race has already committed.
+                    const user = await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })
+                    if (!isNil(user)) {
+                        return user
+                    }
+                    const newUser = await this.create({
+                        identityId: identity.id,
+                        platformId,
+                        platformRole: PlatformRole.MEMBER,
+                    })
+
+                    await projectService(log).create({
+                        displayName: identity.firstName + '\'s Project',
+                        ownerId: newUser.id,
+                        platformId,
+                        type: ProjectType.PERSONAL,
+                    })
+                    return newUser
+                },
+            })
+        }
+        catch (error) {
+            // The lock is an optimisation, not the correctness boundary: if it is
+            // unavailable, or the insert lost the race anyway, converge on the
+            // committed row rather than failing a sign-in.
+            if (isUniqueViolation(error) || await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })) {
+                const winner = await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })
+                if (!isNil(winner)) {
+                    return winner
+                }
+            }
+            throw error
+        }
     },
     async updateLastActiveDate({ id }: UpdateLastActiveDateParams): Promise<void> {
         await userRepo().update({ id }, { lastActiveDate: dayjs().toISOString() })
@@ -103,12 +143,14 @@ export const userService = (log: FastifyBaseLogger) => ({
                 beforeCursor: decodedCursor.previousCursor,
             },
         })
-        const { data, cursor } = await paginator.paginate(userRepo().createQueryBuilder('user').where({
-            platformId,
-            ...spreadIfDefined('externalId', externalId),
-        }))
+        const { data, cursor } = await paginator.paginate(userRepo().createQueryBuilder('user')
+            .leftJoinAndSelect('user.identity', 'identity')
+            .where({
+                platformId,
+                ...spreadIfDefined('externalId', externalId),
+            }))
 
-        const usersWithMetaInformation = await Promise.all(data.map(this.getMetaInformation))
+        const usersWithMetaInformation = data.map(toUserWithMetaInformation)
         return paginationHelper.createPage<UserWithMetaInformation>(usersWithMetaInformation, cursor)
     },
     async getByIdentityId({ identityId }: GetByIdentityId): Promise<UserSchema[]> {
@@ -183,8 +225,8 @@ export const userService = (log: FastifyBaseLogger) => ({
     },
     async listProjectUsers({ platformId, projectId }: ListUsersForProjectParams): Promise<UserWithMetaInformation[]> {
         const users = await getUsersForProject(platformId, projectId)
-        const usersWithMetaInformation = await userRepo().find({ where: { platformId, id: In(users) }, relations: { identity: true } }).then((users) => users.map(this.getMetaInformation))
-        return Promise.all(usersWithMetaInformation)
+        const usersWithIdentity = await userRepo().find({ where: { platformId, id: In(users) }, relations: { identity: true } })
+        return usersWithIdentity.map(toUserWithMetaInformation)
     },
     async getByPlatformAndExternalId({
         platformId,
@@ -196,22 +238,15 @@ export const userService = (log: FastifyBaseLogger) => ({
         })
     },
     async getMetaInformation({ id }: IdParams): Promise<UserWithMetaInformation> {
-        const user = await userRepo().findOneByOrFail({ id })
-        const identity = await userIdentityService(log).getBasicInformation(user.identityId)
-        return {
-            id: user.id,
-            email: identity.email,
-            firstName: identity.firstName,
-            lastName: identity.lastName,
-            platformId: user.platformId,
-            platformRole: user.platformRole,
-            status: user.status,
-            externalId: user.externalId,
-            created: user.created,
-            updated: user.updated,
-            lastActiveDate: user.lastActiveDate,
-            imageUrl: identity.imageUrl,
+        const user = await userRepo().findOneOrFail({ where: { id }, relations: { identity: true } })
+        return toUserWithMetaInformation(user)
+    },
+    async getMetaInformationBatch({ ids }: GetMetaInformationBatchParams): Promise<Map<UserId, UserWithMetaInformation>> {
+        if (ids.length === 0) {
+            return new Map()
         }
+        const users = await userRepo().find({ where: { id: In(ids) }, relations: { identity: true } })
+        return new Map(users.map((user) => [user.id, toUserWithMetaInformation(user)]))
     },
 
     async addOwnerToPlatform({
@@ -243,6 +278,23 @@ async function assertNotPlatformOwner({ id, platformId, log }: DeleteParams & { 
     }
 }
 
+function toUserWithMetaInformation(user: UserSchema): UserWithMetaInformation {
+    return {
+        id: user.id,
+        email: user.identity.email,
+        firstName: user.identity.firstName,
+        lastName: user.identity.lastName,
+        platformId: user.platformId,
+        platformRole: user.platformRole,
+        status: user.status,
+        externalId: user.externalId,
+        created: user.created,
+        updated: user.updated,
+        lastActiveDate: user.lastActiveDate,
+        imageUrl: user.identity.imageUrl,
+    }
+}
+
 async function getUsersForProject(platformId: PlatformId, projectId: string): Promise<UserId[]> {
     const platformAdmins = await userRepo().find({ where: { platformId, platformRole: PlatformRole.ADMIN } }).then((users) => users.map((user) => user.id))
     const edition = system.getEdition()
@@ -264,6 +316,10 @@ type GetOneByIdAndPlatformIdParams = {
 type ListUsersForProjectParams = {
     projectId: ProjectId
     platformId: PlatformId
+}
+
+type GetMetaInformationBatchParams = {
+    ids: UserId[]
 }
 
 type DeleteParams = {

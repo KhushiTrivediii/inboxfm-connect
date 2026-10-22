@@ -1,164 +1,159 @@
-<h1 align="center">
-  <br>
-  <b>Inboxfm Connect</b>
-  <br>
-</h1>
+# Inboxfm Connect
 
-<p align="center">
-  <b>Open-source AI-first workflow automation platform. 400+ integrations. Native MCP support.</b>
-</p>
+[![CI](https://github.com/Mihir-Rabari/inboxfm-connect/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Mihir-Rabari/inboxfm-connect/actions/workflows/ci.yml)
+[![Contribute to dev](https://img.shields.io/badge/PRs-target%20dev-blue)](CONTRIBUTING.md)
 
-<p align="center">
-  <a href="/LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2B%20dual-purple.svg?style=for-the-badge" alt="License" /></a>
-  <a href="https://github.com/Mihir-Rabari/inboxfm-connect"><img src="https://img.shields.io/badge/edition-CE-blue?style=for-the-badge" alt="Editions" /></a>
-  <a href="https://typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-5.0-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" /></a>
-</p>
+**Integration infrastructure for AI agents and SaaS products.** Let your customers connect their apps, discover available tools, and execute actions on their behalf through REST, MCP, and a TypeScript SDK.
 
-<br>
+The product direction is a self-hostable developer platform in the same category as [Pipedream Connect](https://pipedream.com/docs/connect): your application owns the user experience and agent logic; Inboxfm Connect supplies account connections, credential handling, and integration execution. Read the [product direction and research report](docs/PRODUCT_DIRECTION.md) for the evidence, roadmap, and current gaps.
 
-## 🚀 Overview
+Inboxfm Connect is an independent fork of [Activepieces](https://github.com/activepieces/activepieces). It builds on the upstream integration ecosystem and replaces the visual flow builder with a headless application. See [upstream credits](UPSTREAM_CREDITS.md). This fork is not affiliated with or endorsed by Activepieces.
 
-**Inboxfm Connect** is an open-source, AI-first workflow automation platform for AI agents, developers, and teams. Built from the ground up with TypeScript, it provides integration capabilities through native **Model Context Protocol (MCP)** servers, headless relational data tables, and a type-safe integrations framework.
+**Development preview:** use it for local experiments and hackathon projects. Production hardening and removal of inherited Enterprise dependencies are still tracked work. The repository contains both MIT and Enterprise-licensed material; see [licensing](LICENSING.md) before deploying or redistributing it.
 
-Whether self-hosted or deployed in the cloud, Inboxfm Connect connects LLM models (via Claude Desktop, Cursor, Windsurf, or custom AI agents) to **400+ integrations** safely and deterministically.
+## The experience we are building
 
-This is a fork of [Activepieces](https://github.com/activepieces/activepieces), stripped of its visual flow builder in favor of a headless, MCP-first execution model.
+1. Your customer signs into **your application**.
+2. Your backend creates a short-lived Connect session for that customer's `externalUserId` and allowed integrations.
+3. Your application opens the returned connection URL; the customer authorizes their third-party account.
+4. Your backend discovers tools and executes an action using that customer's connection.
+5. Your application or agent presents the result and lets the customer reconnect or revoke access.
 
----
-
-## 📌 Project status
-
-This project is under **active development**. Current priorities, tracked as [GitHub Issues](https://github.com/Mihir-Rabari/inboxfm-connect/issues):
-
-- **Removing all `packages/ee/`-licensed code** — this repo currently still imports some Activepieces Enterprise-licensed code from core request paths (auth, flags, websockets, piece listing). That's being replaced with original, MIT-licensed implementations so the app is genuinely free to run in production. See [#7](https://github.com/Mihir-Rabari/inboxfm-connect/issues/7) and its linked sub-issues.
-- **Production hardening** — abuse prevention, backups/DR, observability wiring, deployment docs.
-- **New surfaces** — a proper landing page, an API key management UI, a Docusaurus documentation site, and a polished public SDK (`packages/connect-sdk`).
-
-If you're picking up work here, start from the [open issues](https://github.com/Mihir-Rabari/inboxfm-connect/issues) and see [CONTRIBUTING.md](CONTRIBUTING.md) for the branch workflow.
-
----
-
-## 🔥 Key Features
-
-- **🤖 Native MCP Support**: Every integration automatically acts as an MCP server. Connect LLM agents in Claude, Cursor, Windsurf, or custom agentic tools to 400+ external services.
-- **🛠️ Type-Safe Integrations Framework**: Write custom actions and triggers in TypeScript using `@inboxfm-connect/pieces-framework` with hot-reloading.
-- **📊 Headless Data Tables**: Built-in relational storage service (`Table`, `Field`, `Record`, `Cell`) for structured data persistence.
-- **🏢 Multi-Tenancy**: Strict tenant isolation (`Platform` → `Project` → `User`), enforced on every query by `projectId`/`platformId`.
-- **🔒 Security by Design**: Built-in SSRF protection (`safeHttp`), scoped API keys, and role-based access control.
-- **⚡ Performance**: Fastify REST API, TypeORM-managed PostgreSQL, and BullMQ/Redis for reliable async job processing.
-
----
-
-## 🏗️ Monorepo Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full module/entity map. High level:
-
-```
-├── packages/
-│   ├── core/
-│   │   ├── shared/                # DB/EE/app-level schemas, types (thick — never import from pieces/engine)
-│   │   ├── piece-types/           # Common type schemas for integrations
-│   │   ├── pieces-framework/      # Framework SDK for building custom integrations
-│   │   ├── pieces-common/         # Shared utilities for pieces (OAuth, polling, HTTP)
-│   │   ├── core-utils/            # Lean framework-agnostic utilities
-│   │   └── core-formula/          # Formula parsing and evaluation engine
-│   ├── server/
-│   │   ├── api/                   # Fastify-based backend REST API server
-│   │   ├── engine/                # Runtime executor for headless pieces and MCP tools
-│   │   ├── sandbox/                # Code sandbox isolation layer
-│   │   └── scheduler/             # Scheduled tasks and cron trigger manager
-│   ├── web/                       # React frontend (flow-builder-free dashboard)
-│   ├── connect-sdk/                # Public client SDK (in progress)
-│   └── integrations/
-│       ├── core/                  # Core integration definitions (e.g. tables)
-│       └── community/             # Third-party integrations
+```mermaid
+flowchart LR
+    User[Your customer] --> Product[Your app or AI agent]
+    Product --> Backend[Your trusted backend]
+    Backend --> Connect[Inboxfm Connect]
+    Connect --> Account[Customer's connected app account]
+    Connect --> Runtime[Integration action runtime]
+    Runtime --> APIs[Third-party APIs]
 ```
 
----
+Connect API keys stay on your backend. Derive `externalUserId` from your authenticated customer session; do not trust an arbitrary ID submitted by the browser. A project API key is privileged access to that project, not authentication for an individual customer.
 
-## 🛠️ Quick Start
+## Available building blocks
 
-### 1. Prerequisites
-- **Node.js**: `^18.17.0` or `>=20.0.0`
-- **npm**: `>=9.0.0`
-- **PostgreSQL**: `>=14` (or PGlite for zero-setup local dev)
-- **Redis**: `>=6.0`
+- Hosted connection pages reached through short-lived end-user sessions, plus project-scoped API keys.
+- Tool discovery and execution across the inherited integration catalog.
+- MCP servers that expose integrations and tables to compatible AI clients.
+- Applications that use structured tables, scheduled tasks, and trigger bindings.
+- An operator dashboard for integrations, connections, MCP servers, and API keys.
 
-### 2. Installation & Setup
+These building blocks exist in the repository; they do not establish production parity with Pipedream Connect. A general credential-aware API proxy, a published SDK installation path, and a verified external-user OAuth/MCP journey remain delivery work. The dashboard is the management surface; the embedded integration experience is the main product.
+
+The catalog contains hundreds of inherited integration packages. Package count is not a promise that every provider, action, or OAuth flow is configured and verified on your deployment. Operators must register/configure their OAuth applications, callback URLs, and required provider permissions; upstream OAuth approvals are not transferred by forking the code.
+
+Third-party integrations may require an account, credentials, or a paid service. Use sandbox accounts and test data for demos.
+
+## Start locally
+
+### Prerequisites
+
+- **Node.js**: `v18.x`, `v22.x`, or `v24.x` (`tools/setup-dev.js` validates compatible versions; Node 20 is not supported).
+- **Bun**: `1.3.3` (required package manager pinned in `package.json`; auto-installed by `tools/setup-dev.js` if missing).
+- **Database**: Zero-setup embedded PostgreSQL powered by **PGlite** (`AP_DB_TYPE=PGLITE` in `.env.dev`). External PostgreSQL >= 14 is supported via `AP_DB_TYPE=POSTGRES`. SQLite is deprecated and auto-migrated to PGLite.
+- **Queue & Cache**: In-memory Redis queue by default (`AP_QUEUE_MODE=MEMORY`, `AP_REDIS_TYPE=MEMORY`). External Redis >= 6.0 supported.
+- **OS**: Linux, macOS, or WSL2 is recommended for native dependencies and shell-based test commands. Native dependency builds may require Python and a C/C++ toolchain.
+
+### Quick Start
 
 ```bash
-# Clone the repository
 git clone https://github.com/Mihir-Rabari/inboxfm-connect.git
 cd inboxfm-connect
-
-# Install dependencies and set up the dev environment
+git switch dev
 npm start
-
-# Or, once set up, just run frontend + backend
-npm run dev
 ```
 
-Copy `.env.dev` and adjust for your local setup — see [ARCHITECTURE.md](ARCHITECTURE.md) for the database options (`AP_DB_TYPE=POSTGRES` or `PGLITE`).
+`npm start` installs dependencies, builds the configured development integrations, and starts the backend and engine. In another terminal, start the web application:
 
----
+```bash
+bun x turbo run serve --filter=@inboxfm-connect/web
+```
 
-## 🔌 Building Custom Integrations
+Open [localhost:4200](http://localhost:4200). The API listens on port 3000. See [the hackathon guide](docs/HACKATHON.md) for environment settings, credentials, sample projects, and troubleshooting. Subsequent backend starts use `npm run dev`.
 
-Integrations are standard TypeScript packages built with `@inboxfm-connect/pieces-framework`:
+## SDK and API
 
-```typescript
-import { createPiece, createAction, Property } from '@inboxfm-connect/pieces-framework'
+The SDK source and runnable examples live in [packages/connect-sdk](packages/connect-sdk). Its [README](packages/connect-sdk/README.md) covers the local workspace/tarball installation path, authentication, connection sessions, tool discovery, and action execution; the [SDK overview](docs/connect-sdk/overview.mdx) and [reference](docs/connect-sdk/reference.mdx) cover the public contract. Public npm availability is not assumed: the registry lookup returned 404 during the September 27, 2026 review.
 
-export const myCustomAction = createAction({
-    name: 'send_message',
-    displayName: 'Send Message',
-    description: 'Sends a notification message',
-    props: {
-        recipient: Property.ShortText({
-            displayName: 'Recipient',
-            required: true,
-        }),
-        message: Property.LongText({
-            displayName: 'Message',
-            required: true,
-        }),
-    },
-    async run(context) {
-        // Implementation logic
-        return { success: true }
-    },
+The following runs on your backend after installing the SDK from the repository. Configure a Connect API key, project ID, and the provider's OAuth app before using an OAuth integration.
+
+```ts
+import { InboxFM } from '@inboxfm-connect/sdk'
+
+const inboxfm = new InboxFM({
+  baseUrl: 'http://localhost:3000/api',
+  projectId: 'YOUR_PROJECT_ID',
+  apiKey: 'YOUR_SERVER_SIDE_CONNECT_API_KEY',
 })
 
-export const myPiece = createPiece({
-    displayName: 'My Custom Integration',
-    auth: Property.SecretText({ displayName: 'API Key', required: true }),
-    minimumSupportedRelease: '0.0.1',
-    authors: [],
-    actions: [myCustomAction],
-    triggers: [],
+// Use the customer identity established by your application's authentication.
+const externalUserId = 'customer_42'
+const integration = '@inboxfm-connect/piece-slack'
+const session = await inboxfm.createConnectSession({
+  externalUserId,
+  allowedPieceNames: [integration],
+})
+// Send session.connectUrl to this customer's browser to authorize Slack.
+
+const tools = await inboxfm.listTools({
+  integration,
+})
+
+// After the customer connects, resolve their connection within this project.
+const connections = await inboxfm.listConnections({ externalUserId, pieceName: integration })
+// Choose a returned connection and a tool from tools; use the tool's input schema.
+const connection = connections.data.find((candidate) => candidate.status === 'ACTIVE')
+if (!connection) throw new Error('Connect or reconnect this customer\'s Slack account first')
+
+const output = await inboxfm.execute({
+  integration,
+  tool: 'send_channel_message',
+  connectionId: connection.id,
+  input: { channel: 'YOUR_CHANNEL_ID', text: 'Hello from your app', sendAsBot: true },
 })
 ```
 
----
+The session creation and the later execution are separate steps: wait for the customer's connection flow to complete before listing their connections and sending the message. Keep API keys on the server. The placeholders are not credentials; never commit real credentials or expose them in a browser bundle.
 
-## 📚 Documentation & SDK
+## Repository map
 
-- **Docs site**: a Docusaurus-based documentation site is in progress — tracked in the docs/SDK issues on the [issue tracker](https://github.com/Mihir-Rabari/inboxfm-connect/issues). Until it ships, the best reference is `CLAUDE.md`, `ARCHITECTURE.md`, and the code itself.
-- **SDK**: `packages/connect-sdk` is the public client SDK for the Connect platform (API keys, connect sessions). Also in progress — see the issue tracker.
+| Area | Location |
+| --- | --- |
+| REST API, tenant security, persistence | [packages/server/api](packages/server/api) |
+| Headless runtime and engine | [packages/runtime](packages/runtime), [packages/server/engine](packages/server/engine) |
+| Sandbox and server utilities | [packages/server/sandbox](packages/server/sandbox), [packages/server/utils](packages/server/utils) |
+| Thin core libraries and application schemas | [packages/core](packages/core) |
+| Integration framework and catalog | [packages/integrations](packages/integrations) |
+| Dashboard | [packages/web](packages/web) |
+| TypeScript client | [packages/connect-sdk](packages/connect-sdk) |
+| Scheduling | [packages/scheduler](packages/scheduler) |
+| Inherited restricted code | `packages/ee/`, `packages/server/api/src/app/ee/` |
 
----
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for execution flows, package boundaries, storage, and where to make changes.
 
-## 🤝 Contributing
+## Contribute
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch workflow, PR conventions, and how automated PR review works in this repo.
+Branch from `dev` and open your PR against **`dev`**. `main` receives reviewed promotions from `dev`. Check existing issues and PRs before starting, keep each change focused, and include its issue number.
 
----
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), [the hackathon guide](docs/HACKATHON.md), and [open issues](https://github.com/Mihir-Rabari/inboxfm-connect/issues). Follow the [Code of Conduct](.github/CODE_OF_CONDUCT.md). Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
-## 📜 License
+## Checks
 
-This repo is **dual-licensed** by directory:
+```bash
+npm run lint-dev
+npm run test-unit
+npm run test-api
+npm run check-migrations
+npm run check-licenses
+```
 
-- Everything **outside** `packages/ee/` and `packages/server/api/src/app/ee/` is **MIT** — free to use, modify, and ship.
-- Everything **inside** those two directories is Activepieces Inc's own Enterprise-licensed code — usable for dev/test, but not in production without a paid Activepieces Enterprise license.
+CI runs on every PR, pushes to `dev` and `main`, and merge queues. It checks workflow syntax, attribution and Enterprise boundaries, lint, types, builds, SDK packaging, unit/web tests, edition integration tests, PostgreSQL behavior, migrations, and affected integrations. See [docs/CI.md](docs/CI.md) for the exact jobs and local commands.
 
-We're actively removing the `ee/` dependency from every code path outside `ee/` itself (see [#7](https://github.com/Mihir-Rabari/inboxfm-connect/issues/7)) so the whole app is unambiguously MIT to run in production. See [LICENSING.md](LICENSING.md) for the full detail and current status.
+The required Chromium, Firefox, and WebKit journey covers dashboard sign-in, persisted automation setup, and real Text Helper execution. It is separate from the external-customer OAuth acceptance journey described in the [product roadmap](docs/PRODUCT_DIRECTION.md#recommended-delivery-order).
+
+## License and attribution
+
+Keep the original copyright and license notices. Most application code is covered by the [root license](LICENSE), which explicitly excludes the two Enterprise directories and preserves third-party license terms. Those Enterprise directories are governed by [Activepieces' Enterprise license](packages/ee/LICENSE); tests passing or choosing an edition does not grant additional license rights.
+
+See [LICENSING.md](LICENSING.md) for the current limitations and [UPSTREAM_CREDITS.md](UPSTREAM_CREDITS.md) for acknowledgements.

@@ -314,4 +314,67 @@ export type RuntimeStderr = EngineStderr
 export const RuntimeHttpResponse = EngineHttpResponse
 export type RuntimeHttpResponse = EngineHttpResponse
 
+/**
+ * Runtime type guards for EngineOperation.
+ *
+ * These exist to replace the `operation as XOperation` casts that previously
+ * silenced the compiler at every dispatch site. A cast asserts a shape the
+ * engine never checked, so a malformed or misrouted operation surfaced as a
+ * confusing failure deep inside a piece instead of a clear error at the
+ * boundary.
+ *
+ * IMPORTANT - the two auth operations are the SAME TYPE:
+ *   export type ExecuteRefreshTokenAuthOperation = ExecuteValidateAuthOperation
+ * They are told apart by `operationType` (the switch discriminant), never by
+ * shape. Any guard that tries to separate them structurally is wrong: both carry
+ * `piece`, `auth` and `timeoutInSeconds` (it comes from BaseEngineOperation and
+ * Omit<> only drops `projectId`). So there is deliberately one combined
+ * `isExecuteAuthOperation` rather than two mutually exclusive guards.
+ */
+export function isExecuteToolOperation(op: EngineOperation): op is ExecuteToolOperation {
+    return op !== undefined
+        && 'pieceName' in op
+        && 'actionName' in op
+        && 'input' in op
+}
 
+/**
+ * Covers both EXECUTE_VALIDATE_AUTH and EXECUTE_REFRESH_TOKEN_AUTH - see the
+ * note above on why they cannot be told apart by shape.
+ */
+export function isExecuteAuthOperation(op: EngineOperation): op is ExecuteValidateAuthOperation {
+    return op !== undefined
+        && 'piece' in op
+        && 'auth' in op
+        // PropsOptions also carries `piece`, so exclude it explicitly.
+        && !('propertyName' in op)
+        && !('actionName' in op)
+}
+
+export function isExecuteTriggerOperation<H extends TriggerHookType>(op: EngineOperation, hookType?: H): op is ExecuteTriggerOperation<H> {
+    return op !== undefined
+        && 'hookType' in op
+        && (hookType === undefined || op.hookType === hookType)
+}
+
+/**
+ * ExecuteExtractPieceMetadataOperation and ExecuteToolOperation both carry
+ * pieceName, platformId and timeoutInSeconds, so those keys cannot discriminate
+ * them. The tool variant always has actionName + input; the extract variant
+ * never does.
+ */
+export function isExecuteExtractPieceMetadataOperation(op: EngineOperation): op is ExecuteExtractPieceMetadataOperation {
+    return op !== undefined
+        && 'pieceName' in op
+        && 'platformId' in op
+        && 'timeoutInSeconds' in op
+        && !('actionName' in op)
+        && !('input' in op)
+}
+
+export function isExecutePropsOptions(op: EngineOperation): op is ExecutePropsOptions {
+    return op !== undefined
+        && 'piece' in op
+        && 'propertyName' in op
+        && 'actionOrTriggerName' in op
+}

@@ -107,7 +107,7 @@ export function TriggerBindingForm({ mode, binding, defaultPieceName, defaultTri
 
   const integrationsQuery = useIntegrations()
   const allIntegrations = useMemo(
-    () => (integrationsQuery.data ?? []).filter((piece) => (piece.triggers ?? 0) > 0),
+    () => (integrationsQuery.data?.data ?? []).filter((piece) => (piece.triggers ?? 0) > 0),
     [integrationsQuery.data]
   )
 

@@ -55,7 +55,7 @@ A built-in relational database feature that lets users store structured data dir
 - **TableWebhook** — a link between a table event and a flow; fires the flow when the event occurs
 - **Table events** — `RECORD_CREATED`, `RECORD_UPDATED`, `RECORD_DELETED`
 - **externalId** — a stable external identifier for tables and fields, used by the flow integration layer
-- **Tables piece** — `packages/pieces/core/tables/`; provides trigger and action steps that interact with tables via the internal API
+- **Tables piece** — `packages/integrations/core/tables/`; provides trigger and action steps that interact with tables via the internal API
 
 ## Data Model
 
@@ -107,7 +107,7 @@ After record create/update/delete, `recordSideEffects.handleRecordsEvent()`:
 
 ## Table → Flow Integration
 
-Tables piece (`packages/pieces/core/tables/`) provides:
+Tables piece (`packages/integrations/core/tables/`) provides:
 - **Triggers**: New Record, Record Updated, Record Deleted (register TableWebhook on enable, delete on disable)
 - **Actions**: Create Record(s), Get Record, Find Records, Update Record, Delete Record(s), Clear Table
 - Uses internal API with Bearer token authentication

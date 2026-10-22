@@ -17,6 +17,16 @@ export const errorHandler = async (
         if (error.error.code === ErrorCode.PROJECT_EXECUTION_CONCURRENCY_LIMIT_EXCEEDED) {
             void reply.header('Retry-After', String(error.error.params.retryAfterSeconds))
         }
+        else if (error.error.code === ErrorCode.PROJECT_RATE_LIMIT_EXCEEDED || error.error.code === ErrorCode.API_KEY_RATE_LIMIT_EXCEEDED) {
+            void reply.header('Retry-After', String(error.error.params.windowSeconds))
+        }
+
+        // The public-ingress limiter returns the remaining seconds of its fixed
+        // window so the caller (and any well-behaved proxy) can back off exactly
+        // as long as needed instead of retrying into the same window (#351).
+        if (error.error.code === ErrorCode.PUBLIC_INGRESS_RATE_LIMIT_EXCEEDED) {
+            void reply.header('Retry-After', String(error.error.params.windowSeconds))
+        }
 
         await reply.status(statusCode).send({
             code: error.error.code,
@@ -119,6 +129,7 @@ const statusCodeMap: Partial<Record<ErrorCode, StatusCodes>> = {
     [ErrorCode.SIGN_IN_ATTEMPTS_EXCEEDED]: StatusCodes.TOO_MANY_REQUESTS,
     [ErrorCode.CAPTCHA_VERIFICATION_FAILED]: StatusCodes.BAD_REQUEST,
     [ErrorCode.API_KEY_RATE_LIMIT_EXCEEDED]: StatusCodes.TOO_MANY_REQUESTS,
+    [ErrorCode.PUBLIC_INGRESS_RATE_LIMIT_EXCEEDED]: StatusCodes.TOO_MANY_REQUESTS,
     [ErrorCode.PROJECT_EXECUTION_CONCURRENCY_LIMIT_EXCEEDED]: StatusCodes.TOO_MANY_REQUESTS,
 }
 

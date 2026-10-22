@@ -1,6 +1,11 @@
-import { createAction, Property, OAuth2PropertyValue } from '@inboxfm-connect/pieces-framework';
+import {
+  createAction,
+  Property,
+  OAuth2PropertyValue,
+} from '@inboxfm-connect/pieces-framework';
 import { bexioAuth } from '../auth';
 import { BexioClient } from '../common/client';
+import { extractErrorMessage } from '../common';
 import { bexioCommonProps } from '../common/props';
 
 export const updateProductAction = createAction({
@@ -9,7 +14,11 @@ export const updateProductAction = createAction({
   displayName: 'Update Product',
   description: 'Update an existing product or service',
   audience: 'both',
-  aiMetadata: { description: 'Updates fields on an existing Bexio product/article (codes, names, prices, tax, unit, stock, dimensions, accounts) identified by its article id; only supplied fields change. Use to modify a known product; locate the article id with Find Product first. Idempotent: re-sending the same values converges to the same product state.', idempotent: true },
+  aiMetadata: {
+    description:
+      'Updates fields on an existing Bexio product/article (codes, names, prices, tax, unit, stock, dimensions, accounts) identified by its article id; only supplied fields change. Use to modify a known product; locate the article id with Find Product first. Idempotent: re-sending the same values converges to the same product state.',
+    idempotent: true,
+  },
   props: {
     article_id: Property.Dropdown({
       auth: bexioAuth,
@@ -28,12 +37,14 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const articles = await client.get<Array<{
-            id: number;
-            intern_code?: string;
-            intern_name: string;
-            article_type_id?: number;
-          }>>('/2.0/article');
+          const articles = await client.get<
+            Array<{
+              id: number;
+              intern_code?: string;
+              intern_name: string;
+              article_type_id?: number;
+            }>
+          >('/2.0/article');
 
           return {
             disabled: false,
@@ -73,19 +84,22 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const users = await client.get<Array<{
-            id: number;
-            firstname?: string | null;
-            lastname?: string | null;
-            email: string;
-          }>>('/3.0/users');
+          const users = await client.get<
+            Array<{
+              id: number;
+              firstname?: string | null;
+              lastname?: string | null;
+              email: string;
+            }>
+          >('/3.0/users');
 
           return {
             disabled: false,
             options: users.map((user) => {
-              const name = user.firstname && user.lastname
-                ? `${user.firstname} ${user.lastname}`
-                : user.email;
+              const name =
+                user.firstname && user.lastname
+                  ? `${user.firstname} ${user.lastname}`
+                  : user.email;
               return {
                 label: name,
                 value: user.id,
@@ -133,13 +147,15 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const contacts = await client.get<Array<{
-            id: number;
-            contact_type_id: number;
-            name_1: string;
-            name_2?: string | null;
-            nr?: string | null;
-          }>>('/2.0/contact');
+          const contacts = await client.get<
+            Array<{
+              id: number;
+              contact_type_id: number;
+              name_1: string;
+              name_2?: string | null;
+              nr?: string | null;
+            }>
+          >('/2.0/contact');
 
           return {
             disabled: false,
@@ -219,13 +235,15 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const taxes = await client.get<Array<{
-            id: number;
-            name: string;
-            value: number;
-            display_name?: string;
-            type?: string;
-          }>>('/3.0/taxes');
+          const taxes = await client.get<
+            Array<{
+              id: number;
+              name: string;
+              value: number;
+              display_name?: string;
+              type?: string;
+            }>
+          >('/3.0/taxes');
 
           return {
             disabled: false,
@@ -262,13 +280,15 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const taxes = await client.get<Array<{
-            id: number;
-            name: string;
-            value: number;
-            display_name?: string;
-            type?: string;
-          }>>('/3.0/taxes');
+          const taxes = await client.get<
+            Array<{
+              id: number;
+              name: string;
+              value: number;
+              display_name?: string;
+              type?: string;
+            }>
+          >('/3.0/taxes');
 
           return {
             disabled: false,
@@ -305,7 +325,9 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const units = await client.get<Array<{ id: number; name: string }>>('/2.0/unit');
+          const units = await client.get<Array<{ id: number; name: string }>>(
+            '/2.0/unit'
+          );
 
           return {
             disabled: false,
@@ -345,7 +367,9 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const stocks = await client.get<Array<{ id: number; name: string }>>('/2.0/stock').catch(() => []);
+          const stocks = await client.get<Array<{ id: number; name: string }>>(
+            '/2.0/stock'
+          );
 
           return {
             disabled: false,
@@ -354,10 +378,18 @@ export const updateProductAction = createAction({
               value: stock.id,
             })),
           };
-        } catch (error) {
+        } catch (error: unknown) {
+          const reason = extractErrorMessage(
+            error,
+            'Failed to load stock locations'
+          );
+          console.error(
+            'Failed to load stock locations from Bexio API (/2.0/stock):',
+            error
+          );
           return {
             disabled: true,
-            placeholder: 'Failed to load stock locations',
+            placeholder: `Connection test failed: ${reason}`,
             options: [],
           };
         }
@@ -380,7 +412,9 @@ export const updateProductAction = createAction({
 
         try {
           const client = new BexioClient(auth);
-          const stockPlaces = await client.get<Array<{ id: number; name: string }>>('/2.0/stock_place').catch(() => []);
+          const stockPlaces = await client.get<
+            Array<{ id: number; name: string }>
+          >('/2.0/stock_place');
 
           return {
             disabled: false,
@@ -389,10 +423,18 @@ export const updateProductAction = createAction({
               value: place.id,
             })),
           };
-        } catch (error) {
+        } catch (error: unknown) {
+          const reason = extractErrorMessage(
+            error,
+            'Failed to load stock areas'
+          );
+          console.error(
+            'Failed to load stock areas from Bexio API (/2.0/stock_place):',
+            error
+          );
           return {
             disabled: true,
-            placeholder: 'Failed to load stock areas',
+            placeholder: `Connection test failed: ${reason}`,
             options: [],
           };
         }
@@ -400,7 +442,8 @@ export const updateProductAction = createAction({
     }),
     stock_nr: Property.Number({
       displayName: 'Stock Number',
-      description: 'Current stock quantity (can only be set if no bookings exist)',
+      description:
+        'Current stock quantity (can only be set if no bookings exist)',
       required: false,
     }),
     stock_min_nr: Property.Number({
@@ -438,40 +481,10 @@ export const updateProductAction = createAction({
       description: 'Delivery price',
       required: false,
     }),
-    article_group_id: Property.Dropdown({
-      auth: bexioAuth,
-      displayName: 'Article Group',
-      description: 'Product group/category',
+    article_group_id: Property.Number({
+      displayName: 'Article Group ID',
+      description: 'Numeric ID of the product group/category',
       required: false,
-      refreshers: [],
-      options: async ({ auth }) => {
-        if (!auth) {
-          return {
-            disabled: true,
-            placeholder: 'Connect your Bexio account first',
-            options: [],
-          };
-        }
-
-        try {
-          const client = new BexioClient(auth);
-          const groups = await client.get<Array<{ id: number; name: string }>>('/2.0/article_group').catch(() => []);
-
-          return {
-            disabled: false,
-            options: groups.map((group) => ({
-              label: group.name,
-              value: group.id,
-            })),
-          };
-        } catch (error) {
-          return {
-            disabled: true,
-            placeholder: 'Failed to load article groups',
-            options: [],
-          };
-        }
-      },
     }),
     account_id: bexioCommonProps.account({
       displayName: 'Account',
@@ -591,5 +604,3 @@ export const updateProductAction = createAction({
     return response;
   },
 });
-
-

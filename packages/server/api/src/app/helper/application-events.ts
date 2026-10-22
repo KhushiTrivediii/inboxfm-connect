@@ -11,8 +11,8 @@ import { system } from './system/system'
 import { AppSystemProp } from './system/system-props'
 
 
-type UserEventListener = (params: ApplicationEvent) => void
-type WorkerEventListener = (projectId: string, params: ApplicationEvent) => void
+type UserEventListener = (params: ApplicationEvent) => void | Promise<void>
+type WorkerEventListener = (projectId: string, params: ApplicationEvent) => void | Promise<void>
 
 type ListenerRegistration = {
     userEventListeners: UserEventListener[]
@@ -50,7 +50,15 @@ export const applicationEvents = (log: FastifyBaseLogger) => ({
         rejectedPromiseHandler(enrichAuditEventParam(requestOrMeta, params, log).then((event) => {
             if (!isNil(event)) {
                 for (const listener of listeners.userEventListeners) {
-                    listener(event)
+                    // Listeners are async (audit-logs, event-destinations). Their
+                    // rejection must not escape as an unhandledRejection — the
+                    // outer rejectedPromiseHandler only sees the enrichment chain,
+                    // so each listener result is guarded here, mirroring
+                    // websockets.service's rejectedPromiseHandler seam.
+                    const result = listener(event)
+                    if (result instanceof Promise) {
+                        rejectedPromiseHandler(result, log)
+                    }
                 }
             }
         }), log)
@@ -66,7 +74,10 @@ export const applicationEvents = (log: FastifyBaseLogger) => ({
                 created: new Date().toISOString(),
                 updated: new Date().toISOString(),
             } as ApplicationEvent
-            listener(projectId, event)
+            const result = listener(projectId, event)
+            if (result instanceof Promise) {
+                rejectedPromiseHandler(result, log)
+            }
         }
     },
 })

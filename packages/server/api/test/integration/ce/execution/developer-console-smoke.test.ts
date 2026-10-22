@@ -50,7 +50,8 @@ describe('Developer console endpoint smoke (real app + database)', () => {
         const response = await ctx.get('/v1/integrations')
 
         expect(response?.statusCode).toBe(StatusCodes.OK)
-        expect(Array.isArray(response!.json())).toBe(true)
+        expect(response!.json()).toHaveProperty('data')
+        expect(Array.isArray(response!.json().data)).toBe(true)
     })
 
     it('serves the connection list scoped to the project', async () => {

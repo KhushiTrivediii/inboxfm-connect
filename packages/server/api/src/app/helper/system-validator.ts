@@ -29,6 +29,15 @@ function numberValidator(value: string | undefined) {
     return isValid ? true : 'Value must be a valid number'
 }
 
+function positiveIntegerValidator(value: string | undefined) {
+    if (isNil(value)) {
+        return 'Value must be a positive integer'
+    }
+    const num = Number(value)
+    const isValid = Number.isInteger(num) && num > 0
+    return isValid ? true : 'Value must be a positive integer'
+}
+
 function stringValidator(value: string) {
     const isValid = typeof value === 'string' && value.length > 0
     return isValid ? true : 'Value must be a non-empty string'
@@ -50,16 +59,12 @@ const systemPropValidators: {
     // AppSystemProp
     [AppSystemProp.ALLOW_OPEN_SIGN_UP]: booleanValidator,
     [AppSystemProp.EXECUTION_MODE]: enumValidator(Object.values(ExecutionMode)),
-    [AppSystemProp.SKIP_PROJECT_LIMITS_CHECK]: booleanValidator,
     [AppSystemProp.LOG_LEVEL]: enumValidator(['error', 'warn', 'info', 'debug', 'trace']),
     [AppSystemProp.LOG_PRETTY]: booleanValidator,
     [AppSystemProp.LOG_FILE]: booleanValidator,
     [AppSystemProp.ENVIRONMENT]: enumValidator(Object.values(ApEnvironment)),
-    [AppSystemProp.CLOUD_CHAT_ROLLOUT_CAP]: numberValidator,
     [AppSystemProp.TRIGGER_TIMEOUT_SECONDS]: numberValidator,
-    [AppSystemProp.TRIGGER_HOOKS_TIMEOUT_SECONDS]: numberValidator,
     [AppSystemProp.FLOW_TIMEOUT_SECONDS]: numberValidator,
-    [AppSystemProp.EVENT_DESTINATION_TIMEOUT_SECONDS]: numberValidator,
     [AppSystemProp.PAUSED_FLOW_TIMEOUT_DAYS]: numberValidator,
     [AppSystemProp.APP_WEBHOOK_SECRETS]: stringValidator,
     [AppSystemProp.MAX_FILE_SIZE_MB]: numberValidator,
@@ -68,7 +73,6 @@ const systemPropValidators: {
     [AppSystemProp.SANDBOX_PROPAGATED_ENV_VARS]: stringValidator,
     [AppSystemProp.SENTRY_DSN]: urlValidator,
     [AppSystemProp.FRONTEND_SENTRY_DSN]: urlValidator,
-    [AppSystemProp.RUNS_METADATA_UPDATE_CONCURRENCY]: numberValidator,
     [AppSystemProp.LOKI_PASSWORD]: stringValidator,
     [AppSystemProp.LOKI_URL]: urlValidator,
     [AppSystemProp.LOKI_USERNAME]: stringValidator,
@@ -82,16 +86,18 @@ const systemPropValidators: {
     [AppSystemProp.FRONTEND_URL]: urlValidator,
     [AppSystemProp.CONTAINER_TYPE]: enumValidator(Object.values(ContainerType)),
     [AppSystemProp.PORT]: numberValidator,
-    [AppSystemProp.CONSOLE_API_SECRET_KEY]: stringValidator,
     // AppSystemProp
     [AppSystemProp.API_KEY]: stringValidator,
-    [AppSystemProp.TEMPLATES_API_KEY]: stringValidator,
-    [AppSystemProp.TEMPLATE_MANAGER_API_KEY]: stringValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ENABLED]: booleanValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_MAX]: numberValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_WINDOW]: stringValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_MAX]: numberValidator,
     [AppSystemProp.API_RATE_LIMIT_AUTHN_ABUSE_WINDOW]: stringValidator,
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_MAX]: numberValidator,
+    [AppSystemProp.API_RATE_LIMIT_AUTHN_MCP_REGISTER_WINDOW]: stringValidator,
+    [AppSystemProp.API_RATE_LIMIT_SYNC_ENABLED]: booleanValidator,
+    [AppSystemProp.API_RATE_LIMIT_SYNC_MAX]: positiveIntegerValidator,
+    [AppSystemProp.API_RATE_LIMIT_SYNC_WINDOW]: stringValidator,
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_ENABLED]: booleanValidator,
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_MAX_ATTEMPTS]: numberValidator,
     [AppSystemProp.API_SIGN_IN_EMAIL_THROTTLE_WINDOW_SECONDS]: numberValidator,
@@ -105,6 +111,7 @@ const systemPropValidators: {
     [AppSystemProp.ENCRYPTION_KEY]: stringValidator,
     [AppSystemProp.EXECUTION_DATA_RETENTION_DAYS]: numberValidator,
     [AppSystemProp.JWT_SECRET]: stringValidator,
+    [AppSystemProp.JWT_ISSUER]: stringValidator,
     [AppSystemProp.DEFAULT_CONCURRENT_JOBS_LIMIT]: numberValidator,
     [AppSystemProp.PIECES_SYNC_MODE]: enumValidator(Object.values(PieceSyncMode)),
     [AppSystemProp.POSTGRES_DATABASE]: stringValidator,
@@ -129,6 +136,9 @@ const systemPropValidators: {
     [AppSystemProp.API_KEY_RATE_LIMITER_ENABLED]: booleanValidator,
     [AppSystemProp.API_KEY_RATE_LIMITER_MAX_REQUESTS]: numberValidator,
     [AppSystemProp.API_KEY_RATE_LIMITER_WINDOW_SECONDS]: numberValidator,
+    [AppSystemProp.PUBLIC_INGRESS_RATE_LIMITER_ENABLED]: booleanValidator,
+    [AppSystemProp.PUBLIC_INGRESS_RATE_LIMITER_MAX_REQUESTS]: numberValidator,
+    [AppSystemProp.PUBLIC_INGRESS_RATE_LIMITER_WINDOW_SECONDS]: numberValidator,
     [AppSystemProp.API_KEY_ROTATION_GRACE_PERIOD_SECONDS]: numberValidator,
     [AppSystemProp.QUEUE_UI_ENABLED]: booleanValidator,
     [AppSystemProp.QUEUE_UI_PASSWORD]: stringValidator,
@@ -162,20 +172,18 @@ const systemPropValidators: {
     [AppSystemProp.SMTP_SENDER_NAME]: stringValidator,
     [AppSystemProp.SMTP_USERNAME]: stringValidator,
     [AppSystemProp.TELEMETRY_ENABLED]: booleanValidator,
+    [AppSystemProp.TELEMETRY_INCLUDE_PII]: booleanValidator,
     [AppSystemProp.TOOL_SEARCH_ENABLED]: booleanValidator,
     [AppSystemProp.TRIGGER_DEFAULT_POLL_INTERVAL]: numberValidator,
     [AppSystemProp.WEBHOOK_TIMEOUT_SECONDS]: numberValidator,
     [AppSystemProp.LOAD_TRANSLATIONS_FOR_DEV_PIECES]: booleanValidator,
     [AppSystemProp.APPSUMO_TOKEN]: stringValidator,
     [AppSystemProp.FILE_STORAGE_LOCATION]: enumValidator(Object.values(FileLocation)),
-    [AppSystemProp.FIREBASE_ADMIN_CREDENTIALS]: stringValidator,
     [AppSystemProp.FIREBASE_HASH_PARAMETERS]: stringValidator,
     [AppSystemProp.STRIPE_SECRET_KEY]: stringValidator,
     [AppSystemProp.STRIPE_WEBHOOK_SECRET]: stringValidator,
     [AppSystemProp.INTERNAL_URL]: stringValidator,
-    [AppSystemProp.WORKERS]: numberValidator,
     [AppSystemProp.EDITION]: enumValidator(Object.values(ApEdition)),
-    [AppSystemProp.FEATUREBASE_API_KEY]: stringValidator,
     [AppSystemProp.OPENROUTER_PROVISION_KEY]: stringValidator,
     [AppSystemProp.OPENAI_API_KEY]: stringValidator,
     [AppSystemProp.SCIM_DEFAULT_PROJECT_ROLE]: enumValidator(Object.values(DefaultProjectRole)),
@@ -219,7 +227,6 @@ const systemPropValidators: {
     [AppSystemProp.NETWORK_MODE]: enumValidator(Object.values(NetworkMode)),
 
     // On-call
-    [AppSystemProp.PAGE_ONCALL_WEBHOOK]: urlValidator,
 
     // evlog sampling / slow-event threshold
     [AppSystemProp.LOG_SAMPLE_RATE_INFO]: (value: string) => {
@@ -227,6 +234,7 @@ const systemPropValidators: {
         return !isNaN(n) && n >= 0 && n <= 100 ? true : 'Value must be a number between 0 and 100'
     },
     [AppSystemProp.LOG_KEEP_SLOW_MS]: numberValidator,
+    [AppSystemProp.PROJECT_REPLACE_SIGNING_SECRET]: stringValidator,
 }
 
 

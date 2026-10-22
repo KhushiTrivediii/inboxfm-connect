@@ -139,7 +139,8 @@ export interface PieceMetadata {
 
 export type AppConnectionType = 'OAUTH2' | 'SECRET_TEXT' | 'BASIC_AUTH' | 'CUSTOM_AUTH'
 
-export type AppConnectionStatus = 'ACTIVE' | 'ERROR'
+/** Mirrors the backend `AppConnectionStatus` enum (`packages/core/shared/.../app-connection.ts`): placeholder connections are stored with `MISSING`. */
+export type AppConnectionStatus = 'ACTIVE' | 'MISSING' | 'ERROR'
 
 export interface AppConnection {
   id: string
@@ -150,8 +151,20 @@ export interface AppConnection {
   pieceVersion: string
   type: AppConnectionType
   status: AppConnectionStatus
-  externalId?: string
+  /** Always present in the backend response (`AppConnectionWithoutSensitiveData` declares it required). */
+  externalId: string
   projectIds: string[]
+  /** Health-check bookkeeping from POST /connections/:id/test; null until first test. */
+  testedAt?: string | null
+  testedStatus?: AppConnectionStatus | null
+  testedMessage?: string | null
+}
+
+export interface TestConnectionResult {
+  ok: boolean
+  status: AppConnectionStatus
+  testedAt: string
+  message?: string
 }
 
 export interface CreateConnectionRequest {
@@ -162,7 +175,8 @@ export interface CreateConnectionRequest {
   pieceVersion: string
   type: AppConnectionType
   value: CreateConnectionValue
-  externalId?: string
+  /** Required by the backend upsert schema (`UpsertAppConnectionRequestBody`) in every auth branch; mint one with `connectionIds.newExternalId()` for new connections. */
+  externalId: string
   metadata?: Record<string, unknown>
 }
 
@@ -466,6 +480,8 @@ export type IntegrationsListParams = {
   sortBy?: IntegrationsSortBy
   orderBy?: IntegrationsOrderBy
   suggestionType?: 'ACTION' | 'TRIGGER'
+  cursor?: string
+  limit?: number
 }
 
 export type ConnectionsListParams = {
@@ -473,7 +489,7 @@ export type ConnectionsListParams = {
   projectId?: string
   pieceName?: string
   displayName?: string
-  status?: 'ACTIVE' | 'ERROR'
+  status?: AppConnectionStatus
   cursor?: string
   limit?: number
 }
@@ -517,3 +533,38 @@ export interface UpdateScheduledTaskRequest {
   timezone?: string
   status?: AutomationStatus
 }
+
+export type SubscriptionStatus =
+  | 'active'
+  | 'canceled'
+  | 'past_due'
+  | 'unpaid'
+  | 'incomplete'
+  | 'incomplete_expired'
+  | 'trialing'
+
+export interface PlatformPlanInfo {
+  plan: string
+  stripeSubscriptionStatus?: SubscriptionStatus
+  stripeSubscriptionId?: string
+  stripeCustomerId?: string
+  activeFlowsLimit?: number
+  includedAiCredits?: number
+}
+
+export interface PlatformUsageInfo {
+  activeFlows?: number
+  aiCreditsLimit?: number
+  aiCreditsRemaining?: number
+  totalAiCreditsUsed?: number
+}
+
+export interface PlatformBillingInformation {
+  stripeBillingEnabled: boolean
+  plan: PlatformPlanInfo
+  usage: PlatformUsageInfo
+  nextBillingAmount?: number
+  nextBillingDate?: number
+  cancelAt?: number
+}
+

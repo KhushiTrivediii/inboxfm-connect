@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import ActionsPage from './index'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
 import { stubApi, StubResponse, StubRoute } from '@/test/api-stub'
-import { ALL_SUMMARIES, CATEGORIES } from '@/test/fixtures/integrations'
+import { ALL_SUMMARIES, CATEGORIES, seekPage } from '@/test/fixtures/integrations'
 
 function knowledgeSearchResult() {
   return {
@@ -46,7 +46,7 @@ function catalogRoutes(options: {
     },
     {
       match: (url) => url.pathname === '/api/v1/integrations',
-      respond: () => ({ status: 200, body: ALL_SUMMARIES }),
+      respond: () => ({ status: 200, body: seekPage(ALL_SUMMARIES) }),
     },
   ]
 }

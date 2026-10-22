@@ -26,8 +26,12 @@ async function createExecutionViaApi(ctx: TestContext, prompt: string): Promise<
     return response!.json()
 }
 
-async function saveExecutionRow(ctx: TestContext, prompt: string): Promise<{ id: string }> {
-    const now = new Date().toISOString()
+async function saveExecutionRow(
+    ctx: TestContext,
+    prompt: string,
+    overrides: { status?: ExecutionStatus, created?: string } = {},
+): Promise<{ id: string }> {
+    const now = overrides.created ?? new Date().toISOString()
     const row = {
         id: apId(),
         created: now,
@@ -35,7 +39,7 @@ async function saveExecutionRow(ctx: TestContext, prompt: string): Promise<{ id:
         projectId: ctx.project.id,
         platformId: ctx.platform.id,
         userId: ctx.user.id,
-        status: ExecutionStatus.CREATED,
+        status: overrides.status ?? ExecutionStatus.CREATED,
         prompt,
         metadata: {},
         tokenUsage: null,
@@ -45,6 +49,7 @@ async function saveExecutionRow(ctx: TestContext, prompt: string): Promise<{ id:
     await db.save('execution', row)
     return row
 }
+
 
 async function saveToolCallRow(params: { executionId: string, projectId: string }): Promise<{ id: string }> {
     const now = new Date().toISOString()
@@ -288,6 +293,122 @@ describe('Execution authorization (USER principal, :id routes)', () => {
             secondStream.destroy()
         })
 
+        it('keeps remaining stream active when one concurrent SSE client disconnects (#158)', async () => {
+            const ctx = await createTestContext(app!)
+            const execution = await saveExecutionRow(ctx, 'Multi-viewer execution')
+
+            // Connect Viewer 1
+            const firstConnection = await ctx.inject({
+                method: 'GET',
+                url: `/api/v1/executions/${execution.id}/events`,
+                payloadAsStream: true,
+            })
+            expect(firstConnection.statusCode).toBe(StatusCodes.OK)
+            let receivedFirst = ''
+            const firstStream = firstConnection.stream()
+            firstStream.on('data', (chunk: Buffer) => {
+                receivedFirst += chunk.toString()
+            })
+
+            // Connect Viewer 2
+            const secondConnection = await ctx.inject({
+                method: 'GET',
+                url: `/api/v1/executions/${execution.id}/events`,
+                payloadAsStream: true,
+            })
+            expect(secondConnection.statusCode).toBe(StatusCodes.OK)
+            let receivedSecond = ''
+            const secondStream = secondConnection.stream()
+            secondStream.on('data', (chunk: Buffer) => {
+                receivedSecond += chunk.toString()
+            })
+
+            // Emit Event 1 (both should receive)
+            const event1 = await executionEventService.emit({
+                executionId: execution.id,
+                type: ExecutionEventType.ExecutionStarted,
+                payload: { executionId: execution.id, prompt: 'Multi-viewer execution', timestamp: new Date().toISOString() },
+            })
+
+            await waitUntil(() => receivedFirst.includes(event1.id) && receivedSecond.includes(event1.id))
+            expect((receivedFirst.match(new RegExp(`id: ${event1.id}`, 'g')) || []).length).toBe(1)
+            expect((receivedSecond.match(new RegExp(`id: ${event1.id}`, 'g')) || []).length).toBe(1)
+
+            // Disconnect Viewer 1 (simulating closing one browser tab)
+            firstStream.destroy()
+
+            // Emit Event 2
+            const event2 = await executionEventService.emit({
+                executionId: execution.id,
+                type: ExecutionEventType.ExecutionCompleted,
+                payload: { executionId: execution.id, output: { success: true } },
+            })
+
+            // Viewer 2 must STILL receive Event 2 exactly once!
+            await waitUntil(() => receivedSecond.includes(event2.id))
+            expect((receivedSecond.match(new RegExp(`id: ${event2.id}`, 'g')) || []).length).toBe(1)
+
+            secondStream.destroy()
+        })
+
+        it('delivers events exactly once after a close-last-viewer and reconnect cycle (#158)', async () => {
+            const ctx = await createTestContext(app!)
+            const execution = await saveExecutionRow(ctx, 'Reconnect execution')
+
+            // Connect Viewer 1
+            const firstConnection = await ctx.inject({
+                method: 'GET',
+                url: `/api/v1/executions/${execution.id}/events`,
+                payloadAsStream: true,
+            })
+            expect(firstConnection.statusCode).toBe(StatusCodes.OK)
+            let receivedFirst = ''
+            const firstStream = firstConnection.stream()
+            firstStream.on('data', (chunk: Buffer) => {
+                receivedFirst += chunk.toString()
+            })
+
+            const event1 = await executionEventService.emit({
+                executionId: execution.id,
+                type: ExecutionEventType.ExecutionStarted,
+                payload: { executionId: execution.id, prompt: 'Initial prompt' },
+            })
+
+            await waitUntil(() => receivedFirst.includes(event1.id))
+            expect((receivedFirst.match(new RegExp(`id: ${event1.id}`, 'g')) || []).length).toBe(1)
+
+            // Close Viewer 1 (last viewer closes, dropping channel to 0 listeners)
+            firstStream.destroy()
+
+            // Connect Viewer 2 (reconnect to the same execution)
+            const secondConnection = await ctx.inject({
+                method: 'GET',
+                url: `/api/v1/executions/${execution.id}/events`,
+                headers: { 'last-event-id': event1.id },
+                payloadAsStream: true,
+            })
+            expect(secondConnection.statusCode).toBe(StatusCodes.OK)
+            let receivedSecond = ''
+            const secondStream = secondConnection.stream()
+            secondStream.on('data', (chunk: Buffer) => {
+                receivedSecond += chunk.toString()
+            })
+
+            // Emit Event 2
+            const event2 = await executionEventService.emit({
+                executionId: execution.id,
+                type: ExecutionEventType.ExecutionCompleted,
+                payload: { executionId: execution.id, output: { ok: true } },
+            })
+
+            await waitUntil(() => receivedSecond.includes(event2.id))
+
+            // Assert that Event 2 is delivered exactly once to Viewer 2
+            expect((receivedSecond.match(new RegExp(`id: ${event2.id}`, 'g')) || []).length).toBe(1)
+
+            secondStream.destroy()
+        })
+
         it('denies streaming an execution owned by another project', async () => {
             const ctxA = await createTestContext(app!)
             const ctxB = await createTestContext(app!)
@@ -325,6 +446,75 @@ describe('Execution authorization (USER principal, :id routes)', () => {
             const response = await ctxB.get('/v1/executions', { projectId: ctxA.project.id })
 
             expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+
+        it('paginates executions using cursor and limit (#156)', async () => {
+            const ctx = await createTestContext(app!)
+            await saveExecutionRow(ctx, 'Prompt 1', { created: '2026-01-01T10:00:10.000Z' })
+            await saveExecutionRow(ctx, 'Prompt 2', { created: '2026-01-01T10:00:20.000Z' })
+            await saveExecutionRow(ctx, 'Prompt 3', { created: '2026-01-01T10:00:30.000Z' })
+
+            // Page 1: newest 2 (Prompt 3 and Prompt 2)
+            const page1Res = await ctx.get('/v1/executions', { projectId: ctx.project.id, limit: 2 })
+            expect(page1Res?.statusCode).toBe(StatusCodes.OK)
+            const page1 = page1Res!.json()
+            expect(page1.data).toHaveLength(2)
+            expect(page1.data[0].prompt).toBe('Prompt 3')
+            expect(page1.data[1].prompt).toBe('Prompt 2')
+            expect(page1.next).toBeTruthy()
+            expect(page1.previous).toBeNull()
+
+            // Page 2: remaining 1 (Prompt 1) using next cursor
+            const page2Res = await ctx.get('/v1/executions', { projectId: ctx.project.id, limit: 2, cursor: page1.next })
+            expect(page2Res?.statusCode).toBe(StatusCodes.OK)
+            const page2 = page2Res!.json()
+            expect(page2.data).toHaveLength(1)
+            expect(page2.data[0].prompt).toBe('Prompt 1')
+            expect(page2.next).toBeNull()
+            expect(page2.previous).toBeTruthy()
+        })
+
+        it('combines status filter with cursor pagination (#156)', async () => {
+            const ctx = await createTestContext(app!)
+            await saveExecutionRow(ctx, 'Completed 1', {
+                created: '2026-01-01T11:00:10.000Z',
+                status: ExecutionStatus.COMPLETED,
+            })
+            await saveExecutionRow(ctx, 'Failed 1', {
+                created: '2026-01-01T11:00:20.000Z',
+                status: ExecutionStatus.FAILED,
+            })
+            await saveExecutionRow(ctx, 'Completed 2', {
+                created: '2026-01-01T11:00:30.000Z',
+                status: ExecutionStatus.COMPLETED,
+            })
+
+            // Fetch COMPLETED with limit 1
+            const page1Res = await ctx.get('/v1/executions', {
+                projectId: ctx.project.id,
+                status: ExecutionStatus.COMPLETED,
+                limit: 1,
+            })
+            expect(page1Res?.statusCode).toBe(StatusCodes.OK)
+            const page1 = page1Res!.json()
+            expect(page1.data).toHaveLength(1)
+            expect(page1.data[0].prompt).toBe('Completed 2')
+            expect(page1.data[0].status).toBe(ExecutionStatus.COMPLETED)
+            expect(page1.next).toBeTruthy()
+
+            // Fetch next page of COMPLETED
+            const page2Res = await ctx.get('/v1/executions', {
+                projectId: ctx.project.id,
+                status: ExecutionStatus.COMPLETED,
+                limit: 1,
+                cursor: page1.next,
+            })
+            expect(page2Res?.statusCode).toBe(StatusCodes.OK)
+            const page2 = page2Res!.json()
+            expect(page2.data).toHaveLength(1)
+            expect(page2.data[0].prompt).toBe('Completed 1')
+            expect(page2.data[0].status).toBe(ExecutionStatus.COMPLETED)
+            expect(page2.next).toBeNull()
         })
     })
 })

@@ -433,7 +433,7 @@ describe('Execution detail page', () => {
       expect(container.querySelector('[data-testid="stream-retry"]')).not.toBeNull()
     }, 20000)
 
-    it('shows an honest empty state instead of replaying history', async () => {
+    it('shows an honest empty state when the server replays no history', async () => {
       const factory = createSseStreamFactory()
       stubApi(defaultRoutes(factory))
       const container = renderDetail()
@@ -442,7 +442,8 @@ describe('Execution detail page', () => {
 
       const text = container.querySelector('[data-testid="stream-empty"]')?.textContent ?? ''
       expect(text).toContain('No events received yet.')
-      expect(text).toContain('not replayed')
+      expect(text).toContain('replays')
+      expect(text).not.toContain('not replayed')
     }, 15000)
 
     it('surfaces a stream failure and reconnects on demand', async () => {
@@ -471,6 +472,43 @@ describe('Execution detail page', () => {
         () => container.querySelector('[data-testid="stream-status"]')?.textContent?.includes('Live') === true,
         5000
       )
+    }, 20000)
+
+    it('resumes from the last received event id when the stream reconnects', async () => {
+      const factory = createSseStreamFactory()
+      const { requests } = stubApi(defaultRoutes(factory))
+      const container = renderDetail()
+
+      await waitFor(() => factory.latest() !== undefined, 5000)
+
+      await act(async () => {
+        factory.latest()?.pushEvent(executionStartedEvent(recordedExecution.id, 1))
+      })
+      await waitFor(() => container.querySelectorAll('[data-testid="stream-event"]').length === 1, 5000)
+
+      const firstStreamUrl = requests.find((request) => request.url.includes('/events'))?.url ?? ''
+      expect(firstStreamUrl).not.toContain('lastEventId')
+
+      // The server closes the stream mid-run (replica churn, deploy, network blip).
+      await act(async () => {
+        factory.latest()?.close()
+      })
+      await waitFor(() => container.querySelector('[data-testid="stream-retry"]') !== null, 5000)
+
+      await clickTestId('stream-retry')
+
+      await waitFor(() => factory.opened.length === 2, 5000)
+
+      // The reconnect presents the cursor instead of restarting from a full replay.
+      const reconnectUrl = [...requests].reverse().find((request) => request.url.includes('/events'))?.url ?? ''
+      expect(reconnectUrl).toContain(`lastEventId=${encodeURIComponent(`${recordedExecution.id}:1`)}`)
+
+      // What already arrived stays on screen; only events the client missed flow.
+      expect(container.querySelectorAll('[data-testid="stream-event"]').length).toBe(1)
+      await act(async () => {
+        factory.latest()?.pushEvent(executionStartedEvent(recordedExecution.id, 2))
+      })
+      await waitFor(() => container.querySelectorAll('[data-testid="stream-event"]').length === 2, 5000)
     }, 20000)
 
     it('aborts the stream request when the page unmounts', async () => {
@@ -546,8 +584,12 @@ describe('Execution detail page', () => {
       expect(persisted).not.toContain(succeededToolCall.id)
       expect(persisted).not.toContain('Daily digest ready')
       expect(persisted).not.toContain('ExecutionStarted')
-      // Only the pre-existing session keys are allowed to be there.
-      expect(Object.keys(localStorage).sort()).toEqual(['ap-project-id', 'ap-token'])
+      // Only the pre-seeded session keys are allowed to be there — the auth
+      // token/project live in sessionStorage since issue #383 (localStorage
+      // stays empty here because this suite never signs in), and no payload
+      // leaked into either store.
+      expect(Object.keys(localStorage).sort()).toEqual([])
+      expect(Object.keys(sessionStorage).sort()).toEqual(['ap-project-id', 'ap-token'])
     }, 20000)
   })
 })

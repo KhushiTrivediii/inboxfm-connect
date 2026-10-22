@@ -5,6 +5,9 @@ A log of the load-test experiments run against the **worker-is-the-sandbox** exe
 
 Each experiment records: the question, the rig, how to reproduce it, and the measured output.
 
+> These are one-off measurements. For the automated, baseline-backed regression gate against the
+> headless Connect API, see [`gate/README.md`](gate/README.md).
+
 ---
 
 ## Experiment 1 — GKE app : worker ratio (1:10 vs 1:20)

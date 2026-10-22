@@ -1,8 +1,7 @@
 import { ActivepiecesError, assertNotNullOrUndefined, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
-import { ApEdition, ApEnvironment, AuthenticationResponse, EndpointScope, PlatformRole, PrincipalType, Project, ProjectType, SsoDomainVerificationStatus, TelemetryEventName, User, UserIdentity, UserIdentityProvider, UserStatus } from '@inboxfm-connect/shared'
+import { ApEdition, AuthenticationResponse, EndpointScope, PlatformRole, PrincipalType, Project, ProjectType, SsoDomainVerificationStatus, TelemetryEventName, User, UserIdentity, UserIdentityProvider, UserStatus } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger, FastifyRequest } from 'fastify'
 import { system } from '../helper/system/system'
-import { AppSystemProp } from '../helper/system/system-props'
 import { telemetry } from '../helper/telemetry.utils'
 import { platformService } from '../platform/platform.service'
 import { projectService } from '../project/project-service'
@@ -132,10 +131,15 @@ export const authenticationUtils = (log: FastifyBaseLogger) => ({
         if (!platform.plan.ssoEnabled) {
             return
         }
-        const emailDomain = email.split('@')[1]
+        // Email domains are case-insensitive: the identity lookup normalizes the
+        // address (lowercase), and assertEmailMatchesSsoDomain already compares
+        // lowercased - the allowlist must too, or a federated claim that preserves
+        // the user's chosen casing (User@GOODCORP.TEST) is rejected even though
+        // the same member signs in fine with the lowercase form.
+        const emailDomain = email.split('@')[1]?.toLowerCase() ?? ''
         const isAllowedDomaiin =
             !platform.enforceAllowedAuthDomains ||
-            platform.allowedAuthDomains.includes(emailDomain)
+            platform.allowedAuthDomains.some((allowed) => allowed.toLowerCase() === emailDomain)
 
         if (!isAllowedDomaiin) {
             throw new ActivepiecesError({
@@ -214,28 +218,6 @@ export const authenticationUtils = (log: FastifyBaseLogger) => ({
         }
     },
 
-    async saveNewsLetterSubscriber(identity: UserIdentity): Promise<void> {
-        const environment = system.get(AppSystemProp.ENVIRONMENT)
-        if (environment !== ApEnvironment.PRODUCTION) {
-            return
-        }
-        try {
-            const response = await fetch(
-                'https://us-central1-activepieces-b3803.cloudfunctions.net/addContact',
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ email: identity.email }),
-                },
-            )
-            await response.json()
-        }
-        catch (error) {
-            log.warn({ error }, '[authenticationUtils#saveNewsLetterSubscriber] Failed to save newsletter subscriber')
-        }
-    },
     async extractUserIdFromRequest(request: FastifyRequest): Promise<string> {
         if (request.principal.type === PrincipalType.USER) {
             return request.principal.id

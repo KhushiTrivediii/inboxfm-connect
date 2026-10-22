@@ -12,6 +12,9 @@ import {
   seekPage,
 } from '@/test/fixtures/integrations'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
+import { apiClient } from '@/lib/api/client'
+import { AuthProvider, useAuth } from '@/lib/auth/auth-context'
+import { testProject, testUser } from '@/test/fixtures/api-keys'
 
 function renderConnections(): HTMLElement {
   const queryClient = createTestQueryClient()
@@ -47,7 +50,7 @@ function successRoutes(): StubRoute[] {
       match: (url) => url.pathname === '/api/v1/integrations',
       respond: () => ({
         status: 200,
-        body: [githubSummary(), slackSummary()],
+        body: seekPage([githubSummary(), slackSummary()]),
       }),
     },
   ]
@@ -76,11 +79,12 @@ async function clickTextButton(label: string): Promise<void> {
 describe('Connections page', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     document.body.innerHTML = ''
     vi.restoreAllMocks()
   })
 
-  it('renders the connection table with integration, name, auth type, status and created columns', async () => {
+  it('renders the connection table with integration, name, external user, auth type, status and created columns', async () => {
     stubApi(successRoutes())
     const container = renderConnections()
 
@@ -90,6 +94,7 @@ describe('Connections page', () => {
     expect(headers).toEqual([
       'Integration',
       'Connection name',
+      'External user',
       'Auth type',
       'Status',
       'Created',
@@ -98,6 +103,8 @@ describe('Connections page', () => {
 
     const text = document.body.textContent || ''
     expect(text).toContain('GitHub')
+    expect(text).toContain('ext_conn_1')
+    expect(text).toContain('ext_conn_2')
     expect(text).toContain('OAuth 2.0')
     expect(text).toContain('Connected')
     expect(text).toContain('Slack')
@@ -196,5 +203,202 @@ describe('Connections page', () => {
     expect(text).not.toContain('access_token')
     expect(text).not.toContain('client_secret')
     expect(text).not.toContain('refresh_token')
+  }, 15000)
+
+  it('renders pagination pager controls and row count reflecting more available when next cursor exists', async () => {
+    let requestedCursor: string | null = null
+    stubApi([
+      {
+        match: LIST_MATCH,
+        respond: (url) => {
+          requestedCursor = url.searchParams.get('cursor')
+          if (requestedCursor === 'cursor_page_2') {
+            return {
+              status: 200,
+              body: {
+                data: [slackConnection('conn_3', 'Secondary Slack')],
+                next: null,
+                previous: 'cursor_page_1',
+              },
+            }
+          }
+          return {
+            status: 200,
+            body: {
+              data: [githubConnection('conn_1', 'Mihir GitHub')],
+              next: 'cursor_page_2',
+              previous: null,
+            },
+          }
+        },
+      },
+      {
+        match: (url) => url.pathname === '/api/v1/integrations',
+        respond: () => ({ status: 200, body: seekPage([githubSummary(), slackSummary()]) }),
+      },
+    ])
+
+    const container = renderConnections()
+    await waitFor(() => container.textContent?.includes('Mihir GitHub') === true)
+
+    const countSpan = container.querySelector('[data-testid="connections-count"]')
+    expect(countSpan?.textContent).toContain('Showing 1 connection (more available)')
+
+    const prevButton = container.querySelector<HTMLButtonElement>('[data-testid="connections-prev-page"]')
+    const nextButton = container.querySelector<HTMLButtonElement>('[data-testid="connections-next-page"]')
+    expect(prevButton?.disabled).toBe(true)
+    expect(nextButton?.disabled).toBe(false)
+
+    await act(async () => {
+      nextButton?.click()
+    })
+
+    await waitFor(() => container.textContent?.includes('Secondary Slack') === true)
+    expect(requestedCursor).toBe('cursor_page_2')
+    expect(container.querySelector('[data-testid="connections-count"]')?.textContent).toContain(
+      'Showing 1 connection'
+    )
+    expect(container.querySelector('[data-testid="connections-count"]')?.textContent).not.toContain(
+      '(more available)'
+    )
+  }, 15000)
+
+  it('shows a page-specific empty state instead of No connections yet past the first page', async () => {
+    stubApi([
+      {
+        match: LIST_MATCH,
+        respond: (url) => {
+          if (url.searchParams.get('cursor') === 'cursor_page_2') {
+            return {
+              status: 200,
+              body: { ...seekPage([]), previous: 'cursor_page_1' },
+            }
+          }
+          return {
+            status: 200,
+            body: {
+              ...seekPage([githubConnection('conn_1', 'Mihir GitHub')]),
+              next: 'cursor_page_2',
+            },
+          }
+        },
+      },
+      {
+        match: (url) => url.pathname === '/api/v1/integrations',
+        respond: () => ({
+          status: 200,
+          body: seekPage([githubSummary(), slackSummary()]),
+        }),
+      },
+    ])
+    const container = renderConnections()
+
+    await waitFor(() => container.textContent?.includes('Mihir GitHub') === true)
+    await clickTextButton('Next')
+    await waitFor(() => container.textContent?.includes('No connections on this page') === true)
+    expect(container.textContent).not.toContain('No connections yet')
+
+    await clickTextButton('Previous page')
+    await waitFor(() => container.textContent?.includes('Mihir GitHub') === true)
+  }, 15000)
+
+  it('resets cursor to page 1 when switching projects', async () => {
+    const project1 = testProject({ id: 'proj_1', displayName: 'Project 1' })
+    const project2 = testProject({ id: 'proj_2', displayName: 'Project 2' })
+
+    const capturedCursors: { projectId: string | null; cursor: string | null }[] = []
+
+    stubApi([
+      {
+        match: (url) => url.pathname === '/api/v1/projects',
+        respond: () => ({ status: 200, body: { data: [project1, project2] } }),
+      },
+      {
+        match: LIST_MATCH,
+        respond: (url) => {
+          const projectId = apiClient.getProjectId()
+          const cursor = url.searchParams.get('cursor')
+          capturedCursors.push({ projectId, cursor })
+
+          if (projectId === 'proj_2') {
+            return {
+              status: 200,
+              body: {
+                data: [githubConnection('conn_proj2', 'Project 2 GitHub')],
+                next: null,
+                previous: null,
+              },
+            }
+          }
+
+          if (cursor === 'cursor_page_2') {
+            return {
+              status: 200,
+              body: {
+                data: [slackConnection('conn_proj1_p2', 'Project 1 Slack')],
+                next: null,
+                previous: 'cursor_page_1',
+              },
+            }
+          }
+
+          return {
+            status: 200,
+            body: {
+              data: [githubConnection('conn_proj1_p1', 'Project 1 GitHub')],
+              next: 'cursor_page_2',
+              previous: null,
+            },
+          }
+        },
+      },
+      {
+        match: (url) => url.pathname === '/api/v1/integrations',
+        respond: () => ({ status: 200, body: seekPage([githubSummary(), slackSummary()]) }),
+      },
+    ])
+
+    let authSetter: ((p: any) => void) | null = null
+    function AuthController() {
+      const auth = useAuth()
+      authSetter = auth.setCurrentProject
+      return null
+    }
+
+    apiClient.setToken('test-token')
+    apiClient.setProjectId('proj_1')
+    sessionStorage.setItem('ap-user', JSON.stringify(testUser()))
+
+    const queryClient = createTestQueryClient()
+    const container = mount(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <AuthController />
+          <MemoryRouter initialEntries={['/connections']}>
+            <Routes>
+              <Route path="/connections" element={<ConnectionsPage />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>
+    )
+
+    await waitFor(() => container.textContent?.includes('Project 1 GitHub') === true)
+
+    await clickTextButton('Next')
+    await waitFor(() => container.textContent?.includes('Project 1 Slack') === true)
+
+    const p1Page2Call = capturedCursors.find((c) => c.projectId === 'proj_1' && c.cursor === 'cursor_page_2')
+    expect(p1Page2Call).toBeDefined()
+
+    await act(async () => {
+      authSetter?.(project2)
+    })
+
+    await waitFor(() => container.textContent?.includes('Project 2 GitHub') === true)
+
+    const p2Calls = capturedCursors.filter((c) => c.projectId === 'proj_2')
+    expect(p2Calls.length).toBeGreaterThan(0)
+    expect(p2Calls.every((c) => c.cursor === null)).toBe(true)
   }, 15000)
 })

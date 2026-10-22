@@ -1,5 +1,8 @@
+import { ApEdition, ApEnvironment } from '@inboxfm-connect/shared'
 import { FastifyInstance } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
+import { system } from '../../../../src/app/helper/system/system'
+import { AppSystemProp } from '../../../../src/app/helper/system/system-props'
 import { createMockSignUpRequest } from '../../../helpers/mocks/authn'
 import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/test-setup'
 
@@ -16,6 +19,18 @@ afterAll(async () => {
 describe('Authentication API', () => {
     describe('Sign up Endpoint', () => {
         it('Adds new user with onboarding token', async () => {
+            // Sign-up's contract is edition-dependent (sendVerificationOrAutoVerify in
+            // authentication.service.ts): ee/ce auto-verify new identities, while cloud
+            // only auto-verifies in DEVELOPMENT — otherwise it dispatches an OTP
+            // verification email and getOnboardingResponse correctly refuses a token for
+            // the still-unverified identity (the cloud suite asserts that 403 contract
+            // in cloud-authn.test.ts). This suite normally runs under AP_EDITION=ee
+            // (`npm run test-ee`, what CI's ee job runs), but branch on the live
+            // edition/environment instead of assuming the runner set one.
+            const edition = system.getEdition()
+            const environment = system.get(AppSystemProp.ENVIRONMENT)
+            const signUpAutoVerifies = edition !== ApEdition.CLOUD || environment === ApEnvironment.DEVELOPMENT
+
             // arrange
             const mockSignUpRequest = createMockSignUpRequest()
 
@@ -27,6 +42,17 @@ describe('Authentication API', () => {
             })
 
             // assert
+            if (!signUpAutoVerifies) {
+                expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+                expect(response?.json()).toEqual({
+                    code: 'EMAIL_IS_NOT_VERIFIED',
+                    params: {
+                        email: mockSignUpRequest.email.toLocaleLowerCase().trim(),
+                    },
+                })
+                return
+            }
+
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const responseBody = response?.json()
 

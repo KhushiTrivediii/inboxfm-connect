@@ -2,8 +2,9 @@ import { apId } from '@inboxfm-connect/core-utils'
 import { FileType, PrincipalType } from '@inboxfm-connect/shared'
 import { FastifyInstance } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
-import { vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { filesService } from '../../../../src/app/file/files-service'
+import { JwtAudience, jwtUtils } from '../../../../src/app/helper/jwt-utils'
 import { generateMockToken } from '../../../helpers/auth'
 import { mockAndSaveBasicSetup } from '../../../helpers/mocks'
 import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/test-setup'
@@ -260,6 +261,79 @@ describe('Files Controller', () => {
 
             // The alias either streams the bytes (DB storage) or redirects to S3.
             expect([StatusCodes.OK, StatusCodes.TEMPORARY_REDIRECT, StatusCodes.MOVED_TEMPORARILY]).toContain(response?.statusCode)
+        })
+
+        it('rejects a signed step-file token without an audience', async () => {
+            const { mockProject, mockPlatform } = await mockAndSaveBasicSetup()
+            const engineToken = await generateMockToken({
+                type: PrincipalType.ENGINE,
+                id: apId(),
+                projectId: mockProject.id,
+                platform: { id: mockPlatform.id },
+            })
+            const fileId = apId()
+
+            const uploadResponse = await app!.inject({
+                method: 'PUT',
+                url: `/api/v1/files/${fileId}`,
+                query: { token: engineToken },
+                headers: {
+                    'content-type': 'application/octet-stream',
+                    'x-ap-file-type': FileType.FLOW_STEP_FILE,
+                },
+                payload: Buffer.from('audience guarded'),
+            })
+            expect(uploadResponse.statusCode).toBe(StatusCodes.OK)
+
+            const audienceLessToken = await jwtUtils.sign({
+                payload: { fileId, fileType: FileType.FLOW_STEP_FILE },
+                key: 'secret',
+            })
+
+            const response = await app!.inject({
+                method: 'GET',
+                url: '/api/v1/step-files/signed',
+                query: { token: audienceLessToken },
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.UNAUTHORIZED)
+        })
+
+        it('rejects a signed step-file token with a foreign audience', async () => {
+            const { mockProject, mockPlatform } = await mockAndSaveBasicSetup()
+            const engineToken = await generateMockToken({
+                type: PrincipalType.ENGINE,
+                id: apId(),
+                projectId: mockProject.id,
+                platform: { id: mockPlatform.id },
+            })
+            const fileId = apId()
+
+            const uploadResponse = await app!.inject({
+                method: 'PUT',
+                url: `/api/v1/files/${fileId}`,
+                query: { token: engineToken },
+                headers: {
+                    'content-type': 'application/octet-stream',
+                    'x-ap-file-type': FileType.FLOW_STEP_FILE,
+                },
+                payload: Buffer.from('audience guarded'),
+            })
+            expect(uploadResponse.statusCode).toBe(StatusCodes.OK)
+
+            const foreignAudienceToken = await jwtUtils.sign({
+                payload: { fileId, fileType: FileType.FLOW_STEP_FILE },
+                key: 'secret',
+                audience: JwtAudience.USER_INVITATION,
+            })
+
+            const response = await app!.inject({
+                method: 'GET',
+                url: '/api/v1/step-files/signed',
+                query: { token: foreignAudienceToken },
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.UNAUTHORIZED)
         })
     })
 })

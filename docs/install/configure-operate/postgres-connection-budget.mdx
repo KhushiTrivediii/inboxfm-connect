@@ -69,7 +69,7 @@ Using the default Postgres `max_connections=100` → `budget = floor((100 − 3 
 Following [Production Setup](./production-setup)'s `apps = ceil(workers / 10)` sizing at the default
 pool size of 10: a 50-worker fleet needs 5 apps (50 required connections, comfortably under 76), but
 a 160-worker fleet needs 16 apps (160 required connections) — **well past what `max_connections=100`
-can fund**, even before counting `AP_WORKERS` and migrations. At that scale, either raise Postgres's
+can fund**, even before counting migrations. At that scale, either raise Postgres's
 `max_connections` (and `AP_POSTGRES_MAX_CONNECTIONS` to match), lower `AP_POSTGRES_POOL_SIZE`, or put
 [PgBouncer](#pgbouncer--managed-proxies) in front.
 

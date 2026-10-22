@@ -8,9 +8,17 @@ import chalk from 'chalk'
 import FormData from 'form-data';
 import fs from 'fs';
 import { preparePieceDistForPublish } from './prepare-piece-utils';
+import { findRepoRoot } from './workspace-utils';
 
-export const piecesPath = () => path.join(cwd(), 'packages', 'pieces')
+export const piecesPath = () => {
+    try {
+        return path.join(findRepoRoot(cwd()), 'packages', 'integrations')
+    } catch {
+        return path.join(cwd(), 'packages', 'integrations')
+    }
+}
 export const customPiecePath = () => path.join(piecesPath(), 'custom')
+export const communityPiecePath = () => path.join(piecesPath(), 'community')
 
 /**
  * Finds and returns the paths of specific pieces or all available pieces in a given directory.
@@ -53,7 +61,7 @@ export async function buildPiece(pieceFolder: string): Promise<{ outputFolder: s
 
     await buildPackage(packageJson.name);
 
-    const compiledPath = `packages/${removeStartingSlashes(pieceFolder).split(path.sep + 'packages')[1]}/dist`;
+    const compiledPath = path.join(pieceFolder, 'dist');
 
     await preparePieceDistForPublish(pieceFolder);
 
@@ -66,9 +74,15 @@ export async function buildPiece(pieceFolder: string): Promise<{ outputFolder: s
 }
 
 export async function buildPackage(packageName: string) {
-    await exec(`npx turbo run build --filter=${packageName} --force`);
+    let repoRoot: string;
+    try {
+        repoRoot = findRepoRoot(cwd());
+    } catch {
+        repoRoot = cwd();
+    }
+    await exec(`npx turbo run build --filter=${packageName} --force`, { cwd: repoRoot });
     return {
-        outputFolder: `dist/packages/${packageName}`,
+        outputFolder: path.join(repoRoot, 'dist', 'packages', packageName),
     }
 }
 
@@ -128,17 +142,23 @@ export async function publishPieceFromFolder(
         }
     }
 }
+const IGNORED_DIRECTORIES = new Set(['node_modules', 'dist', 'framework', 'common'])
+
 async function traverseFolder(folderPath: string): Promise<string[]> {
     const paths: string[] = []
     const directoryExists = await stat(folderPath).catch(() => null)
 
     if (directoryExists && directoryExists.isDirectory()) {
+        const folderName = path.basename(folderPath)
+        if (IGNORED_DIRECTORIES.has(folderName)) {
+            return []
+        }
         const files = await readdir(folderPath)
 
         for (const file of files) {
             const filePath = path.join(folderPath, file)
             const fileStats = await stat(filePath)
-            if (fileStats.isDirectory() && file !== 'node_modules' && file !== 'dist') {
+            if (fileStats.isDirectory() && !IGNORED_DIRECTORIES.has(file)) {
                 paths.push(...await traverseFolder(filePath))
             }
             else if (file === 'package.json') {
@@ -174,6 +194,6 @@ export const assertPieceExists = async (pieceName: string | null) => {
 
 
   export const removeStartingSlashes = (str: string) => {
-    return str.startsWith('/') ? str.slice(1) : str;
+    return str.replace(/^[/\\]+/, '');
   }
 

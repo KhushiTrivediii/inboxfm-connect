@@ -1,4 +1,5 @@
 import { ActivepiecesError, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
+import { safeHttp } from '@inboxfm-connect/server-utils'
 import { ApEdition, CreateTrialLicenseKeyRequestBody, LicenseKeyEntity, PlanName, TeamProjectsLimit, TelemetryEventName } from '@inboxfm-connect/shared'
 import dayjs from 'dayjs'
 import { FastifyBaseLogger } from 'fastify'
@@ -12,6 +13,8 @@ import { platformPlanService } from '../platform/platform-plan/platform-plan.ser
 
 const secretManagerLicenseKeysRoute = 'https://secrets.activepieces.com/license-keys'
 
+const httpClient = safeHttp.createAxios({ validateStatus: () => true })
+
 const handleUnexpectedSecretsManagerError = (log: FastifyBaseLogger, message: string) => {
     log.error({ message }, '[licenseKeysService#handleUnexpectedSecretsManagerError] Unexpected error from secret manager')
     throw new Error(message)
@@ -19,12 +22,10 @@ const handleUnexpectedSecretsManagerError = (log: FastifyBaseLogger, message: st
 
 export const licenseKeysService = (log: FastifyBaseLogger) => ({
     async requestTrial(request: CreateTrialLicenseKeyRequestBody): Promise<LicenseKeyEntity> {
-        const response = await fetch(secretManagerLicenseKeysRoute, {
-            method: 'POST',
+        const response = await httpClient.post<LicenseKeyEntity>(secretManagerLicenseKeysRoute, request, {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(request),
         })
         if (response.status === StatusCodes.CONFLICT) {
             throw new ActivepiecesError({
@@ -32,21 +33,18 @@ export const licenseKeysService = (log: FastifyBaseLogger) => ({
                 params: request,
             })
         }
-        if (!response.ok) {
-            const errorMessage = JSON.stringify(await response.json())
+        if (response.status < 200 || response.status >= 300) {
+            const errorMessage = JSON.stringify(response.data)
             handleUnexpectedSecretsManagerError(log, errorMessage)
         }
-        const responseBody = await response.json()
-        return responseBody
+        return response.data
     },
     async markAsActiviated(request: { key: string, platformId?: string }): Promise<void> {
         try {
-            const response = await fetch(`${secretManagerLicenseKeysRoute}/activate`, {
-                method: 'POST',
+            const response = await httpClient.post(secretManagerLicenseKeysRoute + '/activate', request, {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(request),
             })
             if (response.status === StatusCodes.CONFLICT) {
                 return
@@ -54,8 +52,8 @@ export const licenseKeysService = (log: FastifyBaseLogger) => ({
             if (response.status === StatusCodes.NOT_FOUND) {
                 return
             }
-            if (!response.ok) {
-                const errorMessage = JSON.stringify(await response.json())
+            if (response.status < 200 || response.status >= 300) {
+                const errorMessage = JSON.stringify(response.data)
                 handleUnexpectedSecretsManagerError(log, errorMessage)
             }
             if (request.platformId) {
@@ -76,15 +74,15 @@ export const licenseKeysService = (log: FastifyBaseLogger) => ({
         if (isNil(license)) {
             return null
         }
-        const response = await fetch(`${secretManagerLicenseKeysRoute}/${license}`)
+        const response = await httpClient.get<LicenseKeyEntity>(`${secretManagerLicenseKeysRoute}/${license}`)
         if (response.status === StatusCodes.NOT_FOUND) {
             return null
         }
-        if (!response.ok) {
-            const errorMessage = JSON.stringify(await response.json())
+        if (response.status < 200 || response.status >= 300) {
+            const errorMessage = JSON.stringify(response.data)
             handleUnexpectedSecretsManagerError(log, errorMessage)
         }
-        return response.json()
+        return response.data
     },
     async verifyKeyOrReturnNull({ platformId, license }: { license: string | undefined, platformId: string }): Promise<LicenseKeyEntity | null> {
         if (isNil(license)) {
@@ -97,13 +95,11 @@ export const licenseKeysService = (log: FastifyBaseLogger) => ({
     },
     async extendTrial({ email, days }: { email: string, days: number }): Promise<void> {
         const SECRET_MANAGER_API_KEY = system.getOrThrow(AppSystemProp.SECRET_MANAGER_API_KEY)
-        const response = await fetch(`${secretManagerLicenseKeysRoute}/extend-trial`, {
-            method: 'POST',
+        const response = await httpClient.post(`${secretManagerLicenseKeysRoute}/extend-trial`, { email, days }, {
             headers: {
                 'Content-Type': 'application/json',
                 'api-key': SECRET_MANAGER_API_KEY,
             },
-            body: JSON.stringify({ email, days }),
         })
 
         if (response.status === StatusCodes.NOT_FOUND) {
@@ -115,8 +111,8 @@ export const licenseKeysService = (log: FastifyBaseLogger) => ({
             })
         }
 
-        if (!response.ok) {
-            const errorMessage = JSON.stringify(await response.json())
+        if (response.status < 200 || response.status >= 300) {
+            const errorMessage = JSON.stringify(response.data)
             handleUnexpectedSecretsManagerError(log, errorMessage)
         }
     },

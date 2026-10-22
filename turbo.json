@@ -102,6 +102,30 @@
       "dependsOn": ["build"],
       "cache": false
     },
+    "@inboxfm-connect/engine#test-unit": {
+      "dependsOn": [
+        "build",
+        "@inboxfm-connect/piece-http#build",
+        "@inboxfm-connect/piece-data-mapper#build",
+        "@inboxfm-connect/piece-approval#build",
+        "@inboxfm-connect/piece-webhook#build"
+      ],
+      "cache": false
+    },
+    "test-integration": {
+      "dependsOn": ["build"],
+      "cache": false
+    },
+    "@inboxfm-connect/engine#test-integration": {
+      "dependsOn": [
+        "build",
+        "@inboxfm-connect/piece-http#build",
+        "@inboxfm-connect/piece-data-mapper#build",
+        "@inboxfm-connect/piece-approval#build",
+        "@inboxfm-connect/piece-webhook#build"
+      ],
+      "cache": false
+    },
     "test-ce": {
       "dependsOn": ["build"],
       "cache": false

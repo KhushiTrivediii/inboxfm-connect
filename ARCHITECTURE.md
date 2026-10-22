@@ -1,144 +1,123 @@
-# Inboxfm Connect Architecture
+# Inboxfm Connect architecture
 
-This document maps the current repository structure, database schema, and system flows. Inboxfm Connect is a fork of Activepieces with the visual workflow builder, flow engine, and legacy flow-run database layer removed in favor of a headless, MCP-first execution model (direct tool execution, trigger bindings, scheduled tasks).
+Inboxfm Connect is a headless fork of Activepieces building integration infrastructure for other applications and AI agents. The customer's application owns identity and product UX; Connect handles the connection and action infrastructure. The web dashboard manages integrations, connections, API keys, and MCP servers; it does not include the upstream visual flow builder. See [product direction](docs/PRODUCT_DIRECTION.md) for the delivery priorities and limits of current parity claims.
 
----
+## Embedded customer journey
 
-## 1. Monorepo Structure
-
-```
-├── packages/
-│   ├── core/
-│   │   ├── shared/                # @inboxfm-connect/shared — DB/EE/app-level Zod schemas, types (thick, app-level)
-│   │   ├── core-utils/            # Lean, framework-agnostic utilities (no DB/EE/web deps)
-│   │   ├── piece-types/           # Common type schemas for integrations/pieces
-│   │   ├── pieces-framework/      # Framework SDK for building custom integrations
-│   │   ├── pieces-common/         # Shared utilities for pieces (OAuth, polling, HTTP helpers)
-│   │   └── core-formula/          # Formula parsing and evaluation engine
-│   ├── server/
-│   │   ├── api/                   # Fastify-based backend REST API server
-│   │   ├── engine/                # Headless runtime executor for pieces/tools ("HeadlessRuntime")
-│   │   ├── sandbox/                # Code/executor isolation layer (isolated-vm)
-│   │   ├── utils/                 # Shared server-side utilities (safeHttp, evlog wiring, version checks)
-│   │   └── scheduler/             # Cron/scheduled trigger manager
-│   ├── web/                       # React frontend — dashboard, integrations, connections, MCP hub
-│   ├── connect-sdk/                # Public client SDK for the Connect platform (API keys, connect sessions)
-│   ├── ee/                        # Activepieces Enterprise-licensed code — see LICENSING.md
-│   └── integrations/
-│       ├── core/                  # Core piece definitions (e.g. tables)
-│       ├── common/                # Shared integration utilities
-│       └── community/             # Third-party integrations (400+)
+```mermaid
+sequenceDiagram
+    participant Customer
+    participant Product as Your application's backend
+    participant Connect as Inboxfm Connect API
+    participant Page as Connect connection page
+    participant Provider as Third-party provider
+    Customer->>Product: Sign in to your application
+    Product->>Connect: Create session with authenticated externalUserId and allowed integrations
+    Connect-->>Product: Short-lived connectUrl
+    Product-->>Customer: Open connection page
+    Customer->>Page: Authorize an account
+    Page->>Provider: OAuth consent using operator-configured app
+    Provider-->>Page: Authorization response
+    Page->>Connect: Save connection under the session's project and external user
+    Product->>Connect: Discover tools and execute using the customer's connection
+    Connect->>Provider: Integration action with server-side credentials
+    Connect-->>Product: Action result
+    Product-->>Customer: Product-specific result
 ```
 
-**Import boundary:** pieces and the engine may import the thin `core-*` packages, but never `@inboxfm-connect/shared` — they get what they need via `@inboxfm-connect/pieces-framework`. See `.claude/rules/core-packages.md`.
+The connection page is a capability granted by an expiring session token, not a project API key exposed to the customer. The backend must derive customer identity from its own authenticated session. Operator-configured OAuth apps, provider approvals, scopes, and callback URLs are deployment prerequisites. API-key and basic-auth connections follow a credential form flow instead of OAuth consent.
 
----
+Platform → Project controls the operator's tenancy. `externalUserId` identifies a customer of the consuming product inside that project; it must not be confused with an operator account or a global authorization grant. Connection ownership and per-user MCP tool exposure require explicit validation and regression coverage. A general provider API proxy is a planned capability, not part of the architecture implemented here.
 
-## 2. Dependency Graph
+## System overview
 
-```
-api [packages/server/api] ──────────► shared [@inboxfm-connect/shared] ──► core-utils
-  │                                    │
-  └────────────────────────────────────┴──► server-utils
-
-engine [packages/server/engine] ────► pieces-framework ──► piece-types / pieces-common
-```
-
-- **Server API** depends on `@inboxfm-connect/shared` and server utilities.
-- **Integrations (Pieces)** import `@inboxfm-connect/pieces-framework` and are isolated from the database/API layer.
-- **Server Engine** loads pieces dynamically and executes them in isolated sandboxes (`isolated-vm`).
-
----
-
-## 3. Server Modules (`packages/server/api/src/app/`)
-
-- **`authentication/`** — login, registration, federated/SSO auth.
-- **`user/`**, **`user-invitations/`** — user identity, profile, and invitation flows.
-- **`project/`** — multi-tenant workspace partitioning.
-- **`platform/`** — platform administration, branding, billing/plans.
-- **`connect-api-keys/`, `connect-oauth-apps/`, `connect-sessions/`** — the Connect platform: project-scoped API keys and the public `/connect/:token` flow. Original code, deliberately kept outside `ee/` (see `LICENSING.md`).
-- **`mcp/`** — MCP server endpoints exposing tables and piece actions to LLM agents, plus MCP OAuth (client/code/token).
-- **`tables/`** — headless relational data tables (`table`, `field`, `record`, `cell`).
-- **`pieces/`** — installation, syncing, versioning of registry pieces; piece metadata, filtering, search.
-- **`app-connection/`** — third-party credential storage (OAuth2, API key, basic auth), encrypted at rest.
-- **`execution/`** — direct tool execution, tool-call logging, trigger bindings, scheduled tasks.
-- **`ai/`** — AI provider configuration (BYO or managed via OpenRouter), used by chat/agent features.
-- **`event-destinations/`** — webhook/event streaming targets.
-- **`flags/`** — system configuration flags served to the frontend.
-- **`file/`** — uploaded file metadata and storage references.
-- **`analytics/`** — platform analytics reporting.
-- **`tool-search/`** — search index over available tools/actions.
-- **`ee/`** — Activepieces Enterprise-licensed code (SSO/SAML, SCIM, audit logs, project members/roles, secret managers, signing keys, embed subdomains, etc.). Being actively decoupled from CE code paths — see issue #7.
-
----
-
-## 4. Database Schema (TypeORM Entities)
-
-Registered in `packages/server/api/src/app/database/database-connection.ts`. TypeORM does **not** auto-discover entities — anything new must be added there plus a migration (`.claude/rules/entity-registration.md`).
-
-**Core (MIT, outside `ee/`):**
-
-```
-PLATFORM ────► PROJECT ────► USER ────► USER_IDENTITY
-                 │
-                 ├─────────► CONNECTION (app credentials, encrypted)
-                 ├─────────► TABLE ────► FIELD
-                 │             │
-                 │             └───────► RECORD ────► CELL
-                 │
-                 ├─────────► EXECUTION ──► TOOL_CALL
-                 ├─────────► TRIGGER_BINDING
-                 ├─────────► SCHEDULED_TASK
-                 ├─────────► MCP_SERVER ──► MCP_OAUTH_CLIENT / CODE / TOKEN
-                 ├─────────► CONNECT_SESSION
-                 ├─────────► AI_PROVIDER / AI_TOOL_CONFIG
-                 ├─────────► FILE
-                 └─────────► TAG ──► PIECE_TAG
-
-INTEGRATION_METADATA (piece registry)
-FLAG (system config)
-STORE_ENTRY (key-value store for flows)
-TOOL_SEARCH_INDEX
-USER_INVITATION
+```mermaid
+flowchart LR
+    Browser[React dashboard] --> API[Fastify API]
+    App[Application / SDK] --> API
+    MCP[MCP client] --> API
+    API --> Security[Tenant authentication and authorization]
+    Security --> DB[(PostgreSQL / development PGlite)]
+    Security --> Runtime[HeadlessRuntime]
+    Runtime --> Engine[Engine and sandbox]
+    Engine --> Integration[Integration action or trigger]
+    Integration --> External[External service]
+    API --> Redis[(Redis / development memory Redis)]
+    Redis --> Jobs[Background jobs and scheduling]
 ```
 
-**Enterprise (`ee/`-licensed — see LICENSING.md and issue #7 for removal status):**
+The public execution entry point is `packages/server/api/src/app/execute/execute.controller.ts`, which invokes `HeadlessRuntime` from `@inboxfm-connect/runtime`. Execution mode determines how the engine isolates work. `UNSANDBOXED` is for trusted development; a local demo is not evidence of production isolation.
 
-```
-API_KEY, APP_CREDENTIAL, APP_SUMO, AUDIT_EVENT, OTP, CONNECTION_KEY,
-EMBED_SUBDOMAIN, OAUTH_APP, CONCURRENCY_POOL, PLATFORM_PLAN,
-PROJECT_MEMBER, PROJECT_PLAN, PROJECT_ROLE, SECRET_MANAGER, SIGNING_KEY
-```
+## Package map
 
----
+| Package directory | Responsibility |
+| --- | --- |
+| `packages/server/api` | Fastify routes, authentication, authorization, repositories, migrations, and background work |
+| `packages/runtime` | Headless runtime orchestration and its host callbacks |
+| `packages/server/engine` | Integration loading, input processing, action execution, and runtime behavior |
+| `packages/server/sandbox` | Isolation and sandbox infrastructure |
+| `packages/server/utils` | Server utilities, safe outbound HTTP, logging, connection budgets |
+| `packages/core/utils` | Thin identifiers, errors, and general utilities |
+| `packages/core/piece-types` | Thin integration contracts and schemas |
+| `packages/core/formula` | Formula processing |
+| `packages/core/execution` | Thin execution contracts and helpers |
+| `packages/core/shared` | Thick application, database, management, and inherited EE schemas |
+| `packages/integrations/framework` | Integration authoring API |
+| `packages/integrations/common` | Integration HTTP, authentication, polling, and other shared helpers |
+| `packages/integrations/core` and `community` | Core and third-party integration packages |
+| `packages/scheduler` | Cron and scheduling utilities |
+| `packages/web` | React/Vite application |
+| `packages/connect-sdk` | Public TypeScript client, generated types, examples, and package verification |
+| `packages/cli` | Integration development commands |
+| `packages/ee` and `packages/server/api/src/app/ee` | Inherited Enterprise-licensed material; see licensing limitations below |
 
-## 5. System Flows
+Integration and engine code may import the thin core members through the integration framework. They must not acquire dependencies on `@inboxfm-connect/shared`, the API, or the Enterprise implementation.
 
-### A. Authentication Flow
-1. User authenticates via local password, federated, or SSO provider.
-2. Fastify controller validates credentials, fetches the user record, signs a JWT.
-3. Every API request passes through `core/security/v2` (`authenticate.ts` → `authorize.ts`), which validates tenant membership (`platformId`/`projectId`) before any handler runs.
+## Request and execution lifecycle
 
-### B. Headless Integration (Piece) Execution Flow
-1. An LLM agent, MCP client, or API caller invokes a tool/action.
-2. The Server API resolves the piece and its connection, then dispatches to the Engine (`packages/server/engine`, "HeadlessRuntime").
-3. The engine spins up an isolated sandbox, resolves credentials via `appConnectionService`, and executes the piece's action.
-4. Output is returned to the caller as structured JSON; `ToolCall`/`Execution` rows record the run.
+1. Fastify validates the request and applies its `securityAccess` policy.
+2. Authentication establishes a principal; authorization checks its project/platform scope.
+3. The execute controller resolves the integration and the caller's connection.
+4. The runtime uses host callbacks to retrieve credentials and refresh/decrypt the connection, then dispatches the action to the engine.
+5. The action calls its external service and returns structured data. Runtime failures are translated into the API's error contract.
 
-### C. Queue System (BullMQ)
-- Backed by Redis.
-- Manages scheduled task execution, piece installation/syncing, and background maintenance jobs.
+SDK clients use the same HTTP boundary as other callers. Connect sessions let end users authorize a connection; a project-scoped Connect API key must not authorize another project's resources. MCP exposes available tools and schemas to compatible clients through the API's MCP module.
 
-### D. Connect Platform Flow
-1. A platform issues a project-scoped Connect API key (`cak-` prefix) or opens a `/connect/:token` session for an end-user.
-2. `authenticate.ts` recognizes the `cak-` prefix and mints a `SERVICE` principal bound to exactly one project.
-3. `authorize.ts`'s `assertServicePrincipalScope()` rejects any attempt to touch a project outside that binding — enforced in core, MIT-licensed code, independent of `ee/rbac-service.ts`.
+## Data ownership and persistence
 
----
+The tenant hierarchy is **platform → projects → users/memberships**. Connection access, tables, API keys, sessions, executions, and other project resources must be scoped explicitly. A globally unique ID is not an authorization check.
 
-## 6. Database Backends
+TypeORM entities are registered explicitly in `packages/server/api/src/app/database/database-connection.ts` through `getEntities()`. There is no automatic entity discovery. Persistent model changes require migrations and must preserve isolation.
 
-Selected via `AP_DB_TYPE` (see `packages/server/api/src/app/database/database-connection.ts`):
+Development can use PGlite; production-oriented configuration uses PostgreSQL and Redis. PGlite testing mode synchronizes an in-memory schema, while migration checks exercise the migration path separately. The dedicated PostgreSQL CI suite catches driver behavior that an embedded test database can miss. Tool search's vector-backed path requires pgvector; ordinary development tests load PGlite's vector extension.
 
-- **`POSTGRES`** (default) — production path. Connects via `AP_POSTGRES_URL` or discrete host/port/credentials. Runs TypeORM migrations on boot; `synchronize` is always `false`.
-- **`PGLITE`** — embedded, Postgres-wire-compatible engine (`@electric-sql/pglite`) for zero-setup local/Community dev. Restricted to Community Edition or the testing environment. Same schema, same migrations.
+Redis supports queues, scheduled jobs, locks, and cache coordination. Concurrent work across servers must use distributed locks, BullMQ deduplication, or transactional database claiming such as `FOR UPDATE SKIP LOCKED`.
+
+## Modules to read first
+
+| Change | Starting point |
+| --- | --- |
+| Execute an integration action | `packages/server/api/src/app/execute`, `packages/runtime` |
+| Embedded connection flow | `connect-api-keys`, `connect-oauth-apps`, `connect-sessions` under the API app |
+| MCP endpoints | `packages/server/api/src/app/mcp` |
+| Credentials and refresh | `packages/server/api/src/app/app-connection` |
+| Tables and records | `packages/server/api/src/app/tables` |
+| Tool index | `packages/server/api/src/app/tool-search` |
+| Request security | `packages/server/api/src/app/core/security` |
+| Database entities and migrations | `packages/server/api/src/app/database` |
+| Dashboard behavior | `packages/web/src` |
+| Client contracts | `packages/connect-sdk`, `docs/connect-sdk` |
+
+Read the relevant `.agents/features/*.md`, package `AGENTS.md`, and `.claude/rules/` before implementation. Some inherited feature notes are marked stale; current source and tests take precedence.
+
+## Edition and licensing boundary
+
+The source still supports `ce`, `ee`, and `cloud` branches and contains imports from Enterprise directories, including at application registration and database boundaries. New code must not expand that dependency. Hooks provide extension points where possible, and backend feature middleware/frontend guards enforce plan access.
+
+**Edition or feature gates do not change copyright or grant license rights.** Existing Enterprise dependencies and modifications mean this repository must not be described as entirely MIT or cleared for unrestricted production redistribution. Preserve license notices and read [LICENSING.md](LICENSING.md). The planned removal of Enterprise implementation is tracked in [#25](https://github.com/Mihir-Rabari/inboxfm-connect/issues/25).
+
+## Validation and operations
+
+[docs/CI.md](docs/CI.md) maps the automated suites and how to reproduce them. [CONTRIBUTING.md](CONTRIBUTING.md) describes the `dev` contribution path and reviewed promotion to `main`. [SECURITY.md](SECURITY.md) describes private disclosure.
+
+Production deployment additionally requires reviewing licensing, secrets, tenant boundaries, outbound HTTP, execution isolation, database/Redis capacity, backup/restore, and external-service configuration. The development environment and its checked-in test credentials are only for local work.

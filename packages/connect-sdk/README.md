@@ -2,7 +2,27 @@
 
 Node/browser client for the Inboxfm Connect API.
 
-Install with `npm install @inboxfm-connect/sdk`. The package supports Node.js 20 or newer and browsers with `fetch` and `AbortController`. It has ESM and CommonJS entry points; the published tarball contains compiled JavaScript, type declarations, this README, the changelog, and the MIT license.
+The SDK supplies the developer-facing account connection → tool discovery → action execution cycle described in the [product direction](../../docs/PRODUCT_DIRECTION.md). Keep project API keys on your application's backend; a browser-compatible bundle does not make those keys safe to expose to customers.
+
+The package supports Node.js 20 or newer and browsers with `fetch` and `AbortController`. It has ESM and CommonJS entry points; its tarball contains compiled JavaScript, type declarations, this README, the changelog, and the preserved upstream license notice. The SDK is outside the restricted Enterprise directories; see [the repository licensing guide](../../LICENSING.md) for the scope of the upstream MIT and Enterprise terms.
+
+## Installation during the development preview
+
+A public npm lookup for `@inboxfm-connect/sdk` returned 404 on September 27, 2026. Until a public release is confirmed, use the repository workspace or build a local tarball. From the repository root, with dependencies installed using the pinned toolchain:
+
+```bash
+bun x turbo run build --filter=@inboxfm-connect/sdk
+npm pack --workspace=@inboxfm-connect/sdk --pack-destination /absolute/path/to/your-app
+```
+
+In your consuming application, install the tarball emitted by `npm pack` (use its actual filename):
+
+```bash
+# Replace VERSION with the version in the filename emitted by npm pack.
+npm install ./inboxfm-connect-sdk-VERSION.tgz
+```
+
+The repository's runnable quickstart uses the workspace directly. After a public release is confirmed, `npm install @inboxfm-connect/sdk` becomes the normal consumer path. Track release readiness in [#32](https://github.com/Mihir-Rabari/inboxfm-connect/issues/32).
 
 ```ts
 import { ConnectError, InboxFM } from '@inboxfm-connect/sdk'
@@ -13,8 +33,28 @@ const inboxfm = new InboxFM({
   baseUrl: 'https://your-instance.example.com/api',
 })
 
-const session = await inboxfm.createConnectSession({ externalUserId: 'user_42' })
+// 1. Send the end-user to session.connectUrl to authorize an integration.
+const session = await inboxfm.createConnectSession({ externalUserId: 'user_42', allowedPieceNames: ['@inboxfm-connect/piece-slack'] })
+
+// 2. Once they have, find their connection (paginate with `cursor`/`limit`).
+const { data } = await inboxfm.listConnections({ externalUserId: 'user_42', pieceName: '@inboxfm-connect/piece-slack' })
+
+const connection = data.find((candidate) => candidate.status === 'ACTIVE')
+if (!connection) throw new Error('Connect or reconnect this customer before executing a tool')
+
+// 3. Discover the integration's tools and their inputs.
+const tools = await inboxfm.listTools({ integration: '@inboxfm-connect/piece-slack' })
+
+// 4. Run one against the user's connection; resolves with the tool's raw output.
+const output = await inboxfm.execute({
+  integration: '@inboxfm-connect/piece-slack',
+  tool: 'send_channel_message',
+  connectionId: connection.id,
+  input: { channel: 'C123', text: 'Hello', sendAsBot: true },
+})
 ```
+
+Full guide and API reference: [Connect SDK docs](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/docs/connect-sdk/overview.mdx) and [SDK reference](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/docs/connect-sdk/reference.mdx). A runnable command-line version of this cycle lives in [`examples/quickstart`](https://github.com/Mihir-Rabari/inboxfm-connect/tree/dev/packages/connect-sdk/examples/quickstart) (`npm run example:quickstart --workspace=@inboxfm-connect/sdk`).
 
 ## Errors
 
@@ -37,7 +77,8 @@ catch (error) {
       case 'timeout':
       case 'aborted': // caller-supplied AbortSignal fired
     }
-    // error.status, error.code, error.params mirror the server's error body when available
+    // error.status, error.code, error.params mirror the server's error body when available.
+    // A tool that ran and failed arrives as code 'ENGINE_OPERATION_FAILURE' (HTTP 400, category 'validation').
   }
 }
 ```
@@ -58,7 +99,7 @@ A client-wide default timeout can be set via `new InboxFM({ ..., timeoutMs: 10_0
 
 Requests are retried with bounded exponential backoff and jitter, but **only when it is safe**:
 
-- `GET`/`HEAD` requests (`listConnections`) are retried automatically on network errors, timeouts, and 5xx responses.
+- `GET`/`HEAD` requests (`listConnections`, `listTools`) are retried automatically on network errors, timeouts, and 5xx responses.
 - Mutations (`createConnectSession`, `execute`) are **never** retried automatically on network errors or 5xx responses, even if you pass an `idempotencyKey` — the server does not (yet) deduplicate by that key, so retrying could duplicate the side effect. Set `retryable: true` on a specific call only if you know the operation is safe to repeat.
 - `deleteConnection` is retried by default, since repeating a delete converges to the same end state.
 - A `429` response is always retried automatically for every method, since it means the request was rejected before it ran (respecting `Retry-After` when the server sends one).
@@ -80,9 +121,9 @@ Pass `idempotencyKey` on a mutation to send an `Idempotency-Key` header. The SDK
 
 ## Generated types
 
-The request/response types (`Connection`, `ConnectionsPage`, `CreateConnectSessionResult`, `ExecuteParams`, `ServerErrorCode`, ...) are **not** hand-written. They're generated from the same Zod schemas the server validates against (`@inboxfm-connect/shared`, `@inboxfm-connect/core-utils`), so the SDK's types can't silently drift from what the API actually accepts and returns.
+The request/response types (`Connection`, `ConnectionsPage`, `CreateConnectSessionResult`, `ExecuteParams`, `Tool`, `ToolInput`, `ServerErrorCode`, ...) are **not** hand-written. They're generated from the same Zod schemas the server validates against (`@inboxfm-connect/shared`, `@inboxfm-connect/core-utils`, and the integration metadata schemas in `@inboxfm-connect/pieces-framework`), so the SDK's types can't silently drift from what the API actually accepts and returns.
 
-- **`src/generated/*.ts`** — raw output, one file per resource (`connect-session.ts`, `connections.ts`, `execute.ts`, `error-code.ts`). Never edit these by hand; they're overwritten on every regeneration.
+- **`src/generated/*.ts`** — raw output, one file per resource (`connect-session.ts`, `connections.ts`, `execute.ts`, `tools.ts`, `error-code.ts`). Never edit these by hand; they're overwritten on every regeneration.
 - **`src/api-types.ts`** — the curated, hand-maintained layer that re-exports the generated contracts as the SDK's public types, explicitly `Omit`-ting server/DB-only fields that shouldn't be part of a public contract (e.g. `Connection` omits `platformId`, `ownerId`, `owner` from the raw `ConnectionContract`).
 
 Regenerate after changing a relevant server schema:
@@ -91,7 +132,7 @@ Regenerate after changing a relevant server schema:
 npm run generate --workspace=@inboxfm-connect/sdk
 ```
 
-This requires `@inboxfm-connect/shared` and `@inboxfm-connect/core-utils` to be built first (`npx turbo run build --filter=@inboxfm-connect/shared`, or just run the generate command via turbo so it builds dependencies automatically: `npx turbo run generate --filter=@inboxfm-connect/sdk`). Commit the resulting diff in `src/generated/`.
+This requires `@inboxfm-connect/shared`, `@inboxfm-connect/core-utils`, and `@inboxfm-connect/pieces-framework` to be built first (`npx turbo run build --filter=@inboxfm-connect/shared --filter=@inboxfm-connect/pieces-framework`, or just run the generate command via turbo so it builds dependencies automatically: `npx turbo run generate --filter=@inboxfm-connect/sdk`). Commit the resulting diff in `src/generated/`.
 
 CI runs `npx turbo run generate:check --filter=@inboxfm-connect/sdk`, which regenerates into memory and fails the build if the committed output in `src/generated/` doesn't match — so a schema change that isn't followed by a regeneration is caught automatically, rather than silently drifting.
 

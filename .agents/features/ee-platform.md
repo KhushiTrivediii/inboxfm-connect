@@ -5,7 +5,8 @@ The EE Platform module manages billing, quota enforcement, AI credits, license k
 
 ## Key Files
 - `packages/server/api/src/app/ee/platform/` — backend service and controller
-- `packages/server/api/src/app/ee/billing/` — Stripe webhook, checkout, billing controller
+- `packages/server/api/src/app/ee/platform/platform-plan/` — Stripe webhook, checkout, billing controller and helpers
+- `packages/server/api/src/app/ee/platform/platform-plan/billing-checkout.service.ts` — serializes checkout per platform, preserves the customer, and rejects managed/existing subscriptions
 - `packages/core/shared/src/lib/ee/billing/index.ts` — shared plan constants, Zod schemas, `STANDARD_CLOUD_PLAN`, `OPEN_SOURCE_PLAN`
 - `packages/core/shared/src/lib/management/platform/` — `PlatformPlan` type and all feature-flag fields
 - `packages/web/src/features/billing/api/billing-plans-api.ts` — `platformBillingApi` (portal, checkout, AI credits, auto top-up)
@@ -23,7 +24,7 @@ The EE Platform module manages billing, quota enforcement, AI credits, license k
 > Canonical term definitions live in the bounded-context glossaries — see [CONTEXT-MAP.md](../../CONTEXT-MAP.md).
 
 - **PlatformPlan**: The single entity (one-per-platform) holding all billing state, feature flags, and limits.
-- **Active Flows**: Published and enabled flows that count against the `activeFlowsLimit` quota.
+- **Active Flows**: A planned quota unit for published/enabled flows. Nothing counts against `activeFlowsLimit` today — see [Quota Enforcement](#usage--quota-enforcement).
 - **AI Credits**: Usage currency for OpenRouter-backed AI actions. 1000 credits = $1 USD.
 - **Auto Top-Up**: Automatic Stripe invoice triggered when AI credits fall below a configured threshold.
 - **License Key**: A signed token (self-hosted EE) that maps to a feature set and expiration date.
@@ -48,7 +49,7 @@ The EE Platform module manages billing, quota enforcement, AI credits, license k
 
 `platformPlanService.getUsage(platformId)` returns: `{ activeFlows, aiCreditsLimit, aiCreditsRemaining, totalAiCreditsUsed, totalAiCreditsUsedThisMonth }`
 
-`checkActiveFlowsExceededLimit()` — called when enabling/publishing flows. Throws `QUOTA_EXCEEDED` (402) if `activeFlows >= activeFlowsLimit`. Skipped in CE edition.
+`checkActiveFlowsExceededLimit()` — **currently not called from anywhere.** It throws `QUOTA_EXCEEDED` (402) if `activeFlows >= activeFlowsLimit` and is skipped in CE, but it has no call site: this fork removed the visual flow builder, so there is no flow module and no enable/publish path to enforce it from, and `getUsage()` hardcodes `activeFlows: 0`. The active-flows quota is therefore **stored and displayed but never enforced**; do not assume a 402 on flow publish exists. Tracked in #20.
 
 ## AI Credits (OpenRouter)
 
@@ -67,6 +68,10 @@ The EE Platform module manages billing, quota enforcement, AI credits, license k
 - AI credits: one-time payment checkout sessions
 - Auto top-up: setup mode checkout (collects payment method) → automatic invoices
 - Webhook handler: `checkout.session.completed`, `invoice.paid`, `customer.subscription.*`
+
+The billing-info response exposes `stripeBillingEnabled`, which is false for CE/EE and for Cloud without a Stripe secret. The settings page offers paid checkout only when billing state loaded successfully and the plan supports self-service; managed Enterprise plans retain their existing billing path. Checkout checks live Stripe subscriptions before creating a session and reuses an open session for the same quantity. Changing quantity expires the previous open session. Configure Stripe's [one-subscription-per-customer setting](https://docs.stripe.com/payments/checkout/limit-subscriptions) on the deployment's own Stripe account as an additional payment-time guard.
+
+These implementations remain under the applicable Enterprise licensing boundaries. Local tests use mocked Stripe APIs and do not create charges or authorize production use.
 
 ## License Keys (Self-hosted EE)
 

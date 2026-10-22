@@ -6,6 +6,8 @@ on:
       - opened
       - edited
       - synchronize
+      - reopened
+      - ready_for_review
 
 permissions:
   pull-requests: read
@@ -14,7 +16,18 @@ jobs:
   main:
     name: Validate PR title
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: amannn/action-semantic-pull-request@v6.1.1
+      - name: Validate contribution destination
+        env:
+          PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
+          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$PR_BASE" == dev ]]; then exit 0; fi
+          if [[ "$PR_BASE" == main && "$PR_HEAD" == dev && "$PR_REPOSITORY" == "$GITHUB_REPOSITORY" ]]; then exit 0; fi
+          echo '::error::Contributions must target dev. Only the repository dev branch may be promoted to main.'
+          exit 1
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

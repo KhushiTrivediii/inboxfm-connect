@@ -1,4 +1,4 @@
-import { AIProviderName, spreadIfDefined } from '@inboxfm-connect/core-utils';
+import { ActivepiecesError, AIProviderName, ErrorCode, isNil, outboundUrlPolicy, spreadIfDefined, tryCatchSync } from '@inboxfm-connect/core-utils';
 import { AzureProviderConfig, BaseAIProviderAuthConfig, BedrockProviderAuthConfig, BedrockProviderConfig, chatPersistenceUtils, chatToolClassification, CloudflareGatewayProviderConfig, OpenAICompatibleProviderConfig, PersistedChatPart, PersistedChatPartType, PersistedToolCallStatus, splitCloudflareGatewayModelId } from '@inboxfm-connect/shared';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock'
 import { createAnthropic } from '@ai-sdk/anthropic'
@@ -9,6 +9,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { SharedV3ProviderOptions } from '@ai-sdk/provider'
 import { createOpenRouter, OpenRouterChatSettings } from '@openrouter/ai-sdk-provider'
 import { LanguageModel, ModelMessage, SystemModelMessage, ToolSet } from 'ai'
+import { parseAllowListFromEnv } from './safe-http'
 
 const MAX_WEB_SEARCH_RESULTS = 5
 
@@ -54,6 +55,29 @@ function openRouterModelSettings(provider: AIProviderName, webSearchEnabled: boo
     return { plugins: [{ id: 'web', max_results: MAX_WEB_SEARCH_RESULTS }] }
 }
 
+// The CUSTOM provider is the only chat provider whose host comes entirely from platform config, and
+// the API key rides on every request. A metadata or private-range target would therefore both leak
+// the key and hand the response back to the caller, so the host is checked here as well as in the
+// config schema — this also covers rows persisted before the schema was tightened. Private hosts
+// stay usable for self-hosted gateways via AP_SSRF_ALLOW_LIST, the same escape hatch safeHttp offers.
+function assertCustomProviderEgressAllowed({ baseUrl }: { baseUrl: string }): void {
+    const { data: url } = tryCatchSync(() => new URL(baseUrl))
+    const isBlocked = isNil(url)
+        || outboundUrlPolicy.isBlockedOutboundHost({
+            hostname: url.hostname,
+            allowList: parseAllowListFromEnv(),
+        })
+    if (isBlocked) {
+        throw new ActivepiecesError({
+            code: ErrorCode.INVALID_AI_PROVIDER_CREDENTIALS,
+            params: {
+                provider: AIProviderName.CUSTOM,
+                message: 'The configured base URL is not an allowed outbound destination',
+            },
+        })
+    }
+}
+
 function createChatModel({ provider, auth, config, modelId, webSearchEnabled = false }: {
     provider: AIProviderName
     auth: Record<string, unknown>
@@ -97,6 +121,7 @@ function createChatModel({ provider, auth, config, modelId, webSearchEnabled = f
         case AIProviderName.CUSTOM: {
             const { apiKey } = auth as BaseAIProviderAuthConfig
             const { apiKeyHeader, baseUrl, defaultHeaders } = config as OpenAICompatibleProviderConfig
+            assertCustomProviderEgressAllowed({ baseUrl })
             return createOpenAICompatible({
                 name: 'openai-compatible',
                 baseURL: baseUrl,

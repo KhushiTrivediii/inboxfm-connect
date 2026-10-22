@@ -27,9 +27,10 @@ const STREAM_STATUS_VARIANTS: Record<ExecutionStreamStatus, 'secondary' | 'warni
  *
  * The event type is rendered from the wire value rather than matched against a fixed
  * list, so any event the backend starts emitting shows up without a UI change. No
- * progress, no synthetic "executing"/"completed" step, and no replay of history: the
- * server does not backfill a new subscriber, so an empty list here means "nothing was
- * emitted while this page was open", which is what the empty state says.
+ * progress and no synthetic "executing"/"completed" step: the list holds exactly what
+ * the server delivered — history replayed on connect plus the live frames after it —
+ * so an empty list means the server has no events stored for this execution, which
+ * is what the empty state says.
  */
 export function ExecutionEventStream({ events, status, error, onRetry }: ExecutionEventStreamProps) {
   return (
@@ -75,8 +76,8 @@ export function ExecutionEventStream({ events, status, error, onRetry }: Executi
         >
           <p className="font-semibold text-foreground">No events received yet.</p>
           <p className="mt-1 leading-relaxed">
-            The stream delivers events emitted from now on. Earlier events are not replayed to new
-            subscribers, so an execution recorded before this page opened shows nothing here.
+            Connecting replays this execution's recorded events, then follows new ones
+            live. An empty list means the server has no events stored for this execution.
           </p>
         </div>
       ) : (

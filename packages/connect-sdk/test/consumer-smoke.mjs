@@ -22,6 +22,9 @@ const server = createServer(async (request, response) => {
     else if (url.pathname === '/v1/connections') {
         response.end(JSON.stringify({ data: [], next: null, previous: null }))
     }
+    else if (url.pathname === '/v1/integrations/smoke') {
+        response.end(JSON.stringify({ actions: { run: { name: 'run', displayName: 'Run', description: 'Smoke tool', requireAuth: false, props: {} } } }))
+    }
     else if (url.pathname === '/v1/execute') {
         response.end(JSON.stringify({ success: true }))
     }
@@ -41,12 +44,15 @@ try {
         assert.equal(session.token, 'session-token')
         const connections = await client.listConnections({ externalUserId: 'smoke-user' })
         assert.deepEqual(connections.data, [])
+        const tools = await client.listTools({ integration: 'smoke' })
+        assert.deepEqual(tools.map((tool) => tool.name), ['run'])
         const execution = await client.execute({ integration: 'smoke', tool: 'run', input: {} })
         assert.deepEqual(execution, { success: true })
     }
-    assert.equal(seen.length, 6)
-    assert(seen.every((request) => request.token === 'Bearer smoke-api-key' && request.projectId === 'smoke-project'))
-    console.log('Clean consumer ESM/CJS auth, session, list, and execute smoke passed')
+    assert.equal(seen.length, 8)
+    assert(seen.every((request) => request.token === 'Bearer smoke-api-key'))
+    assert(seen.filter((request) => request.path !== '/v1/integrations/smoke').every((request) => request.projectId === 'smoke-project'))
+    console.log('Clean consumer ESM/CJS auth, session, list, tools, and execute smoke passed')
 }
 finally {
     server.close()

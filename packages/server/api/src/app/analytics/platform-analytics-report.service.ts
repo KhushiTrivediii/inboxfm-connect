@@ -53,7 +53,7 @@ async function listRuns(_projectIds: string[], _afterDate: string | null, _curre
     return []
 }
 
-function mergeRuns(existing: AnalyticsRunsUsageItem[], incoming: AnalyticsRunsUsageItem[]): AnalyticsRunsUsageItem[] {
+export function mergeRuns(existing: AnalyticsRunsUsageItem[], incoming: AnalyticsRunsUsageItem[]): AnalyticsRunsUsageItem[] {
     const map = new Map(existing.map(run => [`${run.flowId}-${run.day}`, { ...run }]))
     for (const run of incoming) {
         const key = `${run.flowId}-${run.day}`
@@ -78,6 +78,24 @@ async function listUsers(platformId: PlatformId): Promise<UserWithMetaInformatio
         relations: {
             identity: true,
         },
+        // Whole-platform refresh (result cached ~5 min): fetch only the columns
+        // the report maps instead of every user and identity column - identity
+        // rows carry password hashes, tokenVersion, imageUrl and other unmapped
+        // data that dominated the transfer on a large platform. Same query
+        // shape, same mapped output.
+        select: {
+            id: true,
+            status: true,
+            platformRole: true,
+            lastActiveDate: true,
+            created: true,
+            updated: true,
+            identity: {
+                email: true,
+                firstName: true,
+                lastName: true,
+            },
+        },
     })
     return users.map((user) => {
         return {
@@ -94,7 +112,7 @@ async function listUsers(platformId: PlatformId): Promise<UserWithMetaInformatio
     })
 }
 
-function filterReportByTimePeriod(
+export function filterReportByTimePeriod(
     report: PlatformAnalyticsReport, 
     timePeriod?: AnalyticsTimePeriod, 
 ): PlatformAnalyticsReport {
@@ -111,7 +129,7 @@ function filterReportByTimePeriod(
     }
 }
 
-function getDateRange(timePeriod: AnalyticsTimePeriod): string {
+export function getDateRange(timePeriod: AnalyticsTimePeriod): string {
     const date = dayjs()
     switch (timePeriod) {
         case AnalyticsTimePeriod.LAST_WEEK:
@@ -127,4 +145,10 @@ function getDateRange(timePeriod: AnalyticsTimePeriod): string {
         default:
             throw new Error(`Invalid time period: ${timePeriod}`)
     }
+}
+
+export const platformAnalyticsTesting = {
+    mergeRuns,
+    filterReportByTimePeriod,
+    getDateRange,
 }

@@ -1,5 +1,6 @@
+import { AIProviderName } from '@inboxfm-connect/core-utils'
 import { ModelMessage } from 'ai'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { chatAiUtils } from '../src/chat-ai-utils'
 
 const { sanitizeTruncatedAssistantTail } = chatAiUtils
@@ -317,6 +318,98 @@ describe('estimateTokenCount', () => {
         const small = chatAiUtils.estimateTokenCount({ messages: [{ role: 'user', content: 'hi' }], systemPromptLength: 0 })
         const large = chatAiUtils.estimateTokenCount({ messages: [{ role: 'user', content: 'x'.repeat(4000) }], systemPromptLength: 4000 })
         expect(large).toBeGreaterThan(small)
+    })
+})
+
+describe('createChatModel — CUSTOM provider egress guard', () => {
+    const auth = { apiKey: 'sk-secret' }
+
+    it('refuses to build a model pointing at the cloud metadata endpoint', () => {
+        expect(() => chatAiUtils.createChatModel({
+            provider: AIProviderName.CUSTOM,
+            auth,
+            config: { apiKeyHeader: 'Authorization', baseUrl: 'http://169.254.169.254/v1' },
+            modelId: 'gpt-4o',
+        })).toThrow(expect.objectContaining({
+            error: expect.objectContaining({
+                params: expect.objectContaining({
+                    message: 'The configured base URL is not an allowed outbound destination',
+                }),
+            }),
+        }))
+    })
+
+    it('refuses loopback and private-range targets', () => {
+        for (const baseUrl of ['http://127.0.0.1:8080/v1', 'http://10.0.0.5:8080/v1', 'http://localhost:8000/v1']) {
+            expect(() => chatAiUtils.createChatModel({
+                provider: AIProviderName.CUSTOM,
+                auth,
+                config: { apiKeyHeader: 'Authorization', baseUrl },
+                modelId: 'gpt-4o',
+            }), `expected ${baseUrl} to be refused`).toThrow(expect.objectContaining({
+                error: expect.objectContaining({
+                    params: expect.objectContaining({
+                        message: 'The configured base URL is not an allowed outbound destination',
+                    }),
+                }),
+            }))
+        }
+    })
+
+    it('refuses a base URL that is not parseable', () => {
+        expect(() => chatAiUtils.createChatModel({
+            provider: AIProviderName.CUSTOM,
+            auth,
+            config: { apiKeyHeader: 'Authorization', baseUrl: 'not-a-url' },
+            modelId: 'gpt-4o',
+        })).toThrow(expect.objectContaining({
+            error: expect.objectContaining({
+                params: expect.objectContaining({
+                    message: 'The configured base URL is not an allowed outbound destination',
+                }),
+            }),
+        }))
+    })
+
+    it('never includes the API key or upstream detail in the thrown error', () => {
+        let thrown: unknown
+        try {
+            chatAiUtils.createChatModel({
+                provider: AIProviderName.CUSTOM,
+                auth,
+                config: { apiKeyHeader: 'Authorization', baseUrl: 'http://169.254.169.254/v1' },
+                modelId: 'gpt-4o',
+            })
+        }
+        catch (error: unknown) {
+            thrown = error
+        }
+        expect(thrown).toBeInstanceOf(Error)
+        expect(String((thrown as Error).message)).not.toContain('sk-secret')
+    })
+
+    it('allows a public endpoint', () => {
+        expect(() => chatAiUtils.createChatModel({
+            provider: AIProviderName.CUSTOM,
+            auth,
+            config: { apiKeyHeader: 'Authorization', baseUrl: 'https://api.vendor.com/v1' },
+            modelId: 'gpt-4o',
+        })).not.toThrow()
+    })
+
+    it('allows a private gateway once its host is on AP_SSRF_ALLOW_LIST', () => {
+        vi.stubEnv('AP_SSRF_ALLOW_LIST', '10.0.0.5')
+        try {
+            expect(() => chatAiUtils.createChatModel({
+                provider: AIProviderName.CUSTOM,
+                auth,
+                config: { apiKeyHeader: 'Authorization', baseUrl: 'http://10.0.0.5:8080/v1' },
+                modelId: 'gpt-4o',
+            })).not.toThrow()
+        }
+        finally {
+            vi.unstubAllEnvs()
+        }
     })
 })
 

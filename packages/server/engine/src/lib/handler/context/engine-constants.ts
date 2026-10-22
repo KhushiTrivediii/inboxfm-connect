@@ -218,6 +218,15 @@ export class EngineConstants {
             },
         })
 
+        // Without this check a 4xx/5xx body is blindly cast to Project: a JSON error
+        // object silently becomes `externalId: undefined` in piece contexts, and an
+        // HTML error page makes response.json() throw an opaque SyntaxError. The
+        // worker project endpoint failing is an API failure — fail loudly as an
+        // ENGINE error so the failure is attributed correctly.
+        if (!response.ok) {
+            throw new EngineGenericError('ProjectFetchError', `Failed to fetch worker project: ${response.status} ${response.statusText}`)
+        }
+
         this.project = await response.json() as Project
         return this.project
     }

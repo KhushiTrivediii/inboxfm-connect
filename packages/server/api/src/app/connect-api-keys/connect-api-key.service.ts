@@ -2,6 +2,7 @@ import { ActivepiecesError, apId, ErrorCode, isNil, secureApId } from '@inboxfm-
 import { cryptoUtils } from '@inboxfm-connect/server-utils'
 import { ConnectApiKey, ConnectApiKeyResponseWithValue } from '@inboxfm-connect/shared'
 import { repoFactory } from '../core/db/repo-factory'
+import { transaction } from '../core/db/transaction'
 import { system } from '../helper/system/system'
 import { AppSystemProp } from '../helper/system/system-props'
 import { ConnectApiKeyEntity } from './connect-api-key.entity'
@@ -60,21 +61,39 @@ export const connectApiKeyService = {
     // (never sooner than an expiry it already had) instead of deleting it, so callers
     // have a window to swap the new value in before getByValue's expiry check (above)
     // starts rejecting the old one.
+    //
+    // The mint and the old key's grace-expiry update run in ONE transaction: if the
+    // update failed or the process died between them, the old key would keep its
+    // original (possibly null = never-expiring) expiresAt while the replacement's raw
+    // value is already lost (only its hash is stored), leaving a revoked-by-intent key
+    // that still authenticates forever and an orphan replacement nobody can use.
     async rotate({ projectId, id }: KeyIdentityParams): Promise<ConnectApiKeyResponseWithValue> {
         const oldKey = await getOwnedKeyOrThrow({ projectId, id })
         const gracePeriodSeconds = system.getNumber(AppSystemProp.API_KEY_ROTATION_GRACE_PERIOD_SECONDS) ?? DEFAULT_ROTATION_GRACE_PERIOD_SECONDS
         const graceExpiresAt = new Date(Date.now() + gracePeriodSeconds * 1000).toISOString()
         const nextExpiresAt = earlierExpiry(oldKey.expiresAt, graceExpiresAt)
+        const generated = generateConnectApiKey()
 
-        const newKey = await connectApiKeyService.add({
-            platformId: oldKey.platformId,
-            projectId: oldKey.projectId,
-            displayName: oldKey.displayName,
+        const saved = await transaction(async (entityManager) => {
+            const newKey = await connectApiKeyRepo(entityManager).save({
+                id: apId(),
+                platformId: oldKey.platformId,
+                projectId: oldKey.projectId,
+                displayName: oldKey.displayName,
+                hashedValue: generated.hashed,
+                truncatedValue: generated.truncated,
+                expiresAt: null,
+            })
+            await connectApiKeyRepo(entityManager).update(oldKey.id, {
+                expiresAt: nextExpiresAt,
+            })
+            return newKey
         })
-        await connectApiKeyRepo().update(oldKey.id, {
-            expiresAt: nextExpiresAt,
-        })
-        return newKey
+
+        return {
+            ...saved,
+            value: generated.raw,
+        }
     },
 }
 

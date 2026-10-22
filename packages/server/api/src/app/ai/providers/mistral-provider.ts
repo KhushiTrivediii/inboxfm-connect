@@ -1,4 +1,4 @@
-import { httpClient, HttpMethod } from '@inboxfm-connect/pieces-common'
+import { safeHttp } from '@inboxfm-connect/server-utils'
 import { AIProviderModel, AIProviderModelType, MistralProviderAuthConfig, MistralProviderConfig } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { AIProviderStrategy } from './ai-provider'
@@ -9,16 +9,15 @@ export const mistralProvider: AIProviderStrategy<MistralProviderAuthConfig, Mist
         await mistralProvider.listModels(authConfig, config)
     },
     async listModels(authConfig: MistralProviderAuthConfig, _config: MistralProviderConfig): Promise<AIProviderModel[]> {
-        const res = await httpClient.sendRequest<{ data: MistralModel[] }>({
-            url: 'https://api.mistral.ai/v1/models',
-            method: HttpMethod.GET,
+        const client = safeHttp.createAxios()
+        const res = await client.get<{ data: MistralModel[] }>('https://api.mistral.ai/v1/models', {
             headers: {
                 'Authorization': `Bearer ${authConfig.apiKey}`,
                 'Content-Type': 'application/json',
             },
         })
 
-        const { data } = res.body
+        const { data } = res.data
 
         return data
             .filter((model) => model.capabilities?.completion_chat)

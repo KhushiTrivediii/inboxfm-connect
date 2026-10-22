@@ -3,6 +3,7 @@ import { cryptoUtils } from '@inboxfm-connect/server-utils'
 import { ApiKey, ApiKeyResponseWithValue } from '@inboxfm-connect/shared'
 import { ApiKeyEntity } from '../../api-keys/api-key.entity'
 import { repoFactory } from '../../core/db/repo-factory'
+import { transaction } from '../../core/db/transaction'
 import { system } from '../../helper/system/system'
 import { AppSystemProp } from '../../helper/system/system-props'
 
@@ -56,20 +57,38 @@ export const apiKeyService = {
     // (never sooner than an expiry it already had) instead of deleting it, so callers
     // have a window to swap the new value in before the non-ee apiKeyService's expiry
     // check (../../api-keys/api-key.service.ts) starts rejecting the old one.
+    // The replacement mint and the old key's grace-expiry update run in ONE
+    // transaction: between the two statements the replacement's raw value exists
+    // only in this call's memory (only its hash is stored), so a failure in between
+    // would leave the old key keeping its original (possibly null = never-expiring)
+    // expiry while the already-minted replacement is unusable — a key the operator
+    // believes was rotated still authenticating forever.
     async rotate({ platformId, id }: KeyIdentityParams): Promise<ApiKeyResponseWithValue> {
         const oldApiKey = await getOwnedKeyOrThrow({ platformId, id })
         const gracePeriodSeconds = system.getNumber(AppSystemProp.API_KEY_ROTATION_GRACE_PERIOD_SECONDS) ?? DEFAULT_ROTATION_GRACE_PERIOD_SECONDS
         const graceExpiresAt = new Date(Date.now() + gracePeriodSeconds * 1000).toISOString()
         const nextExpiresAt = earlierExpiry(oldApiKey.expiresAt, graceExpiresAt)
+        const generatedApiKey = generateApiKey()
 
-        const newApiKey = await apiKeyService.add({
-            platformId: oldApiKey.platformId,
-            displayName: oldApiKey.displayName,
+        const savedApiKey = await transaction(async (entityManager) => {
+            const newApiKey = await repo(entityManager).save({
+                id: apId(),
+                platformId: oldApiKey.platformId,
+                displayName: oldApiKey.displayName,
+                hashedValue: generatedApiKey.secretHashed,
+                truncatedValue: generatedApiKey.secretTruncated,
+                expiresAt: null,
+            })
+            await repo(entityManager).update(oldApiKey.id, {
+                expiresAt: nextExpiresAt,
+            })
+            return newApiKey
         })
-        await repo().update(oldApiKey.id, {
-            expiresAt: nextExpiresAt,
-        })
-        return newApiKey
+
+        return {
+            ...savedApiKey,
+            value: generatedApiKey.secret,
+        }
     },
 }
 

@@ -80,7 +80,7 @@ export const newOrganization = createTrigger({
         },
         body: {
           webhook: {
-            name: `Activepieces New Organization Webhook - ${Date.now()}`,
+            name: `Inboxfm Connect New Organization Webhook - ${Date.now()}`,
             endpoint: context.webhookUrl,
             http_method: 'POST',
             request_format: 'json',

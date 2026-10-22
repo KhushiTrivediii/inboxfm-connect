@@ -1,9 +1,10 @@
 import { AIProviderName } from '@inboxfm-connect/core-utils'
-import { AIProviderModel, CreateAIProviderRequest, PrincipalType, UpdateAIProviderRequest } from '@inboxfm-connect/shared'
+import { AIProviderModel, CreateAIProviderRequest, PrincipalType, TestAIProviderRequest, UpdateAIProviderRequest } from '@inboxfm-connect/shared'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
 import { z } from 'zod'
 import { securityAccess } from '../core/security/authorization/fastify-security'
+import { syncExecutionRateLimitOptions } from '../core/security/rate-limit'
 import { aiProviderService } from './ai-provider-service'
 
 export const aiProviderController: FastifyPluginAsyncZod = async (app) => {
@@ -23,6 +24,14 @@ export const aiProviderController: FastifyPluginAsyncZod = async (app) => {
         const platformId = request.principal.platform.id
         return aiProviderService(app.log).create(platformId, request.body)
     })
+    app.post('/test', TestAIProvider, async (request) => {
+        await aiProviderService(app.log).validateProviderCredentials(
+            request.body.provider,
+            request.body.auth,
+            request.body.config,
+        )
+        return { valid: true }
+    })
     app.post('/:id', UpdateAIProvider, async (request) => {
         const platformId = request.principal.platform.id
         return aiProviderService(app.log).update(platformId, request.params.id, request.body)
@@ -37,12 +46,14 @@ export const aiProviderController: FastifyPluginAsyncZod = async (app) => {
 const ListAIProviders = {
     config: {
         security: securityAccess.publicPlatform([PrincipalType.USER, PrincipalType.ENGINE]),
+        rateLimit: syncExecutionRateLimitOptions,
     },
 }
 
 const GetAIProviderConfig = {
     config: {
         security: securityAccess.engine(),
+        rateLimit: syncExecutionRateLimitOptions,
     },
     schema: {
         params: z.object({
@@ -54,6 +65,7 @@ const GetAIProviderConfig = {
 const ListModels = {
     config: {
         security: securityAccess.publicPlatform([PrincipalType.USER, PrincipalType.ENGINE]),
+        rateLimit: syncExecutionRateLimitOptions,
     },
     schema: {
         params: z.object({
@@ -67,16 +79,33 @@ const ListModels = {
 
 const CreateAIProvider = {
     config: {
-        security: securityAccess.publicPlatform([PrincipalType.USER]),
+        security: securityAccess.platformAdminOnly([PrincipalType.USER]),
+        rateLimit: syncExecutionRateLimitOptions,
     },
     schema: {
         body: CreateAIProviderRequest,
     },
 }
 
+const TestAIProvider = {
+    config: {
+        security: securityAccess.platformAdminOnly([PrincipalType.USER]),
+        rateLimit: syncExecutionRateLimitOptions,
+    },
+    schema: {
+        body: TestAIProviderRequest,
+        response: {
+            [StatusCodes.OK]: z.object({
+                valid: z.boolean(),
+            }),
+        },
+    },
+}
+
 const UpdateAIProvider = {
     config: {
-        security: securityAccess.publicPlatform([PrincipalType.USER]),
+        security: securityAccess.platformAdminOnly([PrincipalType.USER]),
+        rateLimit: syncExecutionRateLimitOptions,
     },
     schema: {
         params: z.object({
@@ -88,7 +117,8 @@ const UpdateAIProvider = {
 
 const DeleteAIProvider = {
     config: {
-        security: securityAccess.publicPlatform([PrincipalType.USER]),
+        security: securityAccess.platformAdminOnly([PrincipalType.USER]),
+        rateLimit: syncExecutionRateLimitOptions,
     },
     schema: {
         params: z.object({

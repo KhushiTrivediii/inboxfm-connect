@@ -1,0 +1,107 @@
+name: Generate Translation Files for Community Pieces and UI
+
+on:
+  schedule:
+    - cron: '5 15 * * *'
+  workflow_dispatch:
+
+jobs:
+  # `secrets` cannot be referenced directly in `if:` (GitHub Actions rejects it
+  # as an unrecognized named-value there), so resolve them into job outputs
+  # here and have finalize/notify-failure gate on those instead.
+  check-secrets:
+    runs-on: ubuntu-latest
+    outputs:
+      crowdin_configured: ${{ steps.check.outputs.crowdin_configured }}
+      discord_configured: ${{ steps.check.outputs.discord_configured }}
+    steps:
+      - id: check
+        run: |
+          echo "crowdin_configured=${{ secrets.CROWDIN_PRS != '' }}" >> "$GITHUB_OUTPUT"
+          echo "discord_configured=${{ secrets.DISCORD_ON_CALL_WEBHOOK != '' }}" >> "$GITHUB_OUTPUT"
+
+  shard-0:
+    needs: check-secrets
+    if: needs.check-secrets.outputs.crowdin_configured == 'true' && github.repository == 'Mihir-Rabari/inboxfm-connect'
+    uses: ./.github/workflows/reusable-generate-translations-shard.yml
+    with:
+      shard_index: 0
+      shard_total: 6
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  shard-1:
+    needs: [check-secrets, shard-0]
+    if: needs.check-secrets.outputs.crowdin_configured == 'true' && github.repository == 'Mihir-Rabari/inboxfm-connect'
+    uses: ./.github/workflows/reusable-generate-translations-shard.yml
+    with:
+      shard_index: 1
+      shard_total: 6
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  shard-2:
+    needs: [check-secrets, shard-1]
+    if: needs.check-secrets.outputs.crowdin_configured == 'true' && github.repository == 'Mihir-Rabari/inboxfm-connect'
+    uses: ./.github/workflows/reusable-generate-translations-shard.yml
+    with:
+      shard_index: 2
+      shard_total: 6
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  shard-3:
+    needs: [check-secrets, shard-2]
+    if: needs.check-secrets.outputs.crowdin_configured == 'true' && github.repository == 'Mihir-Rabari/inboxfm-connect'
+    uses: ./.github/workflows/reusable-generate-translations-shard.yml
+    with:
+      shard_index: 3
+      shard_total: 6
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  shard-4:
+    needs: [check-secrets, shard-3]
+    if: needs.check-secrets.outputs.crowdin_configured == 'true' && github.repository == 'Mihir-Rabari/inboxfm-connect'
+    uses: ./.github/workflows/reusable-generate-translations-shard.yml
+    with:
+      shard_index: 4
+      shard_total: 6
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  shard-5:
+    needs: [check-secrets, shard-4]
+    if: needs.check-secrets.outputs.crowdin_configured == 'true' && github.repository == 'Mihir-Rabari/inboxfm-connect'
+    uses: ./.github/workflows/reusable-generate-translations-shard.yml
+    with:
+      shard_index: 5
+      shard_total: 6
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  finalize:
+    # The finalize step opens and immediately merges the auto-translations PR
+    # using the CROWDIN_PRS token, which this fork has not configured; skip it
+    # until that secret exists (its `npm run i18n:extract` step also needs a
+    # script this fork's root package.json does not define yet).
+    if: github.repository == 'Mihir-Rabari/inboxfm-connect' && needs.check-secrets.outputs.crowdin_configured == 'true'
+    needs: [check-secrets, shard-5]
+    uses: ./.github/workflows/reusable-finalize-translations-pr.yml
+    with:
+      branch_name: auto/translation-files-${{ github.run_id }}
+    secrets: inherit
+
+  notify-failure:
+    # Only run when any of the shards failed; still evaluate even if they failed.
+    # Also requires the Discord webhook secret, which this fork has not configured.
+    if: ${{ github.repository == 'Mihir-Rabari/inboxfm-connect' && always() && contains(needs.*.result, 'failure') && needs.check-secrets.outputs.discord_configured == 'true' }}
+    needs: [check-secrets, shard-0, shard-1, shard-2, shard-3, shard-4, shard-5]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Discord on shard failure
+        run: |
+          curl -H "Content-Type: application/json" \
+            -X POST \
+            -d "{\"content\": \"🚨 **Generate Translations Workflow Failed** 🚨\\n\\n**Repository:** ${{ github.repository }}\\n**Branch:** ${{ github.ref_name }}\\n**Commit:** ${{ github.sha }}\\n**Action URL:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\\n\\nOne or more shards failed. Please check the logs for details.\"}" \
+            ${{ secrets.DISCORD_ON_CALL_WEBHOOK }}

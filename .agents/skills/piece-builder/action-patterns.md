@@ -51,7 +51,7 @@ export const createRecordAction = createAction({
 
 The `token` field above assumes a `PieceAuth.SecretText()` auth. For other auth types, swap to `context.auth.access_token` (OAuth2), `context.auth.username`/`.password` (BasicAuth), or `context.auth.props.<field>` (CustomAuth). See `auth-patterns.md` for the full table.
 
-**Real example:** `packages/pieces/community/github/src/lib/actions/create-issue.ts`
+**Real example:** `packages/integrations/community/github/src/lib/actions/create-issue.ts`
 
 For all available property types (`Property.ShortText`, `Property.Dropdown`, `Property.Array`, etc.) read `props-patterns.md`.
 

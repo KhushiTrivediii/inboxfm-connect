@@ -1,4 +1,4 @@
-import { ActivepiecesError, ApId, ErrorCode, isNil, Permission, ProjectId, ProjectRole } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, ApId, ErrorCode, isNil, Permission, ProjectId, ProjectRole, spreadIfDefined } from '@inboxfm-connect/core-utils'
 import { ApEdition, FlowOperationType, Principal, PrincipalType, UserPrincipal } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { system } from '../../../helper/system/system'
@@ -40,7 +40,7 @@ export const rbacService = (log: FastifyBaseLogger) => ({
                         params: {
                             message: 'Engine is not allowed to access this project',
                             projectId,
-                            engineProjectId: principal.projectId,
+                            ...spreadIfDefined('engineProjectId', principal.projectId),
                         },
                     })
                 }

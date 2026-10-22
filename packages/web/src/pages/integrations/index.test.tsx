@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import IntegrationsPage from './index'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
 import { stubApi, StubResponse, StubRoute } from '@/test/api-stub'
-import { ALL_SUMMARIES, CATEGORIES } from '@/test/fixtures/integrations'
+import { ALL_SUMMARIES, CATEGORIES, seekPage } from '@/test/fixtures/integrations'
 
 function catalogRoutes(options: {
   list?: (url: URL) => StubResponse
@@ -21,7 +21,7 @@ function catalogRoutes(options: {
     },
     {
       match: (url) => url.pathname === '/api/v1/integrations',
-      respond: (url) => (options.list ? options.list(url) : { status: 200, body: ALL_SUMMARIES }),
+      respond: (url) => (options.list ? options.list(url) : { status: 200, body: seekPage(ALL_SUMMARIES) }),
     },
   ]
 }
@@ -90,7 +90,7 @@ describe('Integrations catalog', () => {
               piece.displayName.toLowerCase().includes(query.toLowerCase()) ||
               piece.name.toLowerCase().includes(query.toLowerCase())
           )
-          return { status: 200, body: matches }
+          return { status: 200, body: seekPage(matches) }
         },
       })
     )
@@ -114,12 +114,14 @@ describe('Integrations catalog', () => {
         list: (url) => {
           const requested = url.searchParams.getAll('categories')
           if (requested.length === 0) {
-            return { status: 200, body: ALL_SUMMARIES }
+            return { status: 200, body: seekPage(ALL_SUMMARIES) }
           }
           return {
             status: 200,
-            body: ALL_SUMMARIES.filter((piece) =>
-              piece.categories.some((category) => requested.includes(category))
+            body: seekPage(
+              ALL_SUMMARIES.filter((piece) =>
+                piece.categories.some((category) => requested.includes(category))
+              )
             ),
           }
         },
@@ -180,7 +182,7 @@ describe('Integrations catalog', () => {
   }, 15000)
 
   it('shows the empty state with suggestions when search matches nothing', async () => {
-    stubApi(catalogRoutes({ list: () => ({ status: 200, body: [] }) }))
+    stubApi(catalogRoutes({ list: () => ({ status: 200, body: seekPage([]) }) }))
     const container = renderCatalog()
 
     await typeSearch(container, 'zzz-not-found')
@@ -202,7 +204,7 @@ describe('Integrations catalog', () => {
     const { calls } = stubApi(
       catalogRoutes({
         list: () =>
-          failing ? { status: 500, body: { message: 'boom' } } : { status: 200, body: ALL_SUMMARIES },
+          failing ? { status: 500, body: { message: 'boom' } } : { status: 200, body: seekPage(ALL_SUMMARIES) },
       })
     )
     const container = renderCatalog()

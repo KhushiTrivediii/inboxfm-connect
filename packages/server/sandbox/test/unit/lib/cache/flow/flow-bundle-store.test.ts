@@ -1,10 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import { isNil } from '@inboxfm-connect/core-utils'
 import { type ApLogger } from '@inboxfm-connect/server-utils'
-import { FlowActionType, FlowTriggerType, FlowVersion, FlowVersionState, LATEST_FLOW_SCHEMA_VERSION, PackageType, PieceType, WorkerToApiContract } from '@inboxfm-connect/shared'
+import { FlowActionType, FlowTriggerType, FlowVersion, FlowVersionState, LATEST_FLOW_SCHEMA_VERSION, OfficialPiecePackage, PackageType, PieceType, WorkerToApiContract } from '@inboxfm-connect/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cacheUtils } from '../../../../../src/lib/cache/cache-paths'
 import { codeCache } from '../../../../../src/lib/cache/flow/code/code-cache'
@@ -58,7 +58,7 @@ function buildFlowVersion(overrides: Partial<FlowVersion> = {}): FlowVersion {
     } as unknown as FlowVersion
 }
 
-const piece = { packageType: PackageType.REGISTRY, pieceType: PieceType.OFFICIAL, pieceName: '@inboxfm-connect/piece-http', pieceVersion: '1.0.0' }
+const piece: OfficialPiecePackage = { packageType: PackageType.REGISTRY, pieceType: PieceType.OFFICIAL, pieceName: '@inboxfm-connect/piece-http', pieceVersion: '1.0.0' }
 
 function inMemoryApiClient(): { apiClient: WorkerToApiContract, getFlowBundle: ReturnType<typeof vi.fn> } {
     let stored: Buffer | null = null
@@ -120,7 +120,9 @@ describe('flowBundleStore', () => {
 
     it('tryFetch returns null when no bundle is stored', async () => {
         const basePath = uniqueBasePath()
-        const apiClient = { async getFlowBundle() { return null } } as unknown as WorkerToApiContract
+        const apiClient = { async getFlowBundle() {
+            return null 
+        } } as unknown as WorkerToApiContract
         expect(await flowBundleStore(fakeLog, apiClient, basePath).tryFetch({ flowVersionId: 'fv1', projectId: 'p1' })).toBeNull()
     })
 
@@ -140,8 +142,12 @@ describe('flowBundleStore', () => {
         const basePath = uniqueBasePath()
         const put = vi.mocked(bundleHttp.put).mockResolvedValue(undefined)
         const apiClient = {
-            async prepareFlowBundleUpload() { return { kind: 'url', url: 'https://s3/put' } },
-            async uploadFlowBundle() { throw new Error('inline upload must not be called') },
+            async prepareFlowBundleUpload() {
+                return { kind: 'url', url: 'https://s3/put' } 
+            },
+            async uploadFlowBundle() {
+                throw new Error('inline upload must not be called') 
+            },
         } as unknown as WorkerToApiContract
         const flowVersion = buildFlowVersion()
         const codes = codeCache(cacheUtils(basePath).getGlobalCodeCachePath())
@@ -157,8 +163,12 @@ describe('flowBundleStore', () => {
         const basePath = uniqueBasePath()
         const put = vi.mocked(bundleHttp.put).mockResolvedValue(undefined)
         const apiClient = {
-            async prepareFlowBundleUpload() { return { kind: 'skip' } },
-            async uploadFlowBundle() { throw new Error('inline upload must not be called') },
+            async prepareFlowBundleUpload() {
+                return { kind: 'skip' } 
+            },
+            async uploadFlowBundle() {
+                throw new Error('inline upload must not be called') 
+            },
         } as unknown as WorkerToApiContract
         const flowVersion = buildFlowVersion()
         const codes = codeCache(cacheUtils(basePath).getGlobalCodeCachePath())

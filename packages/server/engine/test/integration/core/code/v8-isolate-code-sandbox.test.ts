@@ -76,4 +76,27 @@ describe.runIf(isIvmAvailable)('v8IsolateCodeSandbox', () => {
             await expect(runWithSource(source)).rejects.toThrow(/process/)
         })
     })
+
+    describe('runScript', () => {
+        it('evaluates a plain expression against the context', async () => {
+            const result = await v8IsolateCodeSandbox.runScript({
+                script: 'a + b',
+                scriptContext: { a: 2, b: 3 },
+                functions: {},
+            })
+            expect(result).toBe(5)
+        })
+
+        it('rejects a busy-loop script within the execution timeout instead of hanging the isolate', async () => {
+            const startedAt = Date.now()
+            await expect(v8IsolateCodeSandbox.runScript({
+                script: '(() => { while (true) {} })()',
+                scriptContext: {},
+                functions: {},
+            })).rejects.toThrow()
+            // 5s timeout (+ generous CI margin) — without the bound this test never
+            // returns and the parent process kill is the only recovery.
+            expect(Date.now() - startedAt).toBeLessThan(15_000)
+        })
+    })
 })

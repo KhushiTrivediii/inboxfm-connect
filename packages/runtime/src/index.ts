@@ -1,10 +1,12 @@
+import { PieceMetadata } from '@inboxfm-connect/pieces-framework'
 import { createSandboxRuntime } from '@inboxfm-connect/sandbox'
-import { EngineOperationType, PiecePackage, PackageType, PieceType } from '@inboxfm-connect/shared'
+import { AppConnection, EngineOperationType, PackageType, PiecePackage, PieceType } from '@inboxfm-connect/shared'
 
-export class HeadlessRuntime {
-    private sandboxRuntime: any
+export class HeadlessRuntime<TConnection extends RuntimeConnection> {
+    private sandboxRuntime: ReturnType<typeof createSandboxRuntime>
+    private executionTail: Promise<void> = Promise.resolve()
 
-    constructor(private config: RuntimeConfig) {
+    constructor(private config: RuntimeConfig<TConnection>) {
         this.sandboxRuntime = createSandboxRuntime({
             concurrency: 1,
             basePath: config.basePath,
@@ -19,6 +21,9 @@ export class HeadlessRuntime {
         }
 
         const decryptedConnection = await this.config.decryptAndRefresh({ connection })
+        if (!decryptedConnection) {
+            throw new Error(`Connection refresh failed: ${params.connectionId}`)
+        }
         const decryptedValue = decryptedConnection.value
 
         const piecePackage: PiecePackage = {
@@ -28,9 +33,9 @@ export class HeadlessRuntime {
             pieceVersion: connection.pieceVersion,
         }
 
-        const result = await this.sandboxRuntime.execute({
+        const result = await this.executeSandbox({
             workerIndex: 0,
-            log: console as any,
+            log: this.config.log,
             operationType: EngineOperationType.EXECUTE_TOOL,
             operation: {
                 projectId: params.projectId,
@@ -52,7 +57,7 @@ export class HeadlessRuntime {
                 codes: [],
                 publicApiUrl: params.publicApiUrl || 'http://localhost:3000',
                 engineToken: 'headless',
-            }
+            },
         })
 
         if (result.status !== 'OK') {
@@ -62,7 +67,7 @@ export class HeadlessRuntime {
         return result.response
     }
 
-    async connect(params: ConnectParams): Promise<unknown> {
+    async connect(params: ConnectParams<TConnection>): Promise<unknown> {
         return this.config.database.saveConnection({ connection: params })
     }
 
@@ -86,13 +91,12 @@ export class HeadlessRuntime {
             pieceVersion: params.version || 'latest',
         }
 
-        const result = await this.sandboxRuntime.execute({
+        const result = await this.executeSandbox({
             workerIndex: 0,
-            log: console as any,
+            log: this.config.log,
             operationType: EngineOperationType.EXTRACT_PIECE_METADATA,
             operation: {
-                pieceName: params.integration,
-                pieceVersion: params.version || 'latest',
+                ...piecePackage,
                 platformId: params.platformId,
                 timeoutInSeconds: 60,
             },
@@ -103,15 +107,15 @@ export class HeadlessRuntime {
                 codes: [],
                 publicApiUrl: params.publicApiUrl || 'http://localhost:3000',
                 engineToken: 'headless',
-            }
+            },
         })
 
         if (result.status !== 'OK') {
             throw new Error(result.error || `Failed to extract metadata: ${result.status}`)
         }
 
-        const metadata = result.response as any
-        return Object.values(metadata.actions || {}).map((action: any) => ({
+        const metadata = PieceMetadata.parse(result.response)
+        return Object.values(metadata.actions).map((action) => ({
             name: action.name,
             displayName: action.displayName,
             description: action.description,
@@ -126,25 +130,29 @@ export class HeadlessRuntime {
         }
         return this.config.decryptAndRefresh({ connection })
     }
+
+    private executeSandbox(params: Parameters<ReturnType<typeof createSandboxRuntime>['execute']>[0]): ReturnType<ReturnType<typeof createSandboxRuntime>['execute']> {
+        const execution = this.executionTail.then(() => this.sandboxRuntime.execute(params))
+        this.executionTail = execution.then(() => undefined, () => undefined)
+        return execution
+    }
 }
 
-export type RuntimeConfig = {
+type RuntimeConnection = Omit<AppConnection, 'value'> & { value: unknown }
+
+export type RuntimeConfig<TConnection extends RuntimeConnection = AppConnection> = {
     basePath: string
-    getSettings: () => any
+    log: Parameters<ReturnType<typeof createSandboxRuntime>['execute']>[0]['log']
+    getSettings: Parameters<typeof createSandboxRuntime>[0]['getSettings']
     database: {
-        getConnection(params: { connectionId: string }): Promise<any>
-        saveConnection(params: { connection: any }): Promise<any>
+        getConnection(params: { connectionId: string }): Promise<TConnection | null>
+        saveConnection(params: { connection: TConnection }): Promise<unknown>
         deleteConnection(params: { connectionId: string }): Promise<void>
     }
-    decryptAndRefresh(params: { connection: any }): Promise<any>
+    decryptAndRefresh(params: { connection: TConnection }): Promise<AppConnection | null>
 }
 
-export type ConnectParams = {
-    integration: string
-    value: unknown
-    displayName: string
-    pieceVersion?: string
-}
+export type ConnectParams<TConnection extends RuntimeConnection = AppConnection> = TConnection
 
 export type DisconnectParams = {
     connectionId: string

@@ -4,8 +4,10 @@ import {
     AppConnectionType,
     AppConnectionWithoutSensitiveData,
     ConnectSessionPublicInfo,
+    CreateConnectMcpTokenResponse,
     CreateConnectSessionRequest,
     CreateConnectSessionResponse,
+    ExchangeConnectSessionMcpTokenRequest,
     GetOAuth2AuthorizationUrlResponse,
     PLACEHOLDER_CONNECTION_TYPE,
     PrincipalType,
@@ -16,6 +18,7 @@ import { StatusCodes } from 'http-status-codes'
 import { z } from 'zod'
 import { appConnectionService } from '../app-connection/app-connection-service/app-connection-service'
 import { oauth2Util } from '../app-connection/app-connection-service/oauth2/oauth2-util'
+import { connectMcpService } from '../connect-mcp/connect-mcp.service'
 import { connectOAuthAppService } from '../connect-oauth-apps/connect-oauth-app.service'
 import { ProjectResourceType } from '../core/security/authorization/common'
 import { securityAccess } from '../core/security/authorization/fastify-security'
@@ -55,6 +58,17 @@ export const connectSessionPublicController: FastifyPluginAsyncZod = async (app)
         return connectSessionService.getPublicInfoOrThrow(req.params.token)
     })
 
+    app.post('/:token/mcp-token', ExchangeSessionMcpTokenRequest, async (req, res) => {
+        const session = await connectSessionService.getActiveOrThrow(req.params.token)
+        const result = await connectMcpService(req.log).issueToken({
+            projectId: session.projectId,
+            externalUserId: session.externalUserId,
+            allowedPieceNames: session.allowedPieceNames ?? undefined,
+            expiresInSeconds: req.body?.expiresInSeconds,
+        })
+        return res.status(StatusCodes.CREATED).send(result)
+    })
+
     app.post('/:token/oauth2/authorization-url', GetAuthorizationUrlRequest, async (req) => {
         const session = await connectSessionService.getActiveOrThrow(req.params.token)
         assertPieceAllowed({ allowedPieceNames: session.allowedPieceNames, pieceName: req.body.pieceName })
@@ -86,6 +100,15 @@ export const connectSessionPublicController: FastifyPluginAsyncZod = async (app)
             })
         }
 
+        // Claim the session BEFORE persisting the connection: the single-use
+        // guarantee must hold at the endpoint level too, not just the row level.
+        // Two concurrent redemptions both pass getActiveOrThrow, but the claim
+        // picks exactly one winner — and now the loser fails before its upsert
+        // can overwrite the winner's connection. Retry-ability is unaffected:
+        // the OAuth exchange completes before this endpoint is called, so
+        // claim-first only burns the token if the upsert itself fails.
+        await connectSessionService.consumeOrThrow(session.id)
+
         const baseUpsert = {
             platformId: project.platformId,
             projectIds: [session.projectId],
@@ -110,7 +133,6 @@ export const connectSessionPublicController: FastifyPluginAsyncZod = async (app)
             type: req.body.type,
             value,
         })
-        await connectSessionService.markConsumed(session.id)
 
         return res.status(StatusCodes.CREATED).send(connection)
     })
@@ -212,6 +234,23 @@ const CreateConnectionRequest = {
         body: UpsertAppConnectionRequestBody,
         response: {
             [StatusCodes.CREATED]: AppConnectionWithoutSensitiveData,
+        },
+    },
+}
+
+const ExchangeSessionMcpTokenRequest = {
+    config: {
+        security: securityAccess.public(),
+    },
+    schema: {
+        tags: ['connect-sessions'],
+        description: 'Exchange an active connect session for a delegated external-user MCP token',
+        params: z.object({
+            token: z.string(),
+        }),
+        body: ExchangeConnectSessionMcpTokenRequest.optional(),
+        response: {
+            [StatusCodes.CREATED]: CreateConnectMcpTokenResponse,
         },
     },
 }

@@ -20,7 +20,7 @@ const EXPERTISE: Record<string, PieceExpertise> = {
         general: 'object properties are dynamic and keyed by HubSpot internal API names (e.g. lifecyclestage, hs_lead_status), not the UI labels. Resolve props with auth and use the internal names.',
     },
     stripe: {
-        general: 'amounts are in the currency\'s smallest unit. The Activepieces action takes a decimal amount (e.g. 42.50) and converts to cents for you — pass dollars, not cents. payment_method ids look like pm_…; customer ids like cus_….',
+        general: 'amounts are in the currency\'s smallest unit. The Inboxfm Connect action takes a decimal amount (e.g. 42.50) and converts to cents for you — pass dollars, not cents. payment_method ids look like pm_…; customer ids like cus_….',
     },
     'google-sheets': {
         general: 'columns are addressed by LETTER (A, B, C…), not header name. Read a few rows first to map letters→meaning. The first matching sheet/spreadsheet is a dynamic dropdown — resolve with auth.',

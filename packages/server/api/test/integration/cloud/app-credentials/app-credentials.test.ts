@@ -1,8 +1,6 @@
-import { apId } from '@inboxfm-connect/core-utils'
-import { AppCredentialType, PrincipalType } from '@inboxfm-connect/shared'
+import { AppCredentialType } from '@inboxfm-connect/shared'
 import { FastifyInstance } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
-import { generateMockToken } from '../../../helpers/auth'
 import { createTestContext } from '../../../helpers/test-context'
 import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/test-setup'
 
@@ -72,19 +70,7 @@ describe('App Credentials API', () => {
                 },
             })
 
-            // GET is public, but needs projectId
-            const testToken = await generateMockToken({
-                type: PrincipalType.UNKNOWN,
-                id: apId(),
-            })
-
-            const response = await app?.inject({
-                method: 'GET',
-                url: `/api/v1/app-credentials?projectId=${ctx.project.id}`,
-                headers: {
-                    authorization: `Bearer ${testToken}`,
-                },
-            })
+            const response = await ctx.get('/v1/app-credentials', { projectId: ctx.project.id })
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -106,18 +92,7 @@ describe('App Credentials API', () => {
                 settings: { type: AppCredentialType.API_KEY },
             })
 
-            const testToken = await generateMockToken({
-                type: PrincipalType.UNKNOWN,
-                id: apId(),
-            })
-
-            const response = await app?.inject({
-                method: 'GET',
-                url: `/api/v1/app-credentials?projectId=${ctx.project.id}&appName=filter-app-a`,
-                headers: {
-                    authorization: `Bearer ${testToken}`,
-                },
-            })
+            const response = await ctx.get('/v1/app-credentials', { projectId: ctx.project.id, appName: 'filter-app-a' })
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -143,18 +118,7 @@ describe('App Credentials API', () => {
                 },
             })
 
-            const testToken = await generateMockToken({
-                type: PrincipalType.UNKNOWN,
-                id: apId(),
-            })
-
-            const response = await app?.inject({
-                method: 'GET',
-                url: `/api/v1/app-credentials?projectId=${ctx.project.id}&appName=censor-test-app`,
-                headers: {
-                    authorization: `Bearer ${testToken}`,
-                },
-            })
+            const response = await ctx.get('/v1/app-credentials', { projectId: ctx.project.id, appName: 'censor-test-app' })
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -181,4 +145,28 @@ describe('App Credentials API', () => {
             expect(response?.statusCode).toBe(StatusCodes.OK)
         })
     })
+    describe('GET /v1/app-credentials (Security gating, #358)', () => {
+        it('should reject an unauthenticated list request', async () => {
+            const ctx = await createTestContext(app!)
+
+            const response = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/app-credentials?projectId=${ctx.project.id}`,
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+
+        it('should reject a caller from another platform listing credentials they do not belong to', async () => {
+            const ctx = await createTestContext(app!)
+            const other = await createTestContext(app!)
+
+            const response = await other.get('/v1/app-credentials', {
+                projectId: ctx.project.id,
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+    })
+
 })

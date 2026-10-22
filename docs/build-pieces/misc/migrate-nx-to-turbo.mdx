@@ -35,14 +35,14 @@ Run the migration script to update all custom pieces at once:
 npx ts-node tools/scripts/migrate-custom-piece-to-turbo.ts
 ```
 
-This scans `packages/pieces/custom/` and applies all necessary changes.
+This scans `packages/integrations/custom/` and applies all necessary changes.
 
 ### Migrate a specific piece
 
 You can also pass a path to migrate a single piece:
 
 ```bash
-npx ts-node tools/scripts/migrate-custom-piece-to-turbo.ts packages/pieces/custom/my-piece
+npx ts-node tools/scripts/migrate-custom-piece-to-turbo.ts packages/integrations/custom/my-piece
 ```
 
 ### What the script does
@@ -68,4 +68,4 @@ Or use the CLI:
 npm run build-piece your-piece
 ```
 
-The build output should appear in `packages/pieces/custom/your-piece/dist/`.
+The build output should appear in `packages/integrations/custom/your-piece/dist/`.

@@ -13,9 +13,9 @@ export const OOO = createAction({
   props: {
     mock_mode: Property.Checkbox({
       displayName: 'Mock Mode',
-      description: 'Use mock data for testing',
+      description: 'Use mock data for testing (no request is sent to Assembled)',
       required: false,
-      defaultValue: true,
+      defaultValue: false,
     }),
     user_id: Property.ShortText({
       displayName: 'User ID',

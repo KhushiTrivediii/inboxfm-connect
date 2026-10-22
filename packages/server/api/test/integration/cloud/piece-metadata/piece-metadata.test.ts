@@ -191,7 +191,7 @@ describe('Piece Metadata API', () => {
             // The endpoint merges the shipped local catalog with the DB (fetchLatestPieces),
             // so the seeded mocks are listed alongside the ~700 real pieces rather than alone —
             // assert membership/exclusion and relative order, not an exact result count.
-            const ids = responseBody.map((piece: { id: string }) => piece.id)
+            const ids = responseBody.data.map((piece: { id: string }) => piece.id)
             expect(ids).toContain(mockPieceMetadataA.id)
             expect(ids).toContain(mockPieceMetadataB.id)
             expect(ids).toContain(mockPieceMetadataD.id)
@@ -277,13 +277,13 @@ describe('Piece Metadata API', () => {
             // seeded piece named 'a' resolves to the expected version/type, not an exact list length.
             const bodyA = responseA?.json()
             expect(responseA?.statusCode).toBe(StatusCodes.OK)
-            const pieceAInBodyA = bodyA?.find((piece: { name: string }) => piece.name === 'a')
+            const pieceAInBodyA = bodyA?.data.find((piece: { name: string }) => piece.name === 'a')
             expect(pieceAInBodyA?.version).toBe('2.0.0')
             expect(pieceAInBodyA?.pieceType).toBe(PieceType.CUSTOM)
 
             const bodyB = responseB?.json()
             expect(responseB?.statusCode).toBe(StatusCodes.OK)
-            const pieceAInBodyB = bodyB?.find((piece: { name: string }) => piece.name === 'a')
+            const pieceAInBodyB = bodyB?.data.find((piece: { name: string }) => piece.name === 'a')
             expect(pieceAInBodyB?.version).toBe('1.0.0')
             expect(pieceAInBodyB?.pieceType).toBe(PieceType.OFFICIAL)
         })
@@ -405,7 +405,7 @@ describe('Piece Metadata API', () => {
             // The endpoint merges the shipped local catalog with the DB (fetchLatestPieces),
             // so the seeded piece is listed alongside the ~700 real pieces — find it by name
             // and assert only the latest version won the dedupe, not an exact list length.
-            const piecesNamedA = responseBody.filter((piece: { name: string }) => piece.name === 'a')
+            const piecesNamedA = responseBody.data.filter((piece: { name: string }) => piece.name === 'a')
             expect(piecesNamedA).toHaveLength(1)
             expect(piecesNamedA[0].id).toBe(mockPieceMetadataB.id)
         })
@@ -448,7 +448,7 @@ describe('Piece Metadata API', () => {
             // The endpoint merges the shipped local catalog with the DB (fetchLatestPieces),
             // so the ~700 real pieces interleave with the seeded mocks — assert the seeded
             // mocks' relative order survives the sort, not an exact list length.
-            const ids = responseBody.map((piece: { id: string }) => piece.id)
+            const ids = responseBody.data.map((piece: { id: string }) => piece.id)
             const mockIds = [mockPieceMetadataA.id, mockPieceMetadataB.id]
             expect(ids.filter((id: string) => mockIds.includes(id))).toEqual(mockIds)
         })
@@ -512,8 +512,8 @@ describe('Piece Metadata API', () => {
             const responseBody = response?.json()
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
-            expect(responseBody).toHaveLength(1)
-            expect(responseBody?.[0].id).toBe(mockPieceMetadataA.id)
+            expect(responseBody.data).toHaveLength(1)
+            expect(responseBody?.data?.[0].id).toBe(mockPieceMetadataA.id)
         })
 
         it('Allows filtered pieces if platform filter is set to "ALLOWED"', async () => {
@@ -573,8 +573,8 @@ describe('Piece Metadata API', () => {
             const responseBody = response?.json()
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
-            expect(responseBody).toHaveLength(1)
-            expect(responseBody?.[0].id).toBe(mockPieceMetadataA.id)
+            expect(responseBody.data).toHaveLength(1)
+            expect(responseBody?.data?.[0].id).toBe(mockPieceMetadataA.id)
         })
 
         it('Blocks filtered pieces if platform filter is set to "BLOCKED"', async () => {
@@ -637,7 +637,7 @@ describe('Piece Metadata API', () => {
             // BLOCKED with a single blocked name only removes that one piece — the ~700 real
             // pieces in the shipped catalog still pass through — so assert the blocked/allowed
             // mocks specifically, not an exact list length.
-            const ids = responseBody.map((piece: { id: string }) => piece.id)
+            const ids = responseBody.data.map((piece: { id: string }) => piece.id)
             expect(ids).not.toContain(mockPieceMetadataA.id)
             expect(ids).toContain(mockPieceMetadataB.id)
         })

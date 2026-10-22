@@ -1,4 +1,4 @@
-import { httpClient, HttpMethod } from '@inboxfm-connect/pieces-common'
+import { safeHttp } from '@inboxfm-connect/server-utils'
 import { AIProviderModel, AIProviderModelType, AzureProviderAuthConfig, AzureProviderConfig, DEFAULT_AZURE_API_VERSION } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { AIProviderStrategy } from './ai-provider'
@@ -17,16 +17,18 @@ export const azureProvider: AIProviderStrategy<AzureProviderAuthConfig, AzurePro
             return []
         }
 
-        const res = await httpClient.sendRequest<{ data: AzureModel[] }>({
-            url: `${endpoint}/openai/deployments?api-version=${encodeURIComponent(apiVersion)}`,
-            method: HttpMethod.GET,
-            headers: {
-                'api-key': apiKey,
-                'Content-Type': 'application/json',
+        const client = safeHttp.createAxios()
+        const res = await client.get<{ data: AzureModel[] }>(
+            `${endpoint}/openai/deployments?api-version=${encodeURIComponent(apiVersion)}`,
+            {
+                headers: {
+                    'api-key': apiKey,
+                    'Content-Type': 'application/json',
+                },
             },
-        })
+        )
 
-        const { data } = res.body
+        const { data } = res.data
 
         return data.map((deployment: AzureModel) => ({
             id: deployment.name,

@@ -1,6 +1,8 @@
 import { ActivepiecesError, apId, ErrorCode, isNil, SeekPage } from '@inboxfm-connect/core-utils'
 import { Execution, ExecutionEventType, ExecutionStatus, executionUtils, TokenUsage } from '@inboxfm-connect/shared'
 import { repoFactory } from '../core/db/repo-factory'
+import { buildPaginator } from '../helper/pagination/build-paginator'
+import { paginationHelper } from '../helper/pagination/pagination-utils'
 import { ExecutionEntity, ExecutionSchema } from './execution-entity'
 import { executionEventService } from './execution-event.service'
 
@@ -145,11 +147,24 @@ const executionService = {
         projectId,
         status,
         limit = 10,
+        cursor,
     }: {
         projectId: string
         status?: ExecutionStatus
         limit?: number
+        cursor?: string
     }): Promise<SeekPage<Execution>> {
+        const decodedCursor = paginationHelper.decodeCursor(cursor)
+        const paginator = buildPaginator({
+            entity: ExecutionEntity,
+            query: {
+                limit,
+                order: 'DESC',
+                afterCursor: decodedCursor.nextCursor,
+                beforeCursor: decodedCursor.previousCursor,
+            },
+        })
+
         const query = executionRepo()
             .createQueryBuilder('execution')
             .where('execution.projectId = :projectId', { projectId })
@@ -158,14 +173,8 @@ const executionService = {
             query.andWhere('execution.status = :status', { status })
         }
 
-        query.orderBy('execution.created', 'DESC').take(limit)
-
-        const items = await query.getMany()
-        return {
-            data: items,
-            next: null,
-            previous: null,
-        }
+        const { data, cursor: cursorResult } = await paginator.paginate(query)
+        return paginationHelper.createPage<Execution>(data, cursorResult)
     },
 }
 

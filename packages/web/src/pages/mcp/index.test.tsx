@@ -1,4 +1,4 @@
-﻿import { act } from 'react'
+import { act } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,7 +9,7 @@ import {
   mcpRoutes,
   mcpServer,
 } from '@/test/fixtures/mcp'
-import { ALL_SUMMARIES } from '@/test/fixtures/integrations'
+import { ALL_SUMMARIES, seekPage } from '@/test/fixtures/integrations'
 import { createTestQueryClient, mount, waitFor } from '@/test/test-utils'
 import { Toaster } from '@/components/ui/sonner'
 import { apiClient } from '@/lib/api/client'
@@ -19,7 +19,7 @@ const GENERATED_TOKEN = 'mcp_generated_token_abc123'
 function catalogRoute(): StubRoute {
   return {
     match: (url) => url.pathname === '/api/v1/integrations',
-    respond: () => ({ status: 200, body: ALL_SUMMARIES }),
+    respond: () => ({ status: 200, body: seekPage(ALL_SUMMARIES) }),
   }
 }
 

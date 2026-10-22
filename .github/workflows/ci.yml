@@ -1,160 +1,110 @@
 name: CI
+
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [dev, main]
+  merge_group:
+  workflow_dispatch:
 
 permissions:
-  actions: read
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CI: 'true'
+  TURBO_TELEMETRY_DISABLED: '1'
+  # Redis 8's bundled modules require Rust; these tests use plain Redis.
+  REDISMS_VERSION: '7.4.0'
+  CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/dev' }}
 
 jobs:
-  main:
+  policy:
+    name: Repository policy
     runs-on: ubuntu-latest
-    if: github.repository == 'Mihir-Rabari/inboxfm-connect'
-    env:
-      # redis-memory-server's default `version: stable` postinstall pulls Redis
-      # 8.x source, which now bundles RediSearch/RedisTimeSeries as Rust-based
-      # in-tree modules that fail to compile on this runner. Nothing here uses
-      # Redis modules (plain ioredis client only, see memory-redis.ts), so pin
-      # to a pre-module-merge release to skip that broken build path entirely.
-      REDISMS_VERSION: '7.4.0'
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Check PR destination
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
+          PR_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$PR_BASE" == dev ]]; then exit 0; fi
+          if [[ "$PR_BASE" == main && "$PR_HEAD" == dev && "$PR_REPOSITORY" == "$GITHUB_REPOSITORY" ]]; then exit 0; fi
+          echo '::error::Contributions must target dev. Only the repository dev branch may be promoted to main.'
+          exit 1
+      - name: Validate workflow syntax
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" -w /repo rhysd/actionlint:1.7.12 -color -shellcheck=
+      - uses: ./.github/actions/setup-ci
+      - name: Check licensing boundaries, notices and N+1 queries
+        run: |
+          node --test tools/ci/*.test.mjs
+          npm run test-tools
+          node tools/ci/check-license-boundaries.mjs
+          node tools/ci/check-n-plus-one.mjs
+      - name: Verify benchmark regression gate
+        run: |
+          npm run test-bench-gate
+          node benchmark/gate/cli.mjs selftest
 
-      - uses: actions/setup-node@v6
+  checks:
+    name: Checks (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [quality, unit, engine-integration, ce, ee, cloud, migrations, integrations]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
-
-      - uses: oven-sh/setup-bun@v2
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Run checks
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -o pipefail
+          node tools/ci/run-check.mjs "$SUITE" 2>&1 | tee ci.log
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          bun-version: latest
+          name: ${{ matrix.suite }}-diagnostics
+          path: |
+            ci.log
+            packages/core/shared/coverage
+            packages/core/execution/coverage
+            packages/engine/coverage
+            packages/connect-sdk/coverage
+            packages/web/coverage
+            packages/server/api/coverage
+            packages/server/api/junit.xml
+          retention-days: 7
+          if-no-files-found: warn
 
-      - run: bun install
-
-      # Best-effort turbo cache: this fork has no TURBO_CACHE_S3_* secrets, so
-      # skip the cache instead of failing CI on missing credentials. `secrets`
-      # cannot be referenced directly in `if:` (GitHub Actions rejects it as an
-      # unrecognized named-value there), so resolve it into a step output first.
-      - name: Check turbo cache credentials
-        id: turbo-cache-check
-        run: echo "configured=${{ secrets.TURBO_CACHE_S3_BUCKET != '' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Turbo Cache
-        if: steps.turbo-cache-check.outputs.configured == 'true'
-        uses: rharkor/caching-for-turbo@v2.4.2
-        with:
-          provider: s3
-          s3-bucket: ${{ secrets.TURBO_CACHE_S3_BUCKET }}
-          s3-region: auto
-          s3-endpoint: ${{ secrets.TURBO_CACHE_S3_ENDPOINT }}
-          s3-access-key-id: ${{ secrets.TURBO_CACHE_S3_ACCESS_KEY_ID }}
-          s3-secret-access-key: ${{ secrets.TURBO_CACHE_S3_SECRET_ACCESS_KEY }}
-          max-age: 3w
-          max-size: 20gb
-
-      - name: Get changed files
-        id: changed-files
-        run: echo "files=$(git diff --name-only HEAD origin/main | tr '\n' ' ')" >> $GITHUB_OUTPUT
-
-      - name: Check if framework or common pieces are changed
-        id: check-framework-common
-        run: |
-          CHANGED_FILES="${{ steps.changed-files.outputs.files }}"
-          if echo "$CHANGED_FILES" | grep -q "packages/integrations/framework\|packages/integrations/common"; then
-            echo "framework_or_common_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "framework_or_common_changed=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Extract pieces package names from changed files
-        id: extract-pieces
-        run: |
-          PIECES=$(echo "${{ steps.changed-files.outputs.files }}" | grep -oE "packages/integrations/(community|core)/[^/]+" | awk -F'/' '{print $NF}' | sort -u | tr '\n' ',' | sed 's/,$//')
-          if [ -n "$PIECES" ]; then
-            FILTERS=$(echo "$PIECES" | tr ',' '\n' | sed 's/.*/{&}/' | tr '\n' ',' | sed 's/,$//')
-            echo "pieces_filters=$FILTERS" >> $GITHUB_OUTPUT
-          else
-            echo "pieces_filters=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Lint core projects
-        run: npm run lint-core
-
-      - name: Typecheck and verify Connect SDK generated types
-        run: |
-          npx turbo run typecheck --filter=@inboxfm-connect/sdk
-          npx turbo run generate:check --filter=@inboxfm-connect/sdk
-
-      - name: Verify Connect SDK tarball in a clean consumer
-        run: npm run pack:verify --workspace=@inboxfm-connect/sdk
-
-      - name: Lint all pieces projects
-        if: steps.check-framework-common.outputs.framework_or_common_changed == 'true'
-        run: npm run lint-pieces
-
-      - name: Build core projects
-        run: npx turbo run build --filter=@inboxfm-connect/web --filter=api --filter=@inboxfm-connect/engine --filter=@inboxfm-connect/piece-http --filter=@inboxfm-connect/piece-data-mapper --filter=@inboxfm-connect/piece-approval --filter=@inboxfm-connect/piece-webhook --filter=@inboxfm-connect/piece-delay
-
-      - name: Build changed pieces projects
-        if: steps.extract-pieces.outputs.pieces_filters != '' && steps.check-framework-common.outputs.framework_or_common_changed == 'false'
-        run: |
-          IFS=',' read -ra PIECES <<< "${{ steps.extract-pieces.outputs.pieces_filters }}"
-          FILTER_ARGS=""
-          for piece in "${PIECES[@]}"; do
-            piece_name=$(echo "$piece" | tr -d '{}')
-            if [ -f "packages/integrations/community/${piece_name}/package.json" ] || [ -f "packages/integrations/core/${piece_name}/package.json" ]; then
-              FILTER_ARGS="$FILTER_ARGS --filter=@inboxfm-connect/piece-${piece_name}"
-            fi
-          done
-          if [ -n "$FILTER_ARGS" ]; then
-            npx turbo run build $FILTER_ARGS
-          fi
-
-      - name: Build all pieces projects
-        if: steps.check-framework-common.outputs.framework_or_common_changed == 'true'
-        run: npx turbo run build --filter='@inboxfm-connect/piece-*'
-
-      - name: Run all tests and migration checks in parallel
-        run: |
-          set -euo pipefail
-          pids=()
-
-          npx turbo run test --filter=@inboxfm-connect/engine --filter=@inboxfm-connect/shared --filter=@inboxfm-connect/sdk &
-          pids+=($!)
-
-          npx turbo run test-unit test-ce test-ee test-cloud check-migrations --filter=api &
-          pids+=($!)
-
-          npx tsx tools/scripts/check-migration-rollback.ts &
-          pids+=($!)
-
-          status=0
-          for pid in "${pids[@]}"; do
-            if ! wait "$pid"; then
-              status=1
-            fi
-          done
-          exit $status
-
-  # Runs ONLY the tool-search integration tests against a real PostgreSQL + pgvector
-  # service container. The default `main` job above runs these on PGLITE, which papers
-  # over node-postgres-specific driver behaviour (e.g. TypeORM `.query()` returning
-  # `[rows, count]` instead of a plain rows array). This job exists to catch that class
-  # of bug. It is intentionally scoped and additive — it does NOT change how the main
-  # suite runs.
   tool-search-postgres:
     name: tool-search (postgres)
     runs-on: ubuntu-latest
-    if: github.repository == 'Mihir-Rabari/inboxfm-connect'
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: activepieces
+          POSTGRES_DB: inboxfm_test
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -163,69 +113,161 @@ jobs:
         ports:
           - 5432:5432
     env:
-      # dotenv (vitest.setup.ts) loads .env.tests WITHOUT overriding values already
-      # present in the environment, so these job-level vars win over the PGLITE defaults.
+      AP_EDITION: ce
       AP_DB_TYPE: POSTGRES
       AP_POSTGRES_HOST: localhost
-      AP_POSTGRES_PORT: "5432"
-      AP_POSTGRES_DATABASE: activepieces
+      AP_POSTGRES_PORT: '5432'
+      AP_POSTGRES_DATABASE: inboxfm_test
       AP_POSTGRES_USERNAME: postgres
       AP_POSTGRES_PASSWORD: postgres
-      AP_POSTGRES_USE_SSL: "false"
-      # See the `main` job above for why this is pinned.
-      REDISMS_VERSION: '7.4.0'
+      AP_POSTGRES_USE_SSL: 'false'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - run: bun install
-
-      # Best-effort turbo cache: this fork has no TURBO_CACHE_S3_* secrets, so
-      # skip the cache instead of failing CI on missing credentials. `secrets`
-      # cannot be referenced directly in `if:` (GitHub Actions rejects it as an
-      # unrecognized named-value there), so resolve it into a step output first.
-      - name: Check turbo cache credentials
-        id: turbo-cache-check
-        run: echo "configured=${{ secrets.TURBO_CACHE_S3_BUCKET != '' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Turbo Cache
-        if: steps.turbo-cache-check.outputs.configured == 'true'
-        uses: rharkor/caching-for-turbo@v2.4.2
-        with:
-          provider: s3
-          s3-bucket: ${{ secrets.TURBO_CACHE_S3_BUCKET }}
-          s3-region: auto
-          s3-endpoint: ${{ secrets.TURBO_CACHE_S3_ENDPOINT }}
-          s3-access-key-id: ${{ secrets.TURBO_CACHE_S3_ACCESS_KEY_ID }}
-          s3-secret-access-key: ${{ secrets.TURBO_CACHE_S3_SECRET_ACCESS_KEY }}
-          max-age: 3w
-          max-size: 20gb
-
-      - name: Enable pgvector extension
-        # The pgvector image ships the extension binary but does not auto-create it in the
-        # database. The tool_search_index migration skips table creation when `vector` is
-        # absent, and the DB-only test never boots the server path that would CREATE it,
-        # so create it explicitly before migrations run.
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Enable pgvector for integration tests
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -d inboxfm_test -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+      - name: Build API
+        run: bun x turbo run build --filter=api
+      - name: Run PostgreSQL driver tests
+        working-directory: packages/server/api
         run: |
-          PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d activepieces \
-            -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+          set -o pipefail
+          bun x vitest run test/integration/ce/tool-search test/integration/ce/database --bail 1 --passWithNoTests=false 2>&1 | tee postgres-tests.log
+      - name: Upload PostgreSQL diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: postgres-diagnostics
+          path: packages/server/api/postgres-tests.log
+          retention-days: 7
+          if-no-files-found: warn
 
-      - name: Build api
-        run: npx turbo run build --filter=api
+  browser:
+    name: Browser journey (Chromium, Firefox, WebKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install browser engines and system dependencies
+        run: bun x playwright install --with-deps chromium firefox webkit
+      - name: Validate browser test sources
+        run: |
+          bun x eslint packages/tests-e2e --ext .ts
+          bun x tsc -p packages/tests-e2e/tsconfig.json
+      - name: Run real browser journey against the local platform
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee browser-tests.log
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-diagnostics
+          path: |
+            browser-tests.log
+            packages/tests-e2e/playwright-report
+            packages/tests-e2e/test-results
+          retention-days: 7
+          if-no-files-found: warn
 
-      - name: Run tool-search integration tests on Postgres
-        working-directory: packages/server/api
-        run: npx vitest run test/integration/ce/tool-search --bail 1 --passWithNoTests=false
+  gateway:
+    name: Inbound gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate shipped nginx configuration
+        run: |
+          # `nginx -t` resolves upstream server names, so run it on a throwaway
+          # network that answers for the `app` hostname.
+          docker network create gateway-config-check
+          docker run -d --name app --network gateway-config-check nginx:1.30.5-alpine sleep 600
+          trap 'docker rm -f app >/dev/null 2>&1 || true; docker network rm gateway-config-check >/dev/null 2>&1 || true' EXIT
+          docker run --rm --network gateway-config-check \
+            -v "$GITHUB_WORKSPACE/infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:1.30.5-alpine nginx -t
+      - name: Validate compose topology
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml config -q
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f app >/dev/null 2>&1 || true
+          docker network rm gateway-config-check >/dev/null 2>&1 || true
 
-      - name: Run Postgres-only integration tests
-        working-directory: packages/server/api
-        run: npx vitest run test/integration/ce/database --bail 1 --passWithNoTests=false
+  flowscript:
+    name: FlowScript (lifecycle & tenant isolation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: flowscript_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      FLOWSCRIPT_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/flowscript_test
+      FLOWSCRIPT_GATEWAY_SECRET: ci-test-gateway-secret-32-chars-long!!
+      FLOWSCRIPT_AUTH_SECRET: ci-test-gateway-secret-32-chars-long!!
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Build FlowScript
+        run: bun run --cwd services/flowscript build
+      - name: Lint FlowScript
+        run: bun run --cwd services/flowscript lint
+      - name: Typecheck FlowScript
+        run: bun run --cwd services/flowscript typecheck
+      - name: FlowScript Unit Tests
+        run: |
+          set -o pipefail
+          bun run --cwd services/flowscript test-unit 2>&1 | tee flowscript-unit.log
+      - name: Validate compose topology
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml config -q
+      - name: Postgres-backed E2E lifecycle and tenant isolation tests
+        run: |
+          set -o pipefail
+          bun run --cwd services/flowscript test-integration 2>&1 | tee flowscript-e2e.log
+      - name: Upload FlowScript diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flowscript-diagnostics
+          path: |
+            flowscript-unit.log
+            flowscript-e2e.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  main:
+    name: main
+    if: always()
+    needs: [policy, checks, tool-search-postgres, browser, gateway, flowscript]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every CI job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e 'const jobs = JSON.parse(process.env.RESULTS); const failed = Object.entries(jobs).filter(([, job]) => job.result !== "success"); if (failed.length) { console.error(failed.map(([name, job]) => name + ": " + job.result).join("\n")); process.exit(1); } console.log("All CI checks passed.");'

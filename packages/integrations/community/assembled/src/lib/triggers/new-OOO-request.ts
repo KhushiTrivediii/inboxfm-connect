@@ -9,7 +9,7 @@ export const newTimeOffRequest = createTrigger({
   displayName: 'New OOO Request',
   description: 'Triggers when a new OOO request is created.',
   aiMetadata: {
-    description: 'Fires when a new time-off (out-of-office) request is created in Assembled, polling for time-off requests updated since the last check. Use to react to newly submitted OOO requests, for example to route them for approval.',
+    description: 'Fires when a new time-off (out-of-office) request is created in Assembled, polling for time-off requests created since the last check. Use to react to newly submitted OOO requests, for example to route them for approval.',
   },
   type: TriggerStrategy.POLLING,
   props: {},
@@ -30,12 +30,16 @@ export const newTimeOffRequest = createTrigger({
     // Cleanup if needed
   },
   async run(context) {
-    const lastCheck = await context.store.get('lastCheck') || Math.floor(Date.now() / 1000) - 86400; 
-    
+    const lastCheck =
+      (await context.store.get<number>('lastCheck')) ||
+      Math.floor(Date.now() / 1000) - 86400;
+
+    // GET /v0/time_off/requests filters by request creation time through the
+    // required created_since Unix-seconds parameter (docs.assembled.com).
     const response = await assembledCommon.makeRequest(
       context.auth.secret_text,
       HttpMethod.GET,
-      `/time_off/requests?updated_since=${lastCheck}&limit=100`
+      `/time_off/requests?created_since=${lastCheck}&limit=100`
     );
     
     // Handle the documented response structure

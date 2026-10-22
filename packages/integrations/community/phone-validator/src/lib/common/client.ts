@@ -9,14 +9,19 @@ export class PhoneValidatorClient {
     this.apiKey = apiKey;
   }
 
-  async validatePhone(phone: string, type: 'basic' | 'fake' = 'basic') {
+  async validatePhone(
+    phone: string,
+    type: 'basic' | 'fake' = 'basic',
+    region: '1' | '2' | '3' = '1'
+  ) {
     const response = await httpClient.sendRequest({
       method: HttpMethod.GET,
-      url: `${BASE_URL}/api/v3/phonesearch`,
+      url: `${BASE_URL}/api/v4/phonesearch`,
       queryParams: {
         apikey: this.apiKey,
         phone,
-        type
+        type,
+        region,
       },
     });
 

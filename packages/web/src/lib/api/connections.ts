@@ -6,6 +6,7 @@ import {
   OAuth2AuthorizationUrlRequest,
   OAuth2AuthorizationUrlResponse,
   SeekPage,
+  TestConnectionResult,
 } from './types'
 
 /**
@@ -47,6 +48,11 @@ const connectionsApi = {
 
   remove({ id }: { id: string }): Promise<void> {
     return apiClient.delete<void>(`${CONNECTIONS_PATH}/${encodeURIComponent(id)}`)
+  },
+
+  /** Health check: decrypt + refresh, returns pass/fail and updates row status. */
+  test({ id }: { id: string }): Promise<TestConnectionResult> {
+    return apiClient.post<TestConnectionResult>(`${CONNECTIONS_PATH}/${encodeURIComponent(id)}/test`, {})
   },
 
   oauth2AuthorizationUrl(request: OAuth2AuthorizationUrlRequest): Promise<OAuth2AuthorizationUrlResponse> {

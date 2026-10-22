@@ -1,0 +1,12 @@
+{
+  "extends": ["../server/api/.eslintrc.json"],
+  "ignorePatterns": ["!**/*"],
+  "overrides": [
+    {
+      "files": ["*.ts", "*.tsx"],
+      "parserOptions": {
+        "project": ["tsconfig.*?.json"]
+      }
+    }
+  ]
+}

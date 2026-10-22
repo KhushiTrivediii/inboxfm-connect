@@ -12,19 +12,22 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: depot-ubuntu-24.04
+          - runner: ubuntu-24.04
             arch: amd64
-          - runner: depot-ubuntu-24.04-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     env:
       AP_EXECUTION_MODE: SANDBOX_CODE_ONLY
-      AP_WORKER_CONCURRENCY: 1
+      # /v1/execute runs piece actions in an engine child of the APP process. 256 MB leaves
+      # ordinary executes plenty of headroom while keeping the memory-limit gate's ~450 MB
+      # output well above the limit (and under V8's max string length).
+      AP_SANDBOX_MEMORY_LIMIT: '262144'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build Docker image
         run: docker build -t activepieces-benchmark:local .
@@ -38,142 +41,44 @@ jobs:
           sleep 5
           docker compose -f benchmark/docker-compose.yml ps
 
-      - name: Setup flow
-        id: setup
+      - name: Provision project, connection, and API key
         run: |
-          chmod +x benchmark/setup.sh
-          FLOW_ID=$(benchmark/setup.sh)
-          echo "flow_id=$FLOW_ID" >> "$GITHUB_OUTPUT"
-          echo "Flow ID: $FLOW_ID"
+          benchmark/setup.sh > "$RUNNER_TEMP/bench.env"
+          echo "::add-mask::$(grep '^BENCH_API_KEY=' "$RUNNER_TEMP/bench.env" | cut -d= -f2-)"
+          cat "$RUNNER_TEMP/bench.env" >> "$GITHUB_ENV"
 
       - name: Run smoke test
-        run: |
-          chmod +x smoke-test/verify.sh
-          smoke-test/verify.sh "${{ steps.setup.outputs.flow_id }}"
+        run: smoke-test/verify.sh
 
       - name: Run memory stability test
-        run: |
-          chmod +x smoke-test/verify-memory.sh
-          smoke-test/verify-memory.sh "${{ steps.setup.outputs.flow_id }}"
+        run: smoke-test/verify-memory.sh
 
-      - name: Run delay flow smoke test
-        run: |
-          chmod +x smoke-test/verify-delay.sh
-          smoke-test/verify-delay.sh
-
-      # NOTE: The SANDBOX_PROCESS filesystem-isolation gate runs LOCAL only.
-      # The sandbox hides host paths (e.g. /usr/src/app) with mount namespaces, which need
-      # privileged container capabilities that GitHub Actions runners don't grant — so the probe
-      # can't exercise isolation here (it returns no data and the gate fails spuriously). Run it
-      # locally with `benchmark/probe-fs.js` + `smoke-test/verify-isolation.sh` (both kept in repo).
-
-      # Memory-limit detection gate (same SANDBOX_CODE_ONLY stack): the OOM input expression blows
-      # the ENGINE heap via the isolate->engine result copy, and AP_WORKER_CONCURRENCY=1 (job env)
-      # gives that single sandbox the full 1G worker container. Every run must end
-      # MEMORY_LIMIT_EXCEEDED — this pins the detection path for production code-only engine OOMs.
-      - name: Setup OOM flow
-        id: setup-oom
-        run: |
-          FLOW_ID=$(CODE_INPUT_SUM="$(cat benchmark/oom-expression.txt)" benchmark/setup.sh)
-          echo "flow_id=$FLOW_ID" >> "$GITHUB_OUTPUT"
-          echo "Flow ID: $FLOW_ID"
-
+      # Memory-limit detection gate: a Text Helper execute whose output blows the engine heap
+      # must come back as a clean SANDBOX_MEMORY_ISSUE error, and the app must keep serving.
       - name: Run memory-limit smoke test
-        run: |
-          chmod +x smoke-test/verify-memory-limit.sh
-          smoke-test/verify-memory-limit.sh "${{ steps.setup-oom.outputs.flow_id }}"
+        run: smoke-test/verify-memory-limit.sh
 
-      - name: Restart stack in S3 mode (MinIO, no signed URLs)
-        run: |
-          docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml down -v
-          AP_EXECUTION_MODE=SANDBOX_CODE_ONLY \
-          AP_FILE_STORAGE_LOCATION=S3 \
-          AP_S3_BUCKET=activepieces \
-          AP_S3_ACCESS_KEY_ID=minioadmin \
-          AP_S3_SECRET_ACCESS_KEY=minioadmin \
-          AP_S3_ENDPOINT=http://minio:9000 \
-          AP_S3_REGION=us-east-1 \
-          AP_S3_USE_SIGNED_URLS=false \
-          APP_REPLICAS=1 \
-          WORKER_REPLICAS=1 \
-            docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml up -d
-          echo "Waiting for containers to start..."
-          sleep 5
-          docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml ps
+      # Not gated here:
+      # - Filesystem isolation (SANDBOX_PROCESS) and pause/resume (delay piece): /v1/execute
+      #   runs only registered piece actions — no user code steps to probe the sandbox with,
+      #   and no waitpoints to resume.
+      # - S3 file storage: only flow bundles and engine-written run/step files go to S3, and
+      #   the headless API writes neither.
+      # - Throughput: covered by the baseline-backed gate in benchmark/gate (benchmark.yml),
+      #   since shared runners are too noisy for a fixed req/s floor.
 
-      - name: Setup S3 flow (no signed URLs)
-        id: setup-s3
-        run: |
-          chmod +x benchmark/setup.sh
-          FLOW_ID=$(benchmark/setup.sh)
-          echo "flow_id=$FLOW_ID" >> "$GITHUB_OUTPUT"
-          echo "Flow ID: $FLOW_ID"
-
-      - name: Run S3 smoke test (no signed URLs)
-        run: |
-          chmod +x smoke-test/verify.sh smoke-test/verify-s3.sh
-          smoke-test/verify.sh "${{ steps.setup-s3.outputs.flow_id }}"
-          smoke-test/verify-s3.sh "${{ steps.setup-s3.outputs.flow_id }}"
-
-      - name: Restart stack in S3 mode (MinIO, signed URLs)
-        run: |
-          docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml down -v
-          AP_EXECUTION_MODE=SANDBOX_CODE_ONLY \
-          AP_FILE_STORAGE_LOCATION=S3 \
-          AP_S3_BUCKET=activepieces \
-          AP_S3_ACCESS_KEY_ID=minioadmin \
-          AP_S3_SECRET_ACCESS_KEY=minioadmin \
-          AP_S3_ENDPOINT=http://minio:9000 \
-          AP_S3_REGION=us-east-1 \
-          AP_S3_USE_SIGNED_URLS=true \
-          APP_REPLICAS=1 \
-          WORKER_REPLICAS=1 \
-            docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml up -d
-          echo "Waiting for containers to start..."
-          sleep 5
-          docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml ps
-
-      - name: Setup S3 flow (signed URLs)
-        id: setup-s3-signed
-        run: |
-          chmod +x benchmark/setup.sh
-          FLOW_ID=$(benchmark/setup.sh)
-          echo "flow_id=$FLOW_ID" >> "$GITHUB_OUTPUT"
-          echo "Flow ID: $FLOW_ID"
-
-      - name: Run S3 smoke test (signed URLs)
-        run: |
-          chmod +x smoke-test/verify.sh smoke-test/verify-s3.sh
-          smoke-test/verify.sh "${{ steps.setup-s3-signed.outputs.flow_id }}"
-          smoke-test/verify-s3.sh "${{ steps.setup-s3-signed.outputs.flow_id }}"
-
-      # NOTE: The perf-regression gate runs LOCAL / GKE only, not in this CI preflight.
-      # GitHub Actions shared runners deliver ~32 req/s here (worker CPU only ~65% — the runner is
-      # the bottleneck, not our code), permanently below the 40 req/s threshold, so it would fail
-      # every release. It is not measuring a code regression. Run it on controlled hardware:
-      #   docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.perf.yml up -d
-      #   benchmark/setup.sh && smoke-test/verify-perf.sh <flow-id>
-      # (both verify-perf.sh and docker-compose.perf.yml are kept in the repo for that.)
-
-      # All overlays are listed so logs + teardown resolve regardless of which stack
-      # (S3/minio or perf) was last brought up in this job. Same compose project, so
-      # `logs`/`down -v` target every container/volume the job created.
       - name: Show app logs on failure
         if: failure()
-        run: docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml -f benchmark/docker-compose.perf.yml logs --tail=200 app
+        run: docker compose -f benchmark/docker-compose.yml logs --tail=200 app
 
       - name: Show worker logs on failure
         if: failure()
-        run: docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml -f benchmark/docker-compose.perf.yml logs --tail=200 worker
+        run: docker compose -f benchmark/docker-compose.yml logs --tail=200 worker
 
       - name: Show nginx logs on failure
         if: failure()
-        run: docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml -f benchmark/docker-compose.perf.yml logs --tail=200 nginx
-
-      - name: Show minio logs on failure
-        if: failure()
-        run: docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml -f benchmark/docker-compose.perf.yml logs --tail=200 minio minio-init || true
+        run: docker compose -f benchmark/docker-compose.yml logs --tail=200 nginx
 
       - name: Teardown
         if: always()
-        run: docker compose -f benchmark/docker-compose.yml -f benchmark/docker-compose.minio.yml -f benchmark/docker-compose.perf.yml down -v
+        run: docker compose -f benchmark/docker-compose.yml down -v

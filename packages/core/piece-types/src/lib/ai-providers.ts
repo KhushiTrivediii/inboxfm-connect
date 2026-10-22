@@ -1,4 +1,4 @@
-import { AIProviderName } from '@inboxfm-connect/core-utils'
+import { AIProviderName, formErrors, outboundUrlPolicy } from '@inboxfm-connect/core-utils'
 import * as z from 'zod/mini'
 
 export enum AIProviderModelType {
@@ -45,10 +45,19 @@ export const ProviderModelConfig = z.object({
 export type ProviderModelConfig = z.infer<typeof ProviderModelConfig>
 
 export const OpenAICompatibleProviderConfig = z.object({
-    apiKeyHeader: z.string(),
-    baseUrl: z.string(),
+    apiKeyHeader: z.string().check(
+        z.refine((value) => outboundUrlPolicy.isValidHttpHeaderName(value), formErrors.invalidAiProviderApiKeyHeader),
+    ),
+    baseUrl: z.string().check(
+        z.refine((value) => outboundUrlPolicy.classifyOutboundUrl({ url: value }).ok, formErrors.invalidAiProviderBaseUrl),
+    ),
     models: z.array(ProviderModelConfig),
-    defaultHeaders: z.optional(z.record(z.string(), z.string())),
+    defaultHeaders: z.optional(z.record(
+        z.string().check(
+            z.refine((value) => outboundUrlPolicy.isValidHttpHeaderName(value), formErrors.invalidAiProviderApiKeyHeader),
+        ),
+        z.string(),
+    )),
 })
 export type OpenAICompatibleProviderConfig = z.infer<typeof OpenAICompatibleProviderConfig>
 

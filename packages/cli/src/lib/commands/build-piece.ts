@@ -5,6 +5,12 @@ import inquirer from "inquirer";
 
 async function buildPieces(pieceName: string) {
     const pieceFolder = await findPiece(pieceName);
+    // findPiece returns null when the folder doesn't exist — without this guard
+    // buildPiece(null) crashes with a confusing ENOENT on "null/package.json".
+    if (!pieceFolder) {
+        console.error(chalk.red(`🚨 Piece '${pieceName}' not found under packages/integrations`));
+        process.exit(1);
+    }
     const { outputFolder } = await buildPiece(pieceFolder);
     console.info(chalk.green(`Piece '${pieceName}' built and packed successfully at ${outputFolder}.`));
 }

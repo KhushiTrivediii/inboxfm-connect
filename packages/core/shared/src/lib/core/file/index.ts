@@ -15,8 +15,9 @@ export enum FileType {
      */
     FLOW_RUN_LOG = 'FLOW_RUN_LOG',
     /**
-     * One step output (or loop-iteration bundle) sliced out of a flow-run-log manifest
-     * when it exceeds AP_FLOW_RUN_LOG_SLICE_THRESHOLD_KB.
+     * One step output (or loop-iteration bundle) sliced out of a flow-run-log
+     * manifest. Reserved type: nothing in this codebase writes slices today;
+     * cleanup and signed-file serving still support reading them.
      */
     FLOW_RUN_LOG_SLICE = 'FLOW_RUN_LOG_SLICE',
     /**

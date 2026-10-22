@@ -40,6 +40,10 @@ async function main() {
 
     // Seed the session before any app code runs, so the first render is authenticated.
     await context.addInitScript(([t, p]) => {
+        // The client reads ap-token/ap-project-id from sessionStorage since #383;
+        // seed both stores so the gate stays authenticated on either surface.
+        sessionStorage.setItem('ap-token', t)
+        sessionStorage.setItem('ap-project-id', p)
         localStorage.setItem('ap-token', t)
         localStorage.setItem('ap-project-id', p)
         localStorage.setItem('ap-user', JSON.stringify({

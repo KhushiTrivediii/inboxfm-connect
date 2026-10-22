@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ExecutionMode, FlowVersionState, NetworkMode } from '@inboxfm-connect/shared'
 import { ApLogger } from '@inboxfm-connect/server-utils'
+import { ExecutionMode, FlowVersionState, NetworkMode } from '@inboxfm-connect/shared'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const installMock = vi.fn()
@@ -13,11 +13,11 @@ vi.mock('../../../../../../src/lib/utils/bun-runner', () => ({
     bunRunner: () => ({ install: installMock, build: buildMock }),
 }))
 
-// eslint-disable-next-line import/first
+// eslint-disable-next-line import-x/first
 import { codeBuilder } from '../../../../../../src/lib/cache/flow/code/code-builder'
-// eslint-disable-next-line import/first
+// eslint-disable-next-line import-x/first
 import { codeCache } from '../../../../../../src/lib/cache/flow/code/code-cache'
-// eslint-disable-next-line import/first
+// eslint-disable-next-line import-x/first
 import { SandboxSettings } from '../../../../../../src/lib/types'
 
 const folders: string[] = []

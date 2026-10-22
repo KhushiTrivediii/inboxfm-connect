@@ -1,0 +1,149 @@
+---
+title: "Connect SDK"
+icon: "code"
+description: "Let your users connect their apps, then call integration tools on their behalf from your backend"
+---
+
+`@inboxfm-connect/sdk` is the TypeScript client for the Connect API. Your backend uses it to:
+
+1. Authenticate with a project-scoped Connect API key.
+2. Create a short-lived **connect session** and send the end-user its `connectUrl`, where they authorize an integration in their own browser.
+3. Discover the connection the end-user created.
+4. List the tools (actions) an integration exposes.
+5. Run a tool against the end-user's connection and handle the result or a typed error.
+
+The SDK runs on Node.js 20+ and in browsers with `fetch` and `AbortController`, and ships ESM and CommonJS builds with type declarations.
+
+<Warning>
+The API key has full access to its project. Keep it on your server. Only the `connectUrl` is meant to reach the end-user's browser.
+</Warning>
+
+## Install during the development preview
+
+<Note>
+A public npm lookup for `@inboxfm-connect/sdk` returned 404 on September 27, 2026. Until a public release is confirmed, use the repository workspace or install a local tarball. SDK source and release tooling already exist; public distribution is tracked in [#32](https://github.com/Mihir-Rabari/inboxfm-connect/issues/32).
+</Note>
+
+From the repository root, after installing dependencies with the pinned toolchain:
+
+```bash
+bun x turbo run build --filter=@inboxfm-connect/sdk
+npm pack --workspace=@inboxfm-connect/sdk --pack-destination /absolute/path/to/your-app
+```
+
+In your consuming application, install the actual tarball emitted by `npm pack`:
+
+```bash
+# Replace VERSION with the version in the filename emitted by npm pack.
+npm install ./inboxfm-connect-sdk-VERSION.tgz
+```
+
+## Before you start
+
+- **Base URL**: your instance's API root, including `/api`, for example `https://connect.example.com/api`. The SDK appends `/v1/...` to it.
+- **Connect API key**: in the dashboard, open **API Keys** and create a key under **Project API Keys**. These keys start with `cak-`, are scoped to one project, and are shown only once.
+- **Project ID**: the ID of the project the key was created for. Every SDK request is sent for this project.
+- **Provider OAuth application**: for OAuth connections, the operator must configure the provider's client credentials, callback URL, and allowed scopes. An inherited integration package does not transfer provider approvals.
+- **Customer identity**: derive `externalUserId` from your application's authenticated session. Do not allow the browser to choose another customer's ID. The project API key is privileged project access, not individual customer authentication.
+
+This SDK is the developer interface to an embedded integration product: your application owns customer identity and UX, while Connect supplies connection and execution infrastructure. See the [product direction report](https://github.com/Mihir-Rabari/inboxfm-connect/blob/dev/docs/PRODUCT_DIRECTION.md) and [Connect-first roadmap](https://github.com/Mihir-Rabari/inboxfm-connect/issues/63) for remaining delivery work, including the customer acceptance journey and per-user MCP delegation.
+
+## Full cycle
+
+<Steps>
+  <Step title="Create a client">
+    ```ts
+    import { ConnectError, InboxFM } from '@inboxfm-connect/sdk'
+
+    const inboxfm = new InboxFM({
+      baseUrl: process.env.INBOXFM_BASE_URL!,
+      apiKey: process.env.INBOXFM_API_KEY!,
+      projectId: process.env.INBOXFM_PROJECT_ID!,
+    })
+    ```
+    `externalUserId` in the calls below is your own identifier for the end-user. Connections are stored against it, so use a stable ID from your system.
+  </Step>
+
+  <Step title="Send the end-user to a connect session">
+    ```ts
+    const session = await inboxfm.createConnectSession({
+      externalUserId: 'user_42',
+      allowedPieceNames: ['@inboxfm-connect/piece-slack'],
+    })
+    // Redirect the user, or email them the link.
+    console.log(session.connectUrl, session.expiresAt)
+    ```
+    A session expires after 15 minutes by default (`expiresInSeconds`, max 3600) and stops working once the user has created one connection. `allowedPieceNames` restricts which integrations the user can connect in that session.
+  </Step>
+
+  <Step title="Find the user's connection">
+    ```ts
+    const { data } = await inboxfm.listConnections({
+      externalUserId: 'user_42',
+      pieceName: '@inboxfm-connect/piece-slack',
+    })
+    const connection = data.find((candidate) => candidate.status === 'ACTIVE')
+    if (!connection) {
+      throw new Error('user_42 has not connected Slack yet')
+    }
+    ```
+    The SDK does not notify you when the user finishes. Poll `listConnections`, or check it again when the user comes back to your app.
+  </Step>
+
+  <Step title="List the integration's tools">
+    ```ts
+    const tools = await inboxfm.listTools({ integration: '@inboxfm-connect/piece-slack' })
+    for (const tool of tools) {
+      console.log(tool.name, tool.inputs.filter((input) => input.required).map((input) => input.name))
+    }
+    ```
+  </Step>
+
+  <Step title="Run a tool and handle the response">
+    ```ts
+    try {
+      const output = await inboxfm.execute({
+        integration: '@inboxfm-connect/piece-slack',
+        tool: 'send_channel_message',
+        connectionId: connection.id,
+        input: { channel: 'C123', text: 'Hello from my agent', sendAsBot: true },
+      })
+      console.log(output)
+    }
+    catch (error) {
+      if (error instanceof ConnectError && error.code === 'ENGINE_OPERATION_FAILURE') {
+        // The tool ran and failed, e.g. the third-party API rejected the input.
+        console.error(error.params?.message)
+      }
+      else if (error instanceof ConnectError && error.category === 'authentication') {
+        // The API key is invalid, expired, or belongs to another project.
+      }
+      throw error
+    }
+    ```
+    `execute` resolves with the tool's raw output. Its shape depends on the tool, so it is typed `unknown`. If the tool itself fails, the call rejects with a `ConnectError` whose `code` is `ENGINE_OPERATION_FAILURE`, and `params.message` has the reason.
+  </Step>
+</Steps>
+
+Tool names and inputs differ per integration and version. Call `listTools` to get the real ones from your instance. Slack uses OAuth2, so end-users can only connect it after the platform operator configures a Slack OAuth app. See [supported connection types](/connect-sdk/reference#supported-connection-types).
+
+## Runnable example
+
+[`packages/connect-sdk/examples/quickstart`](https://github.com/Mihir-Rabari/inboxfm-connect/tree/dev/packages/connect-sdk/examples/quickstart) runs this full cycle from the command line. It creates a connect session only if the user has no active connection yet. It then waits for the connection, checks that you passed the tool's required inputs, runs the tool, and prints the output or a readable error for each error category.
+
+```bash
+INBOXFM_BASE_URL=https://connect.example.com/api \
+INBOXFM_API_KEY=cak-... \
+INBOXFM_PROJECT_ID=... \
+INBOXFM_INTEGRATION=@inboxfm-connect/piece-slack \
+INBOXFM_TOOL=send_channel_message \
+INBOXFM_TOOL_INPUT='{"channel":"C123","text":"hi","sendAsBot":true}' \
+npm run example:quickstart --workspace=@inboxfm-connect/sdk
+```
+
+The SDK's test suite runs the same example against a local HTTP fixture, so the example stays in sync with the SDK.
+
+## Next steps
+
+- [SDK reference](/connect-sdk/reference) covers every method, option, type, and error category.
+- Which integrations end-users can connect depends on how they authenticate. See [supported connection types](/connect-sdk/reference#supported-connection-types).

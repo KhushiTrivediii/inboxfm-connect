@@ -9,7 +9,7 @@ import { apSetProjectContextTool } from './tools/ap-set-project-context'
 
 const PLATFORM_LEVEL_TOOL_SET = new Set(PLATFORM_LEVEL_TOOL_NAMES)
 
-const MCP_SERVER_INSTRUCTIONS = `## Activepieces MCP Server
+const MCP_SERVER_INSTRUCTIONS = `## Inboxfm Connect MCP Server
 
 ### Workflow
 1. Discover: ap_research_pieces, ap_list_connections, ap_list_ai_models
@@ -37,11 +37,11 @@ export async function buildMcpServer({ mcp, userId, selectionScope, log, resolve
     const projectId = mcp.projectId
 
     const server = new McpServer({
-        name: 'Activepieces',
-        title: 'Activepieces',
+        name: 'Inboxfm Connect',
+        title: 'Inboxfm Connect',
         version: '1.0.0',
         websiteUrl: 'https://activepieces.com',
-        description: 'Automation and workflow MCP server by Activepieces',
+        description: 'Automation and workflow MCP server by Inboxfm Connect',
         icons: [
             {
                 src: 'https://cdn.activepieces.com/brand/logo.svg',

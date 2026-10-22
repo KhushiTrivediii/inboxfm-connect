@@ -11,6 +11,7 @@ import { stripeHelper } from '../ee/platform/platform-plan/stripe-helper'
 import { platformProjectService } from '../ee/projects/platform-project-service'
 import { fileService } from '../file/file.service'
 import { system } from '../helper/system/system'
+import { AppSystemProp } from '../helper/system/system-props'
 import { SystemJobName } from '../helper/system-jobs/common'
 import { systemJobsSchedule } from '../helper/system-jobs/system-job'
 import { userIdentityHelper } from '../helper/user-identity-helper'
@@ -51,24 +52,28 @@ export const platformController: FastifyPluginAsyncZod = async (app) => {
             })
         }
         const platformId = req.principal.platform.id
+        const fileSizeLimit = system.getNumberOrThrow(AppSystemProp.MAX_FILE_SIZE_MB)
 
         const [logoIconUrl, fullLogoUrl, favIconUrl] = await Promise.all([
             fileService(app.log).uploadPublicAsset({
                 file: req.body.logoIcon,
                 type: FileType.PLATFORM_ASSET,
                 platformId,
+                maxFileSizeInBytes: fileSizeLimit * 1024 * 1024,
                 metadata: { platformId },
             }),
             fileService(app.log).uploadPublicAsset({
                 file: req.body.fullLogo,
                 type: FileType.PLATFORM_ASSET,
                 platformId,
+                maxFileSizeInBytes: fileSizeLimit * 1024 * 1024,
                 metadata: { platformId },
             }),
             fileService(app.log).uploadPublicAsset({
                 file: req.body.favIcon,
                 type: FileType.PLATFORM_ASSET,
                 platformId,
+                maxFileSizeInBytes: fileSizeLimit * 1024 * 1024,
                 metadata: { platformId },
             }),
         ])

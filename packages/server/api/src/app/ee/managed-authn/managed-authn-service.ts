@@ -1,10 +1,11 @@
 import { createHash } from 'crypto'
-import { isNil } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
 import { cryptoUtils } from '@inboxfm-connect/server-utils'
 import { AuthenticationResponse, PiecesFilterType, PlatformRole, PrincipalType, Project, ProjectType, User, UserIdentity, UserIdentityProvider } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { accessTokenManager } from '../../authentication/lib/access-token-manager'
 import { userIdentityService } from '../../authentication/user-identity/user-identity-service'
+import { distributedLock } from '../../database/redis-connections'
 import { pieceTagService } from '../../pieces/tags/pieces/piece-tag.service'
 import { platformService } from '../../platform/platform.service'
 import { projectService } from '../../project/project-service'
@@ -117,22 +118,44 @@ const getOrCreateUser = async (
     params: GetOrCreateUserParams,
     log: FastifyBaseLogger,
 ): Promise<User> => {
-    const existingUser = await userService(log).getByPlatformAndExternalId({
-        platformId: params.platformId,
-        externalId: params.externalUserId,
-    })
+    return runGetOrCreateExclusiveOrWithoutLock({
+        key: buildUserNaturalKey(params),
+        log,
+        fn: async () => {
+            const existingUser = await userService(log).getByPlatformAndExternalId({
+                platformId: params.platformId,
+                externalId: params.externalUserId,
+            })
 
-    if (!isNil(existingUser)) {
-        return existingUser
-    }
-    const identity = await getOrCreateUserIdentity(params, log)
-    const user = await userService(log).create({
-        externalId: params.externalUserId,
-        platformId: params.platformId,
-        identityId: identity.id,
-        platformRole: PlatformRole.MEMBER,
+            if (!isNil(existingUser)) {
+                return existingUser
+            }
+            const identity = await getOrCreateUserIdentity(params, log)
+            try {
+                return await userService(log).create({
+                    externalId: params.externalUserId,
+                    platformId: params.platformId,
+                    identityId: identity.id,
+                    platformRole: PlatformRole.MEMBER,
+                })
+            }
+            catch (error) {
+                if (isUniqueConstraintViolation(error)) {
+                    // Lost a concurrent first-write to the (platformId, externalId)
+                    // unique index - converge on the winner's row.
+                    const winner = await userService(log).getByPlatformAndExternalId({
+                        platformId: params.platformId,
+                        externalId: params.externalUserId,
+                    })
+                    if (isNil(winner)) {
+                        throw error
+                    }
+                    return winner
+                }
+                throw error
+            }
+        },
     })
-    return user
 }
 
 const getOrCreateUserIdentity = async (
@@ -140,46 +163,91 @@ const getOrCreateUserIdentity = async (
     log: FastifyBaseLogger,
 ): Promise<UserIdentity> => {
     const cleanedEmail = generateEmailHash(params)
-    const existingIdentity = await userIdentityService(log).getIdentityByEmail(cleanedEmail)
-    if (!isNil(existingIdentity)) {
-        return existingIdentity
-    }
-    const identity = await userIdentityService(log).create({
-        email: cleanedEmail,
-        password: await cryptoUtils.generateRandomPassword(),
-        firstName: params.externalFirstName,
-        lastName: params.externalLastName,
-        trackEvents: true,
-        newsLetter: false,
-        provider: UserIdentityProvider.JWT,
-        verified: true,
+    return runGetOrCreateExclusiveOrWithoutLock({
+        key: buildIdentityNaturalKey(cleanedEmail),
+        log,
+        fn: async () => {
+            const existingIdentity = await userIdentityService(log).getIdentityByEmail(cleanedEmail)
+            if (!isNil(existingIdentity)) {
+                return existingIdentity
+            }
+            try {
+                return await userIdentityService(log).create({
+                    email: cleanedEmail,
+                    password: await cryptoUtils.generateRandomPassword(),
+                    firstName: params.externalFirstName,
+                    lastName: params.externalLastName,
+                    trackEvents: true,
+                    newsLetter: false,
+                    provider: UserIdentityProvider.JWT,
+                    verified: true,
+                })
+            }
+            catch (error) {
+                // userIdentityService.create throws EXISTING_USER when its own
+                // pre-insert check loses a race, and the email unique index throws
+                // 23505 when even that check loses. Both mean "lost the race" for
+                // this get-or-create flow - converge on the winner's row.
+                if (isExistingUserError(error) || isUniqueConstraintViolation(error)) {
+                    const winner = await userIdentityService(log).getIdentityByEmail(cleanedEmail)
+                    if (isNil(winner)) {
+                        throw error
+                    }
+                    return winner
+                }
+                throw error
+            }
+        },
     })
-    return identity
 }
 const getOrCreateProject = async ({
     platformId,
     externalProjectId,
 }: GetOrCreateProjectParams, log: FastifyBaseLogger): Promise<{ project: Project, isNewProject: boolean }> => {
-    const existingProject = await projectService(log).getByPlatformIdAndExternalId({
-        platformId,
-        externalId: externalProjectId,
+    const result = await runGetOrCreateExclusiveOrWithoutLock({
+        key: buildProjectNaturalKey({ platformId, externalProjectId }),
+        log,
+        fn: async () => {
+            const existingProject = await projectService(log).getByPlatformIdAndExternalId({
+                platformId,
+                externalId: externalProjectId,
+            })
+
+            if (!isNil(existingProject)) {
+                return { project: existingProject, isNewProject: false }
+            }
+
+            const platform = await platformService(log).getOneOrThrow(platformId)
+
+            try {
+                const project = await projectService(log).create({
+                    displayName: externalProjectId,
+                    ownerId: platform.ownerId,
+                    platformId,
+                    externalId: externalProjectId,
+                    type: ProjectType.TEAM,
+                })
+
+                return { project, isNewProject: true }
+            }
+            catch (error) {
+                if (isUniqueConstraintViolation(error)) {
+                    // Lost a concurrent first-write to the (platformId, externalId)
+                    // unique index - converge on the winner's row.
+                    const winner = await projectService(log).getByPlatformIdAndExternalId({
+                        platformId,
+                        externalId: externalProjectId,
+                    })
+                    if (isNil(winner)) {
+                        throw error
+                    }
+                    return { project: winner, isNewProject: false }
+                }
+                throw error
+            }
+        },
     })
-
-    if (!isNil(existingProject)) {
-        return { project: existingProject, isNewProject: false }
-    }
-
-    const platform = await platformService(log).getOneOrThrow(platformId)
-
-    const project = await projectService(log).create({
-        displayName: externalProjectId,
-        ownerId: platform.ownerId,
-        platformId,
-        externalId: externalProjectId,
-        type: ProjectType.TEAM,
-    })
-
-    return { project, isNewProject: true }
+    return result
 }
 
 const getPiecesList = async ({
@@ -207,6 +275,71 @@ function generateEmailHash(params: { platformId: string, externalUserId: string 
 
 function cleanEmailOtherwiseCompareFails(email: string): string {
     return email.trim().toLowerCase()
+}
+
+// The three get-or-create legs of the external-token flow run without any
+// serialization and each writes a row guarded by a unique index on its natural
+// key, so two concurrent sign-ins with the same external principal race the
+// SELECT-then-INSERT gap and the loser surfaces a raw driver error as a 500 on
+// a public auth endpoint. Serializing each leg on its natural key removes the
+// race in-process and cross-process (Redis-backed lock); the fail-open path
+// keeps sign-in working when the lock infrastructure itself is unavailable.
+async function runGetOrCreateExclusiveOrWithoutLock<T>({ key, fn, log }: {
+    key: string
+    fn: () => Promise<T>
+    log: FastifyBaseLogger
+}): Promise<T> {
+    let fnSettled = false
+    try {
+        return await distributedLock(log).runExclusive({
+            key,
+            timeoutInSeconds: 60,
+            fn: async () => {
+                try {
+                    return await fn()
+                }
+                finally {
+                    // Mark settled on EVERY exit path (throw AND success) so a
+                    // lock-infra error after a successful fn cannot fail open and
+                    // run fn a second time.
+                    fnSettled = true
+                }
+            },
+        })
+    }
+    catch (error) {
+        if (fnSettled) {
+            throw error
+        }
+        log.warn({ error, lockKey: key }, 'Managed authn get-or-create lock unavailable - failing open')
+        return fn()
+    }
+}
+
+function buildProjectNaturalKey({ platformId, externalProjectId }: { platformId: string, externalProjectId: string }): string {
+    return ['managed-authn', 'get-or-create', 'project', platformId, externalProjectId].join(':')
+}
+
+function buildUserNaturalKey({ platformId, externalUserId }: { platformId: string, externalUserId: string }): string {
+    return ['managed-authn', 'get-or-create', 'user', platformId, externalUserId].join(':')
+}
+
+function buildIdentityNaturalKey(email: string): string {
+    return ['managed-authn', 'get-or-create', 'identity', email].join(':')
+}
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+    // Postgres unique-violation driver code (SQLSTATE 23505), gated on the driver
+    // code the same way as the approved #460/#466 helpers: the two drivers pinned
+    // in this repo (pg 8.11.3, @electric-sql/pglite 0.3.14) do not always surface
+    // the code on the same property, so match both the top-level error and the
+    // wrapped driverError. Any other failure must propagate raw.
+    const candidate = error as { code?: string, driverError?: { code?: string } } | null | undefined
+    return candidate?.code === '23505' || candidate?.driverError?.code === '23505'
+}
+
+function isExistingUserError(error: unknown): boolean {
+    return error instanceof ActivepiecesError && error.error.code === ErrorCode.EXISTING_USER
 }
 
 type AuthenticateParams = {

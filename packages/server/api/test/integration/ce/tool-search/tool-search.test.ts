@@ -766,8 +766,9 @@ describe('Tool Search Engine (Phase 6 — ap_search_triggers)', () => {
     it('searchTriggers degrades to the keyword floor when no embedder/key is available', async () => {
         await seedTriggerCatalog()
         // No reindex, no embedder, no platformId → embedder resolves to null → keyword floor.
-
-        const { results, mode } = await toolSearchService(log).searchTriggers('new message', { limit: 5 })
+        // Same rationale as the Phase 5 action-side keyword floor: the shipped catalog's real
+        // trigger descriptions crowd a tight top-N — assert the fuzzy match, not global ranking.
+        const { results, mode } = await toolSearchService(log).searchTriggers('new message', { limit: 200 })
 
         expect(mode).toBe('keyword')
         const slack = results.find((r) => r.pieceName === '@inboxfm-connect/piece-slack')

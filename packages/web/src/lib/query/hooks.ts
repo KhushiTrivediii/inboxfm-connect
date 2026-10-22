@@ -1,6 +1,12 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type {
+  CreateAIProviderRequest,
+  UpdateAIProviderRequest,
+} from '@inboxfm-connect/shared'
+import { type AIProviderName, aiProvidersApi } from '../api/ai-providers'
 import { apiKeysApi } from '../api/api-keys'
 import { automationsApi } from '../api/automations'
+import { billingApi } from '../api/billing'
 import { apiClient } from '../api/client'
 import { connectionsApi } from '../api/connections'
 import { executeApi } from '../api/execute'
@@ -27,17 +33,24 @@ import {
   PieceSummary,
   PopulatedMcpServer,
   ScheduledTask,
+  SeekPage,
   TriggerBinding,
   UpdateMcpServerRequest,
   UpdateScheduledTaskRequest,
   UpdateTriggerBindingRequest,
 } from '../api/types'
 
-export function useIntegrations(params?: IntegrationsListParams) {
+export function useIntegrations(
+  params?: IntegrationsListParams,
+  options?: { enabled?: boolean; showErrorToast?: boolean }
+) {
+  const showErrorToast = options?.showErrorToast ?? false
   return useQuery({
     queryKey: ['integrations', params ?? {}],
-    queryFn: () => apiClient.get<PieceSummary[]>('/integrations', { params }),
+    queryFn: () => apiClient.get<SeekPage<PieceSummary>>('/integrations', { params }),
     placeholderData: keepPreviousData,
+    enabled: options?.enabled,
+    meta: { showErrorToast },
   })
 }
 
@@ -57,11 +70,35 @@ export function useIntegration(name?: string) {
   })
 }
 
-export function useConnectionsQuery(params?: ConnectionsListParams) {
+export function useConnectionsQuery(
+  params?: ConnectionsListParams,
+  options?: { keepPreviousData?: boolean; enabled?: boolean; showErrorToast?: boolean }
+) {
   const projectId = apiClient.getProjectId()
+  const showErrorToast = options?.showErrorToast ?? true
   return useQuery({
     queryKey: ['connections', params ?? {}, projectId],
     queryFn: () => connectionsApi.list(params),
+    placeholderData: options?.keepPreviousData ? keepPreviousData : undefined,
+    meta: { showErrorToast, showErrorDialog: showErrorToast },
+    enabled: options?.enabled,
+  })
+}
+
+export function useConnectionsInfiniteQuery(
+  params?: Omit<ConnectionsListParams, 'cursor'>,
+  options?: { enabled?: boolean; showErrorToast?: boolean }
+) {
+  const projectId = apiClient.getProjectId()
+  const showErrorToast = options?.showErrorToast ?? true
+  return useInfiniteQuery({
+    queryKey: ['connections', 'infinite', params ?? {}, projectId],
+    queryFn: ({ pageParam }) =>
+      connectionsApi.list({ ...params, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next ?? undefined,
+    meta: { showErrorToast, showErrorDialog: showErrorToast },
+    enabled: options?.enabled,
   })
 }
 
@@ -94,14 +131,24 @@ export function useDeleteConnection() {
   })
 }
 
+export function useTestConnection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => connectionsApi.test({ id }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['connections'] })
+      void queryClient.invalidateQueries({ queryKey: ['connection'] })
+    },
+  })
+}
+
 export function useProjectApiKeysQuery() {
   const projectId = apiClient.getProjectId()
   return useQuery({
     queryKey: ['project-api-keys', projectId],
     queryFn: () => apiKeysApi.list(),
-    // `showErrorToast` (not `showErrorDialog`) is the key `query-client.ts` actually
-    // checks — this query renders the API Keys page's primary table.
-    meta: { showErrorToast: true },
+    // Standardized global error convention per AGENTS.md
+    meta: { showErrorDialog: true },
   })
 }
 
@@ -127,7 +174,7 @@ export function useDeleteProjectApiKey() {
 
 /**
  * Minor/auxiliary query: only used to gate the Platform API Keys section, so it
- * intentionally has no `showErrorToast` — a failure here just leaves the platform
+ * intentionally has no `showErrorDialog` — a failure here just leaves the platform
  * key section hidden rather than surfacing a distracting toast.
  */
 export function usePlatformQuery({ platformId }: { platformId?: string }) {
@@ -143,7 +190,7 @@ export function usePlatformApiKeysQuery({ enabled }: { enabled: boolean }) {
     queryKey: ['platform-api-keys'],
     queryFn: () => platformApiKeysApi.list(),
     enabled,
-    meta: { showErrorToast: true },
+    meta: { showErrorDialog: true },
   })
 }
 
@@ -196,11 +243,32 @@ export function useKnowledgeSearch(request: KnowledgeSearchRequest, enabled = tr
   })
 }
 
-export function useTriggerBindingsQuery() {
+export function useTriggerBindingsQuery(options?: { enabled?: boolean; showErrorToast?: boolean }) {
+  const showErrorToast = options?.showErrorToast ?? true
   return useQuery({
     queryKey: ['trigger-bindings', apiClient.getProjectId()],
     queryFn: () => automationsApi.listTriggerBindings(),
     select: (page) => page.data,
+    // Every current call site (Trigger Bindings list, Dashboard summary) renders
+    // this as primary data, so a fetch failure should surface an error dialog.
+    meta: { showErrorToast },
+    enabled: options?.enabled,
+  })
+}
+
+export function useTriggerBindingsInfiniteQuery(
+  options?: { enabled?: boolean; showErrorToast?: boolean }
+) {
+  const projectId = apiClient.getProjectId()
+  const showErrorToast = options?.showErrorToast ?? true
+  return useInfiniteQuery({
+    queryKey: ['trigger-bindings', 'infinite', projectId],
+    queryFn: ({ pageParam }) =>
+      automationsApi.listTriggerBindings(pageParam ? { cursor: pageParam } : undefined),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next ?? undefined,
+    meta: { showErrorToast },
+    enabled: options?.enabled,
   })
 }
 
@@ -275,17 +343,46 @@ export function useDeleteTriggerBinding() {
 }
 
 export function useRunTriggerBinding() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, payload }: { id: string; payload?: unknown }) =>
       apiClient.post<Execution[]>(`/trigger-bindings/${encodeURIComponent(id)}/run`, payload),
+    // A manual run records executions the same way useRunScheduledTaskNow does
+    // (its sibling invalidates ['executions'] on success), so the Activity list,
+    // the Dashboard "Recent Executions" card and the command palette must not
+    // keep serving the pre-run cache for the whole 2-minute staleTime.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['executions'] })
+    },
   })
 }
 
-export function useScheduledTasksQuery() {
+export function useScheduledTasksQuery(options?: { enabled?: boolean; showErrorToast?: boolean }) {
+  const showErrorToast = options?.showErrorToast ?? true
   return useQuery({
     queryKey: ['scheduled-tasks', apiClient.getProjectId()],
     queryFn: () => automationsApi.listScheduledTasks(),
     select: (page) => page.data,
+    // Every current call site (Scheduled Tasks list, Dashboard summary) renders
+    // this as primary data, so a fetch failure should surface an error dialog.
+    meta: { showErrorToast },
+    enabled: options?.enabled,
+  })
+}
+
+export function useScheduledTasksInfiniteQuery(
+  options?: { enabled?: boolean; showErrorToast?: boolean }
+) {
+  const projectId = apiClient.getProjectId()
+  const showErrorToast = options?.showErrorToast ?? true
+  return useInfiniteQuery({
+    queryKey: ['scheduled-tasks', 'infinite', projectId],
+    queryFn: ({ pageParam }) =>
+      automationsApi.listScheduledTasks(pageParam ? { cursor: pageParam } : undefined),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next ?? undefined,
+    meta: { showErrorToast },
+    enabled: options?.enabled,
   })
 }
 
@@ -352,6 +449,9 @@ export function useMcpServerQuery(projectId?: string) {
     queryKey: ['mcp-server', effectiveProjectId],
     queryFn: () => apiClient.get<PopulatedMcpServer>(`/projects/${encodeURIComponent(effectiveProjectId ?? '')}/mcp-server`),
     enabled: !!effectiveProjectId,
+    // Sole call site is the MCP Hub page, where this is the primary data driving
+    // the whole page.
+    meta: { showErrorDialog: true },
   })
 }
 
@@ -400,12 +500,20 @@ export function useGenerateMcpToken() {
   })
 }
 
-export function useExecutionsQuery(params?: { status?: ExecutionStatus; limit?: number }) {
+export function useExecutionsQuery(
+  params?: { status?: ExecutionStatus; limit?: number },
+  options?: { enabled?: boolean; showErrorToast?: boolean }
+) {
   const projectId = apiClient.getProjectId()
+  const showErrorToast = options?.showErrorToast ?? true
   return useQuery({
     queryKey: ['executions', params ?? {}, projectId],
     queryFn: () => executionsApi.list({ status: params?.status, limit: params?.limit }),
     placeholderData: keepPreviousData,
+    // Every current call site (Activity list, Dashboard "Recent Executions") renders
+    // this as primary data, so a fetch failure should surface an error dialog.
+    meta: { showErrorToast },
+    enabled: options?.enabled,
   })
 }
 
@@ -429,3 +537,75 @@ export function useExecutionToolCallsQuery(id?: string) {
     gcTime: 0,
   })
 }
+
+export function useBillingInfoQuery() {
+  return useQuery({
+    queryKey: ['platform-billing-info'],
+    queryFn: () => billingApi.getInfo(),
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+export function useCreateBillingPortalMutation() {
+  return useMutation({
+    mutationFn: () => billingApi.createPortalSession(),
+  })
+}
+
+export function useCreateBillingCheckoutMutation() {
+  return useMutation({
+    mutationFn: ({ newActiveFlowsLimit }: { newActiveFlowsLimit: number }) =>
+      billingApi.createCheckoutSession({ newActiveFlowsLimit }),
+  })
+}
+
+export function useAIProvidersQuery() {
+  return useQuery({
+    queryKey: ['ai-providers'],
+    queryFn: () => aiProvidersApi.list(),
+    meta: { showErrorToast: true },
+  })
+}
+
+export function useAIProviderModelsQuery(provider?: AIProviderName, enabled = true) {
+  return useQuery({
+    queryKey: ['ai-provider-models', provider],
+    queryFn: () => (provider ? aiProvidersApi.listModels(provider) : Promise.resolve([])),
+    enabled: !!provider && enabled,
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateAIProviderMutation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (request: CreateAIProviderRequest) => aiProvidersApi.create(request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-providers'] })
+    },
+  })
+}
+
+export function useUpdateAIProviderMutation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, request }: { id: string; request: UpdateAIProviderRequest }) =>
+      aiProvidersApi.update(id, request),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-providers'] })
+    },
+  })
+}
+
+export function useDeleteAIProviderMutation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => aiProvidersApi.delete(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ai-providers'] })
+    },
+  })
+}
+
+

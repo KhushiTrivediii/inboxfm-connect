@@ -13,12 +13,13 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { PageHeader } from '@/components/layout/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth/auth-context'
 import {
@@ -30,18 +31,45 @@ import {
 } from '@/lib/query/hooks'
 
 export default function DashboardPage() {
+  const navigate = useNavigate()
   const { user } = useAuth()
-  const { data: integrations, isLoading: isIntegrationsLoading } = useIntegrations()
-  const { data: connections, isLoading: isConnectionsLoading } = useConnectionsQuery()
-  const { data: triggerBindings, isLoading: isTriggersLoading } = useTriggerBindingsQuery()
-  const { data: scheduledTasks, isLoading: isSchedulesLoading } = useScheduledTasksQuery()
-  const { data: executionsData, isLoading: isExecutionsLoading } = useExecutionsQuery({ limit: 5 })
+  const {
+    data: integrationsData,
+    isLoading: isIntegrationsLoading,
+    isError: isIntegrationsError,
+    refetch: refetchIntegrations,
+  } = useIntegrations()
+  const {
+    data: connections,
+    isLoading: isConnectionsLoading,
+    isError: isConnectionsError,
+    refetch: refetchConnections,
+  } = useConnectionsQuery()
+  const {
+    data: triggerBindings,
+    isLoading: isTriggersLoading,
+    isError: isTriggersError,
+    refetch: refetchTriggers,
+  } = useTriggerBindingsQuery()
+  const {
+    data: scheduledTasks,
+    isLoading: isSchedulesLoading,
+    isError: isSchedulesError,
+    refetch: refetchSchedules,
+  } = useScheduledTasksQuery()
+  const {
+    data: executionsData,
+    isLoading: isExecutionsLoading,
+    isError: isExecutionsError,
+    refetch: refetchExecutions,
+  } = useExecutionsQuery({ limit: 5 })
 
   const connectionList = connections?.data || []
   const executions = executionsData?.data || []
+  const integrationList = integrationsData?.data || []
 
   // Count available tools across integrations
-  const totalToolsCount = integrations?.reduce((acc, piece) => acc + (piece.actions || 0), 0) || 0
+  const totalToolsCount = integrationList.reduce((acc, piece) => acc + (piece.actions || 0), 0)
   const activeConnectionsCount = connectionList.filter((c) => c.status === 'ACTIVE').length
   const activeTriggersCount = triggerBindings?.filter((t) => t.status === 'ENABLED').length || 0
   const activeSchedulesCount = scheduledTasks?.filter((s) => s.status === 'ENABLED').length || 0
@@ -76,14 +104,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isIntegrationsLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {totalToolsCount > 0 ? totalToolsCount : integrations?.length || 0}
+            ) : isIntegrationsError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchIntegrations()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {totalToolsCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Across {integrationList.length} integrations
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Across {integrations?.length || 0} integrations
-            </p>
           </div>
         </Card>
 
@@ -98,14 +141,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isConnectionsLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {activeConnectionsCount}
+            ) : isConnectionsError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchConnections()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {activeConnectionsCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {connectionList.length} total credentials
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {connectionList.length} total credentials
-            </p>
           </div>
         </Card>
 
@@ -120,14 +178,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isTriggersLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {activeTriggersCount}
+            ) : isTriggersError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchTriggers()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {activeTriggersCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {triggerBindings?.length || 0} configured event listeners
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {triggerBindings?.length || 0} configured event listeners
-            </p>
           </div>
         </Card>
 
@@ -142,14 +215,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isSchedulesLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {activeSchedulesCount}
+            ) : isSchedulesError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchSchedules()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {activeSchedulesCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {scheduledTasks?.length || 0} cron schedules
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {scheduledTasks?.length || 0} active cron schedules
-            </p>
           </div>
         </Card>
       </div>
@@ -249,6 +337,14 @@ export default function DashboardPage() {
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
             </div>
+          ) : isExecutionsError ? (
+            <div className="p-8">
+              <ErrorState
+                title="Unable to load recent executions"
+                description="The execution log could not be reached. Retry shortly."
+                onRetry={() => void refetchExecutions()}
+              />
+            </div>
           ) : executions.length === 0 ? (
             <div className="p-8">
               <EmptyState
@@ -256,7 +352,7 @@ export default function DashboardPage() {
                 title="No executions recorded yet"
                 description="When you test a tool, fire a trigger binding, or run a scheduled task, execution logs will appear here."
                 actionLabel="Explore Tools to Test"
-                onAction={() => (window.location.href = '/actions')}
+                onAction={() => navigate('/actions')}
               />
             </div>
           ) : (

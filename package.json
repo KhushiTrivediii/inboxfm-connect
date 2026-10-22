@@ -1,6 +1,7 @@
 {
-  "name": "activepieces",
+  "name": "inboxfm-connect",
   "version": "0.86.1",
+  "description": "Integration infrastructure for AI agents and SaaS products: embedded account connections, tool discovery, and action execution.",
   "packageManager": "bun@1.3.3",
   "trustedDependencies": [
     "sqlite3",
@@ -17,16 +18,19 @@
     "dev": "node tools/scripts/install-bun.js && turbo run serve --filter=api --filter=@inboxfm-connect/engine --ui stream",
     "dev:backend": "turbo run serve --filter=api --filter=@inboxfm-connect/engine --ui stream",
     "start": "node tools/setup-dev.js && npm run dev",
-    "test:e2e": "npx playwright test --config=packages/tests-e2e/playwright.config.ts",
+    "test:e2e": "node tools/e2e/run-tests.mjs",
     "db-migration": "npx turbo run db-migration --filter=api --",
     "check-migrations": "npx turbo run check-migrations --filter=api",
     "rollback": "npm run rollback --workspace=packages/server/api --",
-    "lint-core": "turbo run lint --filter=@inboxfm-connect/shared --filter=@inboxfm-connect/engine --filter=api --filter=@inboxfm-connect/server-utils --filter=ee-embed-sdk --filter=@inboxfm-connect/sdk",
+    "lint-core": "turbo run lint --filter=@inboxfm-connect/shared --filter=@inboxfm-connect/engine --filter=api --filter=@inboxfm-connect/server-utils --filter=ee-embed-sdk --filter=@inboxfm-connect/sdk --filter=@inboxfm-connect/web --filter=@inboxfm-connect/scheduler",
     "lint-pieces": "turbo run lint --filter='@inboxfm-connect/piece-*'",
     "lint-affected": "turbo run lint --affected",
     "lint-dev": "turbo run lint --filter='!@inboxfm-connect/piece-*' --force -- --fix",
-    "test-unit": "turbo run test --filter=@inboxfm-connect/engine --filter=@inboxfm-connect/shared --filter=@inboxfm-connect/sdk && turbo run test-unit --filter=api",
+    "test-unit": "turbo run test --concurrency=2 --filter=@inboxfm-connect/shared --filter=@inboxfm-connect/core-execution --filter=@inboxfm-connect/sdk --filter=@inboxfm-connect/web --filter=@inboxfm-connect/scheduler --filter=@inboxfm-connect/pieces-common --filter=@inboxfm-connect/cli && turbo run test-unit --filter=api --filter=@inboxfm-connect/engine",
     "test-api": "turbo run check-migrations test-ce test-ee test-cloud --filter=api --concurrency=1",
+    "test-bench-gate": "node --test \"benchmark/gate/test/*.test.mjs\"",
+    "test-tools": "node --test \"tools/lib/*.test.js\"",
+    "bench:gate": "node benchmark/gate/cli.mjs",
     "cli": "npx ts-node -r tsconfig-paths/register --project packages/cli/tsconfig.json  packages/cli/src/index.ts",
     "create-piece": "npx ts-node -r tsconfig-paths/register --project packages/cli/tsconfig.json  packages/cli/src/index.ts pieces create",
     "create-action": "npx ts-node -r tsconfig-paths/register --project packages/cli/tsconfig.json  packages/cli/src/index.ts actions create",
@@ -40,7 +44,8 @@
     "pull-i18n": "crowdin pull --config crowdin.yml",
     "push-i18n": "crowdin upload sources",
     "bump-translated-pieces": "npx ts-node --project tools/tsconfig.tools.json tools/scripts/pieces/bump-translated-pieces.ts",
-    "bump-all-pieces-patch-version": "npx ts-node --project tools/tsconfig.tools.json tools/scripts/pieces/bump-all-pieces-patch-version.ts"
+    "bump-all-pieces-patch-version": "npx ts-node --project tools/tsconfig.tools.json tools/scripts/pieces/bump-all-pieces-patch-version.ts",
+    "check-licenses": "node tools/ci/check-license-boundaries.mjs"
   },
   "private": true,
   "dependencies": {
@@ -363,7 +368,8 @@
     "packages/integrations/common",
     "packages/integrations/core/*",
     "packages/integrations/community/*",
-    "packages/integrations/custom/*"
+    "packages/integrations/custom/*",
+    "services/flowscript"
   ],
   "resolutions": {
     "rollup": "npm:@rollup/wasm-node",

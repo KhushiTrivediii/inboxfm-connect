@@ -2,7 +2,7 @@
   "Customer service software and support ticket system": "カスタマーサービスソフトウェアとサポートチケットシステム",
   "Agent Email": "エージェントのメールアドレス",
   "Token": "トークン",
-  "Organization (e.g activepieceshelp)": "組織 (e.g activepieceshelp)",
+  "Organization (e.g inboxfmhelp)": "組織 (e.g inboxfmhelp)",
   "The email address you use to login to Zendesk": "Zendeskにログインするために使用するメールアドレス",
   "The API token you can generate in Zendesk": "Zendeskで生成できるAPIトークン",
   "The subdomain of your Zendesk instance": "Zendeskインスタンスのサブドメイン",

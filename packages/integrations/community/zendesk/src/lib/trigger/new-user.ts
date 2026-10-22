@@ -140,7 +140,7 @@ export const newUser = createTrigger({
         },
         body: {
           webhook: {
-            name: `Activepieces New User Webhook - ${Date.now()}`,
+            name: `Inboxfm Connect New User Webhook - ${Date.now()}`,
             endpoint: context.webhookUrl,
             http_method: 'POST',
             request_format: 'json',

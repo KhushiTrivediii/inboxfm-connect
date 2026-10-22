@@ -24,8 +24,8 @@ type LoadedPieceChildPayload = {
 };
 
 export const AP_CLOUD_API_BASE = 'https://cloud.activepieces.com/api/v1';
-export const PIECES_FOLDER = 'packages/pieces'
-export const COMMUNITY_PIECE_FOLDER = 'packages/pieces/community'
+export const PIECES_FOLDER = 'packages/integrations'
+export const COMMUNITY_PIECE_FOLDER = 'packages/integrations/community'
 export const NON_PIECES_PACKAGES = ['@inboxfm-connect/pieces-framework', '@inboxfm-connect/pieces-common']
 
 const validateSupportedRelease = (minRelease: string | undefined, maxRelease: string | undefined) => {
@@ -63,7 +63,7 @@ export function getCommunityPieceFolder(pieceName: string): string {
 
 
 export async function findAllPiecesDirectoryInSource(): Promise<string[]> {
-    const piecesPath = resolve(cwd(), 'packages', 'pieces')
+    const piecesPath = resolve(cwd(), 'packages', 'integrations')
     const paths = await traverseFolder(piecesPath)
     return paths.map(p => relative(cwd(), p))
 }
@@ -149,7 +149,7 @@ export async function findAllPieces(): Promise<PieceMetadata[]> {
 }
 
 async function findAllDistPaths(): Promise<string[]> {
-    const sourcePiecesPath = resolve(cwd(), 'packages', 'pieces')
+    const sourcePiecesPath = resolve(cwd(), 'packages', 'integrations')
     const sourceFolders = await traverseFolder(sourcePiecesPath)
     const distPaths: string[] = []
     for (const folder of sourceFolders) {

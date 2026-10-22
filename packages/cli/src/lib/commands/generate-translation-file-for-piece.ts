@@ -1,9 +1,9 @@
 import { writeFile } from 'node:fs/promises';
 import chalk from 'chalk';
 import { Command } from 'commander';
-import { buildPackage, findPiece, findPieces } from '../utils/piece-utils';
+import { buildPackage, communityPiecePath, findPiece, findPieces } from '../utils/piece-utils';
 import { makeFolderRecursive, readPackageJson } from '../utils/files';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { exec } from '../utils/exec';
 import { pieceTranslation } from '@inboxfm-connect/pieces-framework';
 import { MAX_KEY_LENGTH_FOR_CORWDIN } from '@inboxfm-connect/shared';
@@ -64,6 +64,14 @@ const generateTranslationFileFromPiece = (piece: Record<string, unknown>) => { c
 
 
 
+type PieceMetadataRecord = {
+  _actions?: Record<string, unknown>
+  _triggers?: Record<string, unknown>
+  description?: string
+  displayName?: string
+  auth?: unknown
+}
+
 const generateTranslationFile = async (pieceName: string) => {
   const pieceRoot = await findPiece(pieceName)
   const packageJson = await readPackageJson(pieceRoot)
@@ -71,7 +79,14 @@ const generateTranslationFile = async (pieceName: string) => {
   try{
     await installDependencies(pieceRoot)
     const pieceFromModule = await findPieceInModule(pieceRoot);
-    const i18n = generateTranslationFileFromPiece({actions: (pieceFromModule as any)._actions, triggers: (pieceFromModule as any)._triggers, description: (pieceFromModule as any).description, displayName: (pieceFromModule as any).displayName, auth: (pieceFromModule as any).auth});
+    const pieceRecord = pieceFromModule as PieceMetadataRecord;
+    const i18n = generateTranslationFileFromPiece({
+      actions: pieceRecord._actions,
+      triggers: pieceRecord._triggers,
+      description: pieceRecord.description,
+      displayName: pieceRecord.displayName,
+      auth: pieceRecord.auth,
+    });
     const i18nFolder = join(pieceRoot, 'src', 'i18n')
     await makeFolderRecursive(i18nFolder);
     await writeFile(join(i18nFolder, 'translation.json'), JSON.stringify(i18n, null, 2));
@@ -93,8 +108,8 @@ export const generateTranslationFileForPieceCommand = new Command('generate-tran
   .requiredOption('--shard-index <shardIndex>', 'Zero-based shard index to process', (value) => parseInt(value, 10))
   .requiredOption('--shard-total <shardTotal>', 'Total number of shards', (value) => parseInt(value, 10))
   .action(async ({shardIndex, shardTotal}: { shardIndex: number; shardTotal: number }) => {
-    const piecesDirectory = join(process.cwd(), 'packages', 'pieces', 'community')
-    const pieces = (await findPieces(piecesDirectory)).map(piece => piece.split('/').pop());
+    const piecesDirectory = communityPiecePath()
+    const pieces = (await findPieces(piecesDirectory)).map(piece => basename(piece));
     let totalTime = 0
     let indexAcrossAllPieces = 0
     for (const piece of pieces) {

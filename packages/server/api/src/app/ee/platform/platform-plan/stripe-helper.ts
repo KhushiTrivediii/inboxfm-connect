@@ -1,4 +1,4 @@
-import { assertNotNullOrUndefined, isNil } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, assertNotNullOrUndefined, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
 import { apDayjs } from '@inboxfm-connect/server-utils'
 import { ApEdition, UserWithMetaInformation } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
@@ -8,7 +8,7 @@ import { AppSystemProp } from '../../../helper/system/system-props'
 import { ACTIVE_FLOW_PRICE_ID, platformPlanService } from './platform-plan.service'
 
 export const stripeWebhookSecret = system.get(AppSystemProp.STRIPE_WEBHOOK_SECRET)!
-const frontendUrl = system.get(AppSystemProp.FRONTEND_URL)
+const getFrontendUrl = (): string => system.getOrThrow(AppSystemProp.FRONTEND_URL)
 
 export const stripeHelper = (log: FastifyBaseLogger) => ({
     getStripe: (): Stripe | undefined => {
@@ -31,6 +31,8 @@ export const stripeHelper = (log: FastifyBaseLogger) => ({
                 platformId,
                 customer_key: `ps_cus_key_${user.email}`,
             },
+        }, {
+            idempotencyKey: `platform-customer:${platformId}`,
         })
         return newCustomer.id
     },
@@ -41,7 +43,7 @@ export const stripeHelper = (log: FastifyBaseLogger) => ({
         const platformBilling = await platformPlanService(log).getOrCreateForPlatform(platformId)
         const session = await stripe.billingPortal.sessions.create({
             customer: platformBilling.stripeCustomerId!,
-            return_url: 'https://cloud.activepieces.com/platform/billing',
+            return_url: `${getFrontendUrl()}/settings`,
         })
 
         return session.url
@@ -61,8 +63,8 @@ export const stripeHelper = (log: FastifyBaseLogger) => ({
                 type: StripeCheckoutType.AI_CREDIT_AUTO_TOP_UP,
             },
 
-            success_url: `${frontendUrl}/platform/setup/billing/success?action=ai-credit-auto-topup`,
-            cancel_url: `${frontendUrl}/platform/setup/billing/error`,
+            success_url: `${getFrontendUrl()}/platform/setup/billing/success?action=ai-credit-auto-topup`,
+            cancel_url: `${getFrontendUrl()}/platform/setup/billing/error`,
         })
 
         return session.url!
@@ -158,8 +160,8 @@ export const stripeHelper = (log: FastifyBaseLogger) => ({
             },
             allow_promotion_codes: true,
             customer: customerId,
-            success_url: `${frontendUrl}/platform/setup/billing/success?action=ai-credit-payment`,
-            cancel_url: `${frontendUrl}/platform/setup/billing/error`,
+            success_url: `${getFrontendUrl()}/platform/setup/billing/success?action=ai-credit-payment`,
+            cancel_url: `${getFrontendUrl()}/platform/setup/billing/error`,
         })
         
         return session.url!
@@ -169,6 +171,23 @@ export const stripeHelper = (log: FastifyBaseLogger) => ({
         assertNotNullOrUndefined(stripe, 'Stripe is not configured')
 
         const { customerId, platformId, extraActiveFlows } = params
+
+        for await (const subscription of stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100 })) {
+            if (subscription.status !== 'canceled' && subscription.status !== 'incomplete_expired') {
+                throw new ActivepiecesError({
+                    code: ErrorCode.VALIDATION,
+                    params: { message: 'Manage the existing subscription in the billing portal' },
+                })
+            }
+        }
+
+        for await (const checkout of stripe.checkout.sessions.list({ customer: customerId, status: 'open', limit: 100 })) {
+            if (checkout.mode !== 'subscription') continue
+            const items = await stripe.checkout.sessions.listLineItems(checkout.id, { limit: 100 })
+            const matches = items.data.length === 1 && items.data[0]?.price?.id === ACTIVE_FLOW_PRICE_ID && items.data[0]?.quantity === extraActiveFlows
+            if (matches && !isNil(checkout.url)) return checkout.url
+            await stripe.checkout.sessions.expire(checkout.id)
+        }
 
         const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = []
 
@@ -190,8 +209,8 @@ export const stripeHelper = (log: FastifyBaseLogger) => ({
             },
             allow_promotion_codes: true,
             customer: customerId,
-            success_url: `${frontendUrl}/platform/setup/billing/success?action=create`,
-            cancel_url: `${frontendUrl}/platform/setup/billing/error`,
+            success_url: `${getFrontendUrl()}/settings?billing=success`,
+            cancel_url: `${getFrontendUrl()}/settings?billing=canceled`,
         })
         
         return session.url!

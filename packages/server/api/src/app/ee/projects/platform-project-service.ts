@@ -217,8 +217,14 @@ export const platformProjectService = (log: FastifyBaseLogger) => ({
     },
 
     async markForDeletion({ id, platformId }: DeleteProjectParams): Promise<void> {
-        const result = await projectRepo().softDelete({ id, platformId })
-        if (result.affected === 0) {
+        await projectRepo().softDelete({ id, platformId })
+        // softDelete's UpdateResult.affected is not populated by the PGLite driver,
+        // so the previous affected === 0 guard never fired there. Re-read the row
+        // (soft-deleted rows are excluded from find*): still finding it means the
+        // delete did not land, and the caller must hear ENTITY_NOT_FOUND instead of
+        // proceeding to schedule the hard-delete job for an active project.
+        const stillPresent = await projectRepo().findOneBy({ id, platformId })
+        if (!isNil(stillPresent)) {
             throw new ActivepiecesError({
                 code: ErrorCode.ENTITY_NOT_FOUND,
                 params: {

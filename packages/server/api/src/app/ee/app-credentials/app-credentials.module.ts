@@ -1,5 +1,5 @@
 import { SeekPage } from '@inboxfm-connect/core-utils'
-import { AppCredential, AppCredentialType, ListAppCredentialsRequest, PrincipalType, UpsertAppCredentialRequest } from '@inboxfm-connect/shared'
+import { AppCredential, AppCredentialType, ListAppCredentialsRequest, Permission, PrincipalType, UpsertAppCredentialRequest } from '@inboxfm-connect/shared'
 import { FastifyRequest } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
@@ -71,9 +71,19 @@ function censorClientSecret(
     return page
 }
 
+// Credential rows carry OAuth client ids and (server-side) secrets, so the list
+// route requires a project member with READ_APP_CONNECTION on the projectId in
+// the query — not an anonymous enumeration surface (issue #358).
 const ListCredsRequest = {
     config: {
-        security: securityAccess.public(),
+        security: securityAccess.project(
+            [PrincipalType.USER, PrincipalType.SERVICE],
+            Permission.READ_APP_CONNECTION,
+            {
+                type: ProjectResourceType.QUERY,
+                queryKey: 'projectId',
+            },
+        ),
     },
     schema: {
         querystring: ListAppCredentialsRequest,

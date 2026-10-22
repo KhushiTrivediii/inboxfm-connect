@@ -145,6 +145,42 @@ describe('Action runner', () => {
     expect(container.textContent).toContain('"doesNotExist" is not an action of Runner.')
   }, 15000)
 
+  it('does not auto-select an errored connection when no healthy one exists', async () => {
+    stubApi([
+      {
+        match: (url) => url.pathname === '/api/v1/integrations/runner',
+        respond: () => ({ status: 200, body: runnerMetadata() }),
+      },
+      {
+        match: (url) => url.pathname === '/api/v1/connections',
+        respond: () => ({
+          status: 200,
+          body: seekPage([githubConnection('conn_err_only', 'Broken Runner', { status: 'ERROR' })]),
+        }),
+      },
+      {
+        match: (url) => url.pathname === '/api/v1/integrations/options',
+        respond: () => ({ status: 200, body: { options: [] } }),
+      },
+    ])
+    const container = renderRunner()
+
+    await waitFor(() => container.querySelector('#prop-title') !== null)
+    // The picker renders the errored connection as a DISABLED option and shows
+    // the empty placeholder. Auto-select must not arm a credential the UI itself
+    // refuses to let the user pick.
+    await waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>('#action-connection-select')
+      return !!select && select.options.length > 1
+    })
+    const select = container.querySelector<HTMLSelectElement>('#action-connection-select')
+    expect(select?.value).toBe('')
+    const erroredOption = Array.from(select?.options ?? []).find(
+      (option) => option.value === 'conn_err_only'
+    )
+    expect(erroredOption?.disabled).toBe(true)
+  }, 15000)
+
   it('executes with correctly serialized values and renders the result', async () => {
     // The backend resolves the tenant from the request BODY for /v1/execute.
     apiClient.setProjectId('proj_runner_1')

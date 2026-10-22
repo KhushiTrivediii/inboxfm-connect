@@ -121,7 +121,7 @@ async function assertUserSession(log: FastifyBaseLogger, decoded: Principal | Pr
 }
 
 type GenerateEngineTokenParams = {
-    projectId: ProjectId
+    projectId: ProjectId | undefined
     jobId?: string
     platformId: PlatformId
 }

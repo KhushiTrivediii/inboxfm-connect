@@ -1,8 +1,9 @@
-import { isNil } from '@inboxfm-connect/core-utils'
-import { CreateScimGroupRequest, DefaultProjectRole, parseScimFilter, ProjectType, ReplaceScimGroupRequest, SCIM_GROUP_SCHEMA, SCIM_LIST_RESPONSE_SCHEMA, ScimError, ScimGroupMember, ScimGroupResource, ScimListResponse, ScimPatchRequest, UserStatus } from '@inboxfm-connect/shared'
+import { isNil, unique } from '@inboxfm-connect/core-utils'
+import { CreateScimGroupRequest, DefaultProjectRole, parseScimFilter, Project, ProjectType, ReplaceScimGroupRequest, SCIM_GROUP_SCHEMA, SCIM_LIST_RESPONSE_SCHEMA, ScimError, ScimGroupMember, ScimGroupResource, ScimListResponse, ScimPatchRequest, UserStatus, UserWithMetaInformation } from '@inboxfm-connect/shared'
 
 import { FastifyBaseLogger } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
+import { In } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
 import { system } from '../../helper/system/system'
 import { AppSystemProp } from '../../helper/system/system-props'
@@ -10,7 +11,7 @@ import { platformService } from '../../platform/platform.service'
 import { projectService } from '../../project/project-service'
 import { userService } from '../../user/user-service'
 import { platformProjectService } from '../projects/platform-project-service'
-import { ProjectMemberEntity } from '../projects/project-members/project-member.entity'
+import { ProjectMemberEntity, ProjectMemberSchema } from '../projects/project-members/project-member.entity'
 import { projectMemberService } from '../projects/project-members/project-member.service'
 
 const projectMemberRepo = repoFactory(ProjectMemberEntity)
@@ -131,12 +132,11 @@ export const scimGroupService = (log: FastifyBaseLogger) => ({
 
         const paginatedProjects = teamProjects.slice(startIndex - 1, startIndex - 1 + count)
 
-        const scimGroups: ScimGroupResource[] = await Promise.all(
-            paginatedProjects.map(async (project) => {
-                const members = await getProjectMembers(project.id, platformId, log)
-                return toScimGroupResource(project.id, project.displayName, project.externalId ?? undefined, members, project.created, project.updated)
-            }),
-        )
+        const membersByProjectId = await getProjectMembersForProjects(paginatedProjects, platformId, log)
+        const scimGroups: ScimGroupResource[] = paginatedProjects.map((project) => {
+            const members = membersByProjectId.get(project.id) ?? []
+            return toScimGroupResource(project.id, project.displayName, project.externalId ?? undefined, members, project.created, project.updated)
+        })
 
         return {
             schemas: [SCIM_LIST_RESPONSE_SCHEMA],
@@ -322,17 +322,49 @@ async function getProjectMembers(projectId: string, platformId: string, log: Fas
     const members = await projectMemberRepo().find({
         where: { projectId, platformId },
     })
+    const userMetaById = await getUserMetaByMemberId(members, log)
+    return toScimGroupMembers(members, userMetaById)
+}
 
-    return Promise.all(
-        members.map(async (member) => {
-            const userMeta = await userService(log).getMetaInformation({ id: member.userId })
+// Batches both queries (project members, user meta) across every project in the page instead of
+// running them once per project — a paginated SCIM group list would otherwise issue two extra
+// queries per returned group (previously two nested per-row loops: one query per project for its
+// members, then one query per member for its user meta).
+async function getProjectMembersForProjects(projects: Project[], platformId: string, log: FastifyBaseLogger): Promise<Map<string, ScimGroupMember[]>> {
+    if (projects.length === 0) {
+        return new Map()
+    }
+    const members = await projectMemberRepo().find({
+        where: { projectId: In(projects.map((project) => project.id)), platformId },
+    })
+    const userMetaById = await getUserMetaByMemberId(members, log)
+    const membersByProjectId = new Map<string, ScimGroupMember[]>()
+    for (const project of projects) {
+        const projectMembers = members.filter((member) => member.projectId === project.id)
+        membersByProjectId.set(project.id, toScimGroupMembers(projectMembers, userMetaById))
+    }
+    return membersByProjectId
+}
+
+async function getUserMetaByMemberId(members: ProjectMemberSchema[], log: FastifyBaseLogger): Promise<Map<string, UserWithMetaInformation>> {
+    const userIds = unique(members.map((member) => member.userId))
+    return userService(log).getMetaInformationBatch({ ids: userIds })
+}
+
+function toScimGroupMembers(members: ProjectMemberSchema[], userMetaById: Map<string, UserWithMetaInformation>): ScimGroupMember[] {
+    return members
+        .map((member): ScimGroupMember | null => {
+            const userMeta = userMetaById.get(member.userId)
+            if (isNil(userMeta)) {
+                return null
+            }
             return {
                 value: member.userId,
                 display: userMeta.email,
                 $ref: `/scim/v2/Users/${member.userId}`,
             }
-        }),
-    )
+        })
+        .filter((member): member is ScimGroupMember => !isNil(member))
 }
 
 function toScimGroupResource(

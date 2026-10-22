@@ -75,6 +75,45 @@ describe('OAuth App API', () => {
             // assert
             expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
         })
+
+        it('keeps the row id stable across re-upserts so the first upsert id stays addressable', async () => {
+            // arrange
+            const ctx = await createTestContext(app!)
+            const pieceName = 'upsert-id-' + faker.string.alphanumeric(8)
+
+            // act — first upsert creates the row
+            const first = await ctx.post('/v1/oauth-apps', {
+                pieceName,
+                clientId: 'client-a',
+                clientSecret: 'secret-a',
+            })
+            expect(first?.statusCode).toBe(StatusCodes.OK)
+            const firstBody = first?.json()
+
+            // re-upsert with new credentials must update the SAME row, not rotate its primary key
+            const second = await ctx.post('/v1/oauth-apps', {
+                pieceName,
+                clientId: 'client-b',
+                clientSecret: 'secret-b',
+            })
+            expect(second?.statusCode).toBe(StatusCodes.OK)
+            const secondBody = second?.json()
+
+            // assert — id stable + credentials updated
+            expect(secondBody.id).toBe(firstBody.id)
+            expect(secondBody.clientId).toBe('client-b')
+            expect(secondBody.clientSecret).toBeUndefined()
+
+            // the id returned by the FIRST upsert must still address the row:
+            // DELETE /v1/oauth-apps/:id resolves by (platformId, id) — a rotated
+            // id leaves the original id dangling with ENTITY_NOT_FOUND
+            const del = await ctx.delete('/v1/oauth-apps/' + firstBody.id)
+            expect(del?.statusCode).toBe(StatusCodes.OK)
+
+            const list = await ctx.get('/v1/oauth-apps')
+            const listedPieceNames = list?.json().data.map((row: { pieceName: string }) => row.pieceName)
+            expect(listedPieceNames).not.toContain(pieceName)
+        })
     })
 
     describe('Delete OAuth App', () => {

@@ -2,10 +2,19 @@ import { QueryCache, QueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { ApiClientError } from '../api/client'
 
+declare module '@tanstack/react-query' {
+  interface Register {
+    queryMeta: {
+      showErrorDialog?: boolean
+      showErrorToast?: boolean
+    }
+  }
+}
+
 export const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error, query) => {
-      if (query.meta?.showErrorToast) {
+      if (query.meta?.showErrorDialog || query.meta?.showErrorToast) {
         const message =
           error instanceof ApiClientError
             ? error.message
