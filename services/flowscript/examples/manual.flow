@@ -11,7 +11,7 @@ steps:
     kind: transform
     config:
       value:
-        message: "Hello from FlowScript"
+        message: Hello from FlowScript
         name:
           $ref: input.name
     dependsOn: []

@@ -65,7 +65,7 @@ Acceptance: cross-project tests pass; unauthenticated requests fail; service is 
 
 ## Phase 6: developer and operations UX
 
-- Finish CLI: init, fmt, lint, test, run, publish, deploy, rollback, triggers, runs and logs.
+- CLI core commands: init, fmt, lint, test, run (complete with local mocked adapter support); publish, deploy, rollback, triggers, runs, logs.
 - Add local mocked adapter using same IR contract as hosted workers.
 - Add dashboard operations for deployments, triggers, run timeline, logs and failed-run replay.
 - Add metrics/traces for queue lag, trigger lag, run latency, error rates and usage.

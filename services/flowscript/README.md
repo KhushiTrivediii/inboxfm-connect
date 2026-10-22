@@ -68,13 +68,15 @@ bun run --cwd services/flowscript dev
 After building:
 
 ```sh
+node services/flowscript/dist/cli.js init my-flow [--out custom.flow] [--force]
+node services/flowscript/dist/cli.js fmt services/flowscript/examples/manual.flow [--check]
 node services/flowscript/dist/cli.js lint services/flowscript/examples/manual.flow
 node services/flowscript/dist/cli.js compile services/flowscript/examples/manual.flow
 node services/flowscript/dist/cli.js test services/flowscript/examples/manual.flow
 node services/flowscript/dist/cli.js run services/flowscript/examples/manual.flow --input input.json
 ```
 
-Use `--input path.json` to pass structured input. Local run refuses integration steps until the trusted runtime adapter is wired.
+Use `--input path.json` to pass structured input. Integration steps require either the hosted Connect runtime adapter or local --mock / --mock-integrations <file.json>.
 
 ## HTTP API
 
