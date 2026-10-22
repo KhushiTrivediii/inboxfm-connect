@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runCli, type CliIo } from './cli.js'
 
-function createMockIo(cwd: string): { io: CliIo; stdout: string[]; stderr: string[]; exitCode?: number } {
+function createMockIo(
+  cwd: string,
+  fetchFn?: typeof fetch,
+  env?: Record<string, string | undefined>,
+): { io: CliIo; stdout: string[]; stderr: string[]; exitCode?: number } {
   const stdout: string[] = []
   const stderr: string[] = []
   const io: CliIo = {
@@ -14,6 +18,8 @@ function createMockIo(cwd: string): { io: CliIo; stdout: string[]; stderr: strin
       ioResult.exitCode = code
     },
     cwd,
+    fetch: fetchFn,
+    env,
   }
   const ioResult = { io, stdout, stderr, exitCode: undefined as number | undefined }
   return ioResult
@@ -165,5 +171,86 @@ output:
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('publishes flow via API client', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'flow-cli-test-'))
+    try {
+      const flowPath = join(dir, 'pub.flow')
+      await writeFile(flowPath, `flow: pub-flow\nversion: 1\ntrigger:\n  kind: manual\nsteps: []\n`, 'utf8')
+
+      const mockFetch: typeof fetch = async (input, init) => {
+        expect(input.toString()).toContain('/v1/flows/publish')
+        const headers = init?.headers as Record<string, string>
+        expect(headers['x-project-id']).toBe('test-project')
+        return new Response(JSON.stringify({ id: 'ver_123', flow: 'pub-flow', version: 1 }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      const mock = createMockIo(dir, mockFetch, { FLOWSCRIPT_PROJECT_ID: 'test-project' })
+      await runCli(['publish', 'pub.flow'], mock.io)
+      expect(mock.exitCode).toBeUndefined()
+      expect(mock.stdout[0]).toContain('✓ Published flow "pub-flow" (version: 1, id: ver_123)')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('deploys flow via API client', async () => {
+    const mockFetch: typeof fetch = async (input, init) => {
+      expect(input.toString()).toContain('/v1/flows/my-flow/deploy')
+      const body = JSON.parse(String(init?.body)) as { versionId: string; environment: string }
+      expect(body.versionId).toBe('ver_abc')
+      expect(body.environment).toBe('staging')
+      return new Response(JSON.stringify({ deployed: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['deploy', 'my-flow', 'ver_abc', '--env', 'staging'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('✓ Deployed flow "my-flow" to staging')
+  })
+
+  it('lists runs via API client', async () => {
+    const mockFetch: typeof fetch = async (input) => {
+      expect(input.toString()).toContain('/v1/runs?flow=sample&limit=10')
+      return new Response(JSON.stringify({
+        runs: [
+          { id: 'run_1', flow: 'sample', environment: 'production', status: 'succeeded' },
+          { id: 'run_2', flow: 'sample', environment: 'production', status: 'failed' },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['runs', '--flow', 'sample', '--limit', '10'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('[SUCCEEDED] run_1 - flow: sample (env: production)')
+    expect(mock.stdout[1]).toContain('[FAILED] run_2 - flow: sample (env: production)')
+  })
+
+  it('cancels run via API client', async () => {
+    const mockFetch: typeof fetch = async (input, init) => {
+      expect(input.toString()).toContain('/v1/runs/run_target_123/cancel')
+      const body = JSON.parse(String(init?.body)) as { reason?: string }
+      expect(body.reason).toBe('user request')
+      return new Response(JSON.stringify({ cancelled: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['cancel', 'run_target_123', '--reason', 'user request'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('✓ Cancelled run run_target_123')
   })
 })

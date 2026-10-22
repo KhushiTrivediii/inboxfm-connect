@@ -6,33 +6,53 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { compileFlowSource, validateRunInput } from './compiler.js'
 import { executeFlowIR } from './runtime.js'
 
+function getOption(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag)
+  if (index >= 0 && args[index + 1]) {
+    return args[index + 1]
+  }
+  return undefined
+}
+
 export async function runCli(argv: string[], io: CliIo = {
   stdout: (msg: string) => console.log(msg),
   stderr: (msg: string) => console.error(msg),
   exit: (code: number) => process.exit(code),
   cwd: process.cwd(),
+  fetch: globalThis.fetch,
+  env: process.env,
 }): Promise<void> {
   const [command, file, ...args] = argv
-  if (!command || !file) {
+  if (!command) {
     io.stderr(`FlowScript CLI
   flow init <name> [--out <file.flow>] [--force]
   flow fmt <file.flow> [--check]
   flow lint <file.flow>
   flow compile <file.flow>
   flow test <file.flow> [--input <file.json>] [--mock] [--mock-integrations <file.json>]
-  flow run <file.flow> [--input <file.json>] [--mock] [--mock-integrations <file.json>]`)
+  flow run <file.flow> [--input <file.json>] [--mock] [--mock-integrations <file.json>]
+  flow publish <file.flow> [--api-url <url>] [--project-id <id>]
+  flow deploy <name> <versionId> [--env <environment>] [--api-url <url>] [--project-id <id>]
+  flow runs [--flow <name>] [--limit <n>] [--api-url <url>] [--project-id <id>]
+  flow logs <run-id> [--api-url <url>] [--project-id <id>]
+  flow cancel <run-id> [--reason <msg>] [--api-url <url>] [--project-id <id>]`)
     return io.exit(2)
   }
 
+  const fetchClient = io.fetch ?? globalThis.fetch
+  const envVars = io.env ?? process.env
+  const allArgs = argv.slice(1)
+  const apiUrl = getOption(allArgs, '--api-url') ?? envVars.FLOWSCRIPT_API_URL ?? 'http://localhost:8081'
+  const projectId = getOption(allArgs, '--project-id') ?? envVars.FLOWSCRIPT_PROJECT_ID ?? 'default-project'
+
   if (command === 'init') {
     const name = file
-    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name)) {
+    if (!name || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name)) {
       io.stderr(`ERROR: Invalid flow name "${name}". Names must match ^[a-zA-Z][a-zA-Z0-9_-]*$`)
       return io.exit(1)
     }
 
-    const outIndex = args.indexOf('--out')
-    const outPath = outIndex >= 0 && args[outIndex + 1] ? args[outIndex + 1] : `${name}.flow`
+    const outPath = getOption(args, '--out') ?? `${name}.flow`
     const resolvedOut = resolve(io.cwd, outPath)
     const force = args.includes('--force')
 
@@ -72,6 +92,10 @@ output:
   }
 
   if (command === 'fmt') {
+    if (!file) {
+      io.stderr('ERROR: File path required for fmt')
+      return io.exit(2)
+    }
     const targetPath = resolve(io.cwd, file)
     let source: string
     try {
@@ -108,6 +132,194 @@ output:
     return
   }
 
+  if (command === 'publish') {
+    if (!file) {
+      io.stderr('ERROR: Flow file path required for publish')
+      return io.exit(2)
+    }
+    let source: string
+    try {
+      source = await readFile(resolve(io.cwd, file), 'utf8')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Cannot read "${file}": ${msg}`)
+      return io.exit(1)
+    }
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/flows/publish`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-project-id': projectId,
+        },
+        body: JSON.stringify({ source }),
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Publish failed (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (isRecord(data) && typeof data.id === 'string' && typeof data.flow === 'string') {
+        io.stdout(`✓ Published flow "${data.flow}" (version: ${String(data.version)}, id: ${data.id})`)
+      } else {
+        io.stdout(JSON.stringify(data, null, 2))
+      }
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'deploy') {
+    const flowName = file
+    const versionId = args[0]
+    if (!flowName || !versionId) {
+      io.stderr('ERROR: flow deploy requires <name> and <versionId>')
+      return io.exit(2)
+    }
+    const environment = getOption(args, '--env') ?? 'production'
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/flows/${encodeURIComponent(flowName)}/deploy`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-project-id': projectId,
+        },
+        body: JSON.stringify({ versionId, environment }),
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Deploy failed (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      io.stdout(`✓ Deployed flow "${flowName}" to ${environment}`)
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'runs') {
+    const filterFlow = getOption(allArgs, '--flow') ?? (file && !file.startsWith('--') ? file : undefined)
+    const limit = getOption(allArgs, '--limit') ?? '20'
+    const query = new URLSearchParams()
+    if (filterFlow) query.set('flow', filterFlow)
+    query.set('limit', limit)
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/runs?${query.toString()}`, {
+        method: 'GET',
+        headers: { 'x-project-id': projectId },
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Failed to fetch runs (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (isRecord(data) && Array.isArray(data.runs)) {
+        if (data.runs.length === 0) {
+          io.stdout('No runs found.')
+          return
+        }
+        for (const run of data.runs) {
+          if (isRecord(run)) {
+            io.stdout(`[${String(run.status).toUpperCase()}] ${String(run.id)} - flow: ${String(run.flow)} (env: ${String(run.environment)})`)
+          }
+        }
+      } else {
+        io.stdout(JSON.stringify(data, null, 2))
+      }
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'logs') {
+    const runId = file
+    if (!runId) {
+      io.stderr('ERROR: flow logs requires <run-id>')
+      return io.exit(2)
+    }
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/runs/${encodeURIComponent(runId)}`, {
+        method: 'GET',
+        headers: { 'x-project-id': projectId },
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Failed to fetch run logs (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      io.stdout(JSON.stringify(data, null, 2))
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'cancel') {
+    const runId = file
+    if (!runId) {
+      io.stderr('ERROR: flow cancel requires <run-id>')
+      return io.exit(2)
+    }
+    const reason = getOption(args, '--reason')
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-project-id': projectId,
+        },
+        body: JSON.stringify({ reason }),
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Cancel failed (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      io.stdout(`✓ Cancelled run ${runId}`)
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (!file) {
+    io.stderr(`ERROR: File path required for ${command}`)
+    return io.exit(2)
+  }
+
   let source: string
   try {
     source = await readFile(resolve(io.cwd, file), 'utf8')
@@ -136,12 +348,7 @@ output:
   }
 
   if (command === 'test' || command === 'run') {
-    const inputIndex = args.indexOf('--input')
-    if (inputIndex >= 0 && !args[inputIndex + 1]) {
-      io.stderr('ERROR: --input flag requires a file path argument')
-      return io.exit(2)
-    }
-    const inputFile = inputIndex >= 0 ? args[inputIndex + 1] : undefined
+    const inputFile = getOption(args, '--input')
     let input: Record<string, unknown> = {}
     if (inputFile) {
       try {
@@ -167,8 +374,7 @@ output:
 
     const hasIntegration = compiled.ir.steps.some(step => step.kind === 'integration')
     const isMock = args.includes('--mock') || args.includes('--mock-integrations')
-    const mockFileIndex = args.indexOf('--mock-integrations')
-    const mockFile = mockFileIndex >= 0 ? args[mockFileIndex + 1] : undefined
+    const mockFile = getOption(args, '--mock-integrations')
 
     let mockData: Record<string, unknown> = {}
     if (mockFile) {
@@ -236,4 +442,6 @@ export type CliIo = {
   stderr: (msg: string) => void
   exit: (code: number) => void
   cwd: string
+  fetch?: typeof fetch
+  env?: Record<string, string | undefined>
 }
