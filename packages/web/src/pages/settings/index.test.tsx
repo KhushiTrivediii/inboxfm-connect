@@ -16,7 +16,7 @@ const PROJECT = testProject()
 function signIn({ user = testUser() }: { user?: User } = {}): void {
   apiClient.setToken('test-token')
   apiClient.setProjectId(PROJECT.id)
-  localStorage.setItem('ap-user', JSON.stringify(user))
+  sessionStorage.setItem('ap-user', JSON.stringify(user))
 }
 
 function renderSettingsPage(): HTMLElement {
@@ -46,6 +46,7 @@ describe('Settings page', () => {
 
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     signIn()
     vi.restoreAllMocks()
     assignSpy = vi.fn()
@@ -308,5 +309,53 @@ describe('Settings page', () => {
     await waitFor(() => container.textContent?.includes('Loading billing status...') === true)
     expect(container.textContent?.includes('Upgrade to Paid Tier')).toBe(false)
     expect(container.textContent?.includes('Manage in Stripe')).toBe(false)
+  })
+
+  it('renders neutral placeholders and dash fallbacks when project and user role are missing (#174)', async () => {
+    localStorage.clear()
+    sessionStorage.clear()
+    apiClient.setToken('test-token')
+    apiClient.setProjectId('')
+    sessionStorage.setItem('ap-user', JSON.stringify({ id: 'u_1', firstName: 'Dev' }))
+
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: { stripeBillingEnabled: false } }) },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('Developer Identity') === true)
+
+    // Should never fabricate 'InboxFM Main Project', 'proj_default', 'developer@inboxfm.local', or 'ADMIN'
+    expect(container.textContent).not.toContain('InboxFM Main Project')
+    expect(container.textContent).not.toContain('proj_default')
+    expect(container.textContent).not.toContain('developer@inboxfm.local')
+    expect(container.textContent).not.toContain('ADMIN')
+
+    const inputs = Array.from(container.querySelectorAll('input'))
+    const values = inputs.map((i) => i.value)
+    expect(values).not.toContain('InboxFM Main Project')
+    expect(values).not.toContain('proj_default')
+    expect(values).not.toContain('developer@inboxfm.local')
+    expect(values).not.toContain('ADMIN')
+    expect(values).toContain('—') // Role and project ID fallback
+
+    // Validate honest placeholders when fields are empty
+    expect(container.querySelector('input[placeholder="No project selected"]')).not.toBeNull()
+    expect(container.querySelector('input[placeholder="Not signed in"]')).not.toBeNull()
+  })
+
+  it('displays concrete tenant isolation policies without placebo action button (#174)', async () => {
+    stubApi([
+      { match: PROJECTS_MATCH, respond: () => ({ body: { data: [PROJECT] } }) },
+      { match: BILLING_INFO_MATCH, respond: () => ({ body: { stripeBillingEnabled: false } }) },
+    ])
+
+    const container = renderSettingsPage()
+    await waitFor(() => container.textContent?.includes('Security & Isolation') === true)
+
+    expect(container.textContent).toContain('isolated-vm sandbox')
+    expect(container.textContent).toContain('SafeHttp allowlist')
+    expect(container.textContent).not.toContain('Inspect Security Policies')
   })
 })

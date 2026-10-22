@@ -4,6 +4,7 @@ import { FastifyBaseLogger } from 'fastify'
 import { In, IsNull } from 'typeorm'
 import { userIdentityService } from '../authentication/user-identity/user-identity-service'
 import { repoFactory } from '../core/db/repo-factory'
+import { distributedLock } from '../database/redis-connections'
 import { projectMemberService } from '../ee/projects/project-members/project-member.service'
 import { projectRoleRepo, projectRoleService } from '../ee/projects/project-role/project-role.service'
 import { domainHelper } from '../helper/domain-helper'
@@ -18,6 +19,89 @@ import { userService } from '../user/user-service'
 import { UserInvitationEntity } from './user-invitation.entity'
 
 const repo = repoFactory(UserInvitationEntity)
+
+// Serialize overlapping create() calls for the same natural key. The previous
+// shape was a single repo().upsert() with conflict paths (email, platformId,
+// projectId), which fails two ways:
+//   1. PLATFORM invitations store projectId = NULL, and a Postgres unique index
+//      never matches on NULL - ON CONFLICT cannot fire, so every re-invite
+//      INSERTED a duplicate row (each one sends another email; deleting one
+//      leaves the others alive).
+//   2. TypeORM's DO UPDATE column set is derived from the entity minus the
+//      conflict paths, so it included the fresh id: on the paths where the
+//      conflict DID fire (PROJECT invitations), the row's primary key was
+//      rotated to the new id, stranding every invitation link already sent
+//      (the JWT embeds the old id and the row is fetched by it).
+// resolve-then-act under a lock (the app-connection upsert pattern) keeps the
+// existing row and its id stable on re-invite. The unique index stays as the
+// final guard: a lock-miss loser that races the winner's insert loses its own
+// insert and re-reads the winner's row.
+function buildInvitationUpsertLockKey({ email, platformId, projectId }: { email: string, platformId: string, projectId: string | null }): string {
+    return ['user-invitation', 'upsert', platformId, email.toLowerCase().trim(), isNil(projectId) ? 'no-project' : projectId].join(':')
+}
+
+async function runUpsertExclusiveOrWithoutLock<T>({ email, platformId, projectId, fn, log }: {
+    email: string
+    platformId: string
+    projectId: string | null
+    fn: (params: { lockAcquired: boolean }) => Promise<T>
+    log: FastifyBaseLogger
+}): Promise<T> {
+    const key = buildInvitationUpsertLockKey({ email, platformId, projectId })
+    let fnSettled = false
+    try {
+        return await distributedLock(log).runExclusive({
+            key,
+            timeoutInSeconds: 60,
+            fn: async () => {
+                try {
+                    return await fn({ lockAcquired: true })
+                }
+                finally {
+                    // Mark settled on EVERY exit path (throw AND success) so a
+                    // lock-infra error after a successful fn cannot fail open and
+                    // run fn a second time.
+                    fnSettled = true
+                }
+            },
+        })
+    }
+    catch (error) {
+        if (fnSettled) {
+            throw error
+        }
+        log.warn({ error, lockKey: key }, 'User invitation upsert lock unavailable - failing open')
+        return fn({ lockAcquired: false })
+    }
+}
+
+// The natural key of an invitation is (email, platformId, projectId), but the
+// email match must be case-insensitive: writes normalize the email to lowercase,
+// so mixed-case rows can only come from outside this service - a raw-equality
+// lookup would miss them and insert a logical duplicate. Same LOWER() shape the
+// service already uses in provisionUserInvitation / hasAnyAcceptedInvitations.
+async function findInvitationByNaturalKey({ email, platformId, projectId }: { email: string, platformId: string, projectId: string | null }): Promise<UserInvitation | null> {
+    const queryBuilder = repo()
+        .createQueryBuilder('user_invitation')
+        .where('LOWER("user_invitation"."email") = :email', { email: email.toLowerCase().trim() })
+        .andWhere('"user_invitation"."platformId" = :platformId', { platformId })
+    if (isNil(projectId)) {
+        // The row's projectId is NULL for PLATFORM invitations, so the lookup must
+        // query NULL explicitly - an equality on undefined never matches.
+        return queryBuilder.andWhere('"user_invitation"."projectId" IS NULL').getOne()
+    }
+    return queryBuilder.andWhere('"user_invitation"."projectId" = :projectId', { projectId }).getOne()
+}
+
+function isUniqueConstraintViolation(error: unknown): boolean {
+    // Postgres unique-violation driver code (SQLSTATE 23505), gated on the driver
+    // code the same way as the approved #460 helper: the two drivers pinned in
+    // this repo (pg 8.11.3, @electric-sql/pglite 0.3.14) do not always surface
+    // the code on the same property, so match both the top-level error and the
+    // wrapped driverError. Any other failure must propagate raw.
+    const candidate = error as { code?: string, driverError?: { code?: string } } | null | undefined
+    return candidate?.code === '23505' || candidate?.driverError?.code === '23505'
+}
 
 export const userInvitationsService = (log: FastifyBaseLogger) => ({
     async getOneByInvitationTokenOrThrow(invitationToken: string): Promise<UserInvitation> {
@@ -110,25 +194,110 @@ export const userInvitationsService = (log: FastifyBaseLogger) => ({
         invitationExpirySeconds,
         status,
     }: CreateParams): Promise<UserInvitationWithLink> {
-        const id = apId()
-        await repo().upsert({
-            id,
-            status,
-            type,
-            email: email.toLowerCase().trim(),
-            platformId,
-            projectRoleId: type === InvitationType.PLATFORM ? undefined : projectRoleId!,
-            platformRole: type === InvitationType.PROJECT ? undefined : platformRole!,
-            projectId: type === InvitationType.PLATFORM ? undefined : projectId!,
-        }, ['email', 'platformId', 'projectId'])
+        const normalizedEmail = email.toLowerCase().trim()
+        // PLATFORM invitations carry no project; normalize to an explicit null so
+        // every natural-key lookup below queries NULL instead of skipping the
+        // column (an equality on undefined never matches a NULL row).
+        const naturalProjectId = type === InvitationType.PLATFORM ? null : projectId
+        // The route contract guarantees role payloads per type; null is the
+        // correct stored value for the other type's column (the natural key
+        // (email, platformId, projectId) pins the type of every row in it).
+        const platformRoleToUpdate = type === InvitationType.PLATFORM ? platformRole : null
+        const projectRoleIdToUpdate = type === InvitationType.PROJECT ? projectRoleId : null
 
-        const userInvitation = await this.getOneOrThrow({
-            id,
+        const userInvitation = await runUpsertExclusiveOrWithoutLock({
+            email: normalizedEmail,
             platformId,
+            projectId: naturalProjectId,
+            log,
+            fn: async ({ lockAcquired }) => {
+                const existing = await findInvitationByNaturalKey({ email: normalizedEmail, platformId, projectId: naturalProjectId })
+
+                if (!isNil(existing)) {
+                    // Re-invite: update the existing row IN PLACE. The id is never
+                    // touched, so every invitation link already emailed (the JWT
+                    // embeds this id) keeps resolving, and no duplicate row is
+                    // created. Re-read afterwards so the response and the
+                    // invitation email carry the fresh values, not the pre-update
+                    // snapshot.
+                    await repo().update(existing.id, {
+                        status,
+                        type,
+                        platformRole: platformRoleToUpdate,
+                        projectRoleId: projectRoleIdToUpdate,
+                        projectId: naturalProjectId,
+                    })
+                    return this.getOneOrThrow({ id: existing.id, platformId })
+                }
+
+                const id = apId()
+                try {
+                    await repo().save({
+                        id,
+                        status,
+                        type,
+                        email: normalizedEmail,
+                        platformId,
+                        projectRoleId: projectRoleIdToUpdate ?? undefined,
+                        platformRole: platformRoleToUpdate ?? undefined,
+                        projectId: naturalProjectId ?? undefined,
+                    })
+                }
+                catch (error) {
+                    // Lost a concurrent first-write race (lock miss): the unique
+                    // index picked the winner. Fall back to updating the winner's
+                    // row in place so both callers converge on one row.
+                    if (isUniqueConstraintViolation(error)) {
+                        const winner = await findInvitationByNaturalKey({ email: normalizedEmail, platformId, projectId: naturalProjectId })
+                        if (!isNil(winner)) {
+                            await repo().update(winner.id, {
+                                status,
+                                type,
+                                platformRole: platformRoleToUpdate,
+                                projectRoleId: projectRoleIdToUpdate,
+                                projectId: naturalProjectId,
+                            })
+                            return this.getOneOrThrow({ id: winner.id, platformId })
+                        }
+                    }
+                    throw error
+                }
+
+                // Fail-open convergence: when the lock was NOT acquired (Redis
+                // unavailable), two concurrent creates can both reach this insert
+                // for a PLATFORM invitation - the NULL projectId means the unique
+                // index never arbitrates, so both inserts succeed. Prune to the
+                // earliest row so the pair converges exactly like the locked path.
+                if (!lockAcquired && isNil(naturalProjectId)) {
+                    const duplicates = await repo()
+                        .createQueryBuilder('user_invitation')
+                        .where('LOWER("user_invitation"."email") = :email', { email: normalizedEmail })
+                        .andWhere('"user_invitation"."platformId" = :platformId', { platformId })
+                        .andWhere('"user_invitation"."projectId" IS NULL')
+                        .orderBy('"user_invitation"."created"', 'ASC')
+                        .addOrderBy('"user_invitation"."id"', 'ASC')
+                        .getMany()
+                    if (duplicates.length > 1) {
+                        const [keep, ...fold] = duplicates
+                        await repo().delete(fold.map((row) => row.id))
+                        await repo().update(keep.id, {
+                            status,
+                            type,
+                            platformRole: platformRoleToUpdate,
+                            projectRoleId: projectRoleIdToUpdate,
+                            projectId: naturalProjectId,
+                        })
+                        return this.getOneOrThrow({ id: keep.id, platformId })
+                    }
+                }
+
+                return this.getOneOrThrow({ id, platformId })
+            },
         })
+
         if (status === InvitationStatus.ACCEPTED) {
             await this.accept({
-                invitationId: id,
+                invitationId: userInvitation.id,
                 platformId,
             })
             if (smtpEmailSender(log).isSmtpConfigured()) {
@@ -236,7 +405,6 @@ export const userInvitationsService = (log: FastifyBaseLogger) => ({
     },
 })
 
-
 async function generateInvitationLink(userInvitation: UserInvitation, expireyInSeconds: number): Promise<string> {
     const token = await jwtUtils.sign({
         payload: {
@@ -313,7 +481,6 @@ type CreateParams = {
     projectRoleId: string | null
     invitationExpirySeconds: number
 }
-
 
 
 type GetOneByPlatformIdAndEmailParams = {

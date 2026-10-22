@@ -90,10 +90,10 @@ function createSmtpTransport(): Transporter {
     })
 }
 
-function buildEmailSubject({ template, vars }: BuildEmailSubjectParams): string {
+export function buildEmailSubject({ template, vars }: BuildEmailSubjectParams): string {
     switch (template) {
         case 'invitation-email':
-            return `You have been invited to "${vars.projectName}" project ✉️`
+            return `You have been invited to the "${vars.projectName}" project ✉️`
         case 'project-member-added':
             return `Welcome to ${vars.projectName} 🎉`
     }

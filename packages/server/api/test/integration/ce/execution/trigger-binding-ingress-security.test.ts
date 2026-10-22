@@ -159,6 +159,31 @@ describe('POST /v1/trigger-bindings/:id/run — public ingress security', () => 
         expect(created.every((e: { projectId: string }) => e.projectId === ctx.project.id)).toBe(true)
         expect(await executionsIn(ctx.project.id)).toHaveLength(3)
     })
+
+    it('hands the engine a webhookUrl derived from the configured public API URL without localhost literals (#159)', async () => {
+        const ctx = await createTestContext(app!)
+        const binding = await saveBinding(ctx, TriggerBindingStatus.ENABLED)
+        const spy = vi.spyOn(userInteractionWatcher, 'submitAndWaitForResponse').mockImplementation(async () => ({ output: [] }))
+
+        const response = await runUnauthenticated(binding.id)
+        expect(response.statusCode).toBe(StatusCodes.OK)
+
+        expect(spy).toHaveBeenCalledTimes(1)
+        const passedJobData = spy.mock.calls[0][0]
+        expect(typeof passedJobData.webhookUrl).toBe('string')
+        const webhookUrl = String(passedJobData.webhookUrl)
+        expect(webhookUrl).not.toContain('localhost:3000')
+        expect(webhookUrl).toContain(`/v1/trigger-bindings/${binding.id}/run`)
+
+        // Verify that the handed webhook URL resolves against the served fastify route (not 404)
+        const parsedUrl = new URL(webhookUrl)
+        const webhookResponse = await app!.inject({
+            method: 'POST',
+            url: parsedUrl.pathname,
+            payload: { message: 'verified-ingress' },
+        })
+        expect(webhookResponse.statusCode).toBe(StatusCodes.OK)
+    })
 })
 
 describe('Trigger binding tenant-scoped reads stay scoped', () => {

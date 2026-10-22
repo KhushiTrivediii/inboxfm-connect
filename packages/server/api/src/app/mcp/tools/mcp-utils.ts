@@ -1,6 +1,6 @@
 import { isNil, isObject, tryCatch } from '@inboxfm-connect/core-utils'
 import { AiMetadata, OutputSchema, OutputSchemaField, PieceMetadataModel, PiecePropertyMap, PropertyType } from '@inboxfm-connect/pieces-framework'
-import { BranchOperator, EngineResponse, EngineResponseStatus, FlowActionType, flowStructureUtil, McpServerType, McpToolResult, ProjectScopedMcpServer, singleValueConditions, WorkerJobType } from '@inboxfm-connect/shared'
+import { BranchOperator, FlowActionType, flowStructureUtil, McpServerType, McpToolResult, ProjectScopedMcpServer, singleValueConditions, WorkerJobType } from '@inboxfm-connect/shared'
 import type { RouterAction, Step } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { z } from 'zod'
@@ -606,10 +606,10 @@ async function executePropertyResolution({ pieceName, pieceVersion, actionOrTrig
     }
 
     const { data: result, error } = await tryCatch(() => withTimeout({
-        promise: userInteractionWatcher.submitAndWaitForResponse<EngineResponse<{
+        promise: userInteractionWatcher.submitAndWaitForResponse<{
             options: Array<{ label: string, value: unknown }> | PiecePropertyMap
             disabled?: boolean
-        }>>({
+        }>({
             jobType: WorkerJobType.EXECUTE_PROPERTY,
             platformId,
             projectId,
@@ -624,11 +624,11 @@ async function executePropertyResolution({ pieceName, pieceVersion, actionOrTrig
         ms: RESOLVE_TIMEOUT_MS,
     }))
 
-    if (error || result.status !== EngineResponseStatus.OK || isNil(result.response?.options)) {
+    if (error || isNil(result?.options)) {
         return { status: 'failed', message: error instanceof Error ? error.message : 'Could not resolve options' }
     }
 
-    const { options } = result.response
+    const { options } = result
     const optionsArray = extractOptionsArray(options)
     if (optionsArray !== null) {
         return {

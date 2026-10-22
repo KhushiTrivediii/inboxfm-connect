@@ -14,16 +14,17 @@
  * Usage:
  *   npx ts-node tools/scripts/migrate-custom-piece-to-turbo.ts [piece-path]
  *
- * If no path is provided, it scans packages/pieces/custom/ for all pieces.
+ * If no path is provided, it scans packages/integrations/custom/ for all pieces.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-const CUSTOM_PIECES_DIR = path.resolve(__dirname, '../../packages/pieces/custom');
+const CUSTOM_PIECES_DIR = path.resolve(__dirname, '../../packages/integrations/custom');
 
 function getRelativeRoot(pieceDir: string): string {
-  const piecesIndex = pieceDir.indexOf('/packages/pieces/');
+  const normalized = pieceDir.split(path.sep).join('/');
+  const piecesIndex = normalized.indexOf('/packages/integrations/');
   if (piecesIndex === -1) {
     throw new Error(`Unexpected piece directory structure: ${pieceDir}`);
   }

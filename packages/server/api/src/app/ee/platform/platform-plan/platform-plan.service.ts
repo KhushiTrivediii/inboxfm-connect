@@ -92,6 +92,8 @@ export const platformPlanService = (log: FastifyBaseLogger) => ({
         return isCloudPlanButNotEnterprise(platformPlan.plan)
     },
     async getUsage(platformId: string): Promise<PlatformUsage> {
+        // Always 0: this fork has no flow module, so there is nothing to count. See the
+        // note on `checkActiveFlowsExceededLimit` and #20.
         const activeFlowsCount = 0
         const aiCreditsUsage = await platformAiCreditsService(log).getUsage(platformId)
         return {
@@ -102,6 +104,10 @@ export const platformPlanService = (log: FastifyBaseLogger) => ({
             totalAiCreditsUsedThisMonth: aiCreditsUsage.usageMonthly,
         }
     },
+    // Vestigial in this fork: the visual flow builder was removed, so there is no flow
+    // module and no enable/publish path to call this from, and `activeFlows` is hardcoded
+    // to 0 above. Kept because the limit is still persisted and shown in the UI. Do not
+    // assume the active-flows quota is enforced — it is not. See #20.
     checkActiveFlowsExceededLimit: async (platformId: string, metric: PlatformUsageMetric): Promise<void> => {
         if (ApEdition.COMMUNITY === edition) {
             return

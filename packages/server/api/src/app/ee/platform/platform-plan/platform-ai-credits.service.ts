@@ -227,7 +227,7 @@ async function ensureActivepiecesProvider({ platformId }: { platformId: string }
         auth: await encryptUtils.encryptObject({}),
         config: {},
         provider: AIProviderName.ACTIVEPIECES,
-        displayName: 'Activepieces',
+        displayName: 'Inboxfm Connect',
         platformId,
         enabledForChat: !hasChatProvider,
     })

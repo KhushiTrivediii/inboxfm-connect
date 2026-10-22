@@ -31,7 +31,7 @@ export const myAppAuth = PieceAuth.SecretText({
 
 **Access in actions/triggers:** `context.auth.secret_text` (string).
 
-**Real example:** `packages/pieces/community/stripe/src/index.ts`
+**Real example:** `packages/integrations/community/stripe/src/index.ts`
 
 ---
 
@@ -81,7 +81,7 @@ createCustomApiCallAction({
 })
 ```
 
-**Real example:** `packages/pieces/community/github/src/index.ts`, `packages/pieces/community/zoho-campaigns/` (OAuth2 with extra `props`)
+**Real example:** `packages/integrations/community/github/src/index.ts`, `packages/integrations/community/zoho-campaigns/` (OAuth2 with extra `props`)
 
 ---
 
@@ -176,7 +176,7 @@ Inside `validate`, the callback receives the flat shape — `auth.base_url`, `au
 
 **Allowed prop types in CustomAuth:** ShortText, LongText, SecretText, Number, Checkbox, StaticDropdown, StaticMultiSelectDropdown, MarkDown.
 
-**Real example:** `packages/pieces/community/wordpress/src/index.ts`, `packages/pieces/community/mattermost/src/index.ts`
+**Real example:** `packages/integrations/community/wordpress/src/index.ts`, `packages/integrations/community/mattermost/src/index.ts`
 
 ---
 
@@ -230,7 +230,7 @@ async run(context) {
 }
 ```
 
-**Real example:** `packages/pieces/community/umami/src/lib/auth.ts`
+**Real example:** `packages/integrations/community/umami/src/lib/auth.ts`
 
 ---
 
@@ -248,4 +248,4 @@ When auth is `None`:
 - Do NOT reference `context.auth` in the `run` function
 - Dropdowns do NOT receive an `auth` parameter
 
-**Real example:** `packages/pieces/core/qrcode/src/index.ts`
+**Real example:** `packages/integrations/core/qrcode/src/index.ts`

@@ -91,5 +91,5 @@ function isValidUrl(value: string): boolean {
 
 const VALIDATE_TIMEOUT_MS = 15_000
 const MAX_RESPONSE_BYTES = 64 * 1024
-const MCP_CLIENT_INFO = { name: 'activepieces-validator', version: '1.0.0' }
+const MCP_CLIENT_INFO = { name: 'inboxfm-connect-validator', version: '1.0.0' }
 const GENERIC_ERROR = 'Could not validate MCP server. Check the URL, authentication, and that the server is reachable.'

@@ -101,8 +101,14 @@ export default function ActionDetailPage() {
     if (selectedConnectionId || connections.length === 0) {
       return
     }
+    // Only auto-select from the set ConnectionPicker itself allows — it renders
+    // ERROR connections as disabled "reconnect before use" options — preferring
+    // an ACTIVE one. When every connection is errored, leave the choice empty so
+    // the user is routed to reconnect instead of silently running against a
+    // broken credential.
+    const selectable = connections.filter((connection) => connection.status !== 'ERROR')
     const preferred =
-      connections.find((connection) => connection.status === 'ACTIVE') ?? connections[0]
+      selectable.find((connection) => connection.status === 'ACTIVE') ?? selectable[0]
     if (preferred) {
       setSelectedConnectionId(preferred.id)
     }

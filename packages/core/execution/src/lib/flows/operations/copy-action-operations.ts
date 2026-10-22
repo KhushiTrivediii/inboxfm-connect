@@ -9,10 +9,10 @@ export function _getActionsForCopy(selectedSteps: string[], flowVersion: FlowVer
         .filter((step) => flowStructureUtil.isAction(step.type))
     return actionsToCopy
         .filter(step => !actionsToCopy.filter(parent => parent.name !== step.name).some(parent => flowStructureUtil.isChildOf(parent, step.name)))
+        .sort((a, b) => allSteps.indexOf(a) - allSteps.indexOf(b))
         .map(step => {
             const clonedAction = JSON.parse(JSON.stringify(step))
             clonedAction.nextAction = undefined
             return clonedAction
-        })
-        .sort((a, b) => allSteps.indexOf(a) - allSteps.indexOf(b)) as FlowAction[]
+        }) as FlowAction[]
 }

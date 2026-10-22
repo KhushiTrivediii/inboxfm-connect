@@ -3,6 +3,8 @@ import { McpServerType, PopulatedMcpServer, TelemetryEventName } from '@inboxfm-
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
+import { buildExternalUserMcpServer } from '../../connect-mcp/connect-mcp-server-builder'
+import { connectMcpService } from '../../connect-mcp/connect-mcp.service'
 import { securityAccess } from '../../core/security/authorization/fastify-security'
 import { domainHelper } from '../../helper/domain-helper'
 import { rejectedPromiseHandler } from '../../helper/promise-handler'
@@ -11,6 +13,10 @@ import { mcpServerService } from '../mcp-service'
 import { mcpOAuthTokenService } from './token/mcp-oauth-token.service'
 
 export const mcpOAuthHttpController: FastifyPluginAsyncZod = async (app) => {
+    registerMcpEndpoint(app, McpServerType.PROJECT)
+}
+
+export const connectMcpHttpController: FastifyPluginAsyncZod = async (app) => {
     registerMcpEndpoint(app, McpServerType.PROJECT)
 }
 
@@ -52,6 +58,31 @@ function registerMcpEndpoint(app: Parameters<FastifyPluginAsyncZod>[0], scope: M
             return unauthorized({ req, reply, scope, message: 'Authorization: Bearer <token> required' })
         }
 
+        if (scope === McpServerType.PROJECT) {
+            const { data: externalUser } = await tryCatch(() => connectMcpService(req.log).verifyToken(token))
+            if (externalUser) {
+                const server = await buildExternalUserMcpServer({ externalUser, log: req.log })
+                const transport = new StreamableHTTPServerTransport({
+                    sessionIdGenerator: undefined,
+                })
+                reply.raw.on('close', async () => {
+                    // raw-stream 'close' handlers are not awaited by Node, so an
+                    // async body must guard itself or a transport/server close
+                    // failure becomes an unhandledRejection.
+                    try {
+                        await transport.close()
+                        await server.close()
+                    }
+                    catch (error) {
+                        req.log.error({ error }, '[MCP] Failed to close external-user MCP transport on response close')
+                    }
+                })
+                await server.connect(transport)
+                await transport.handleRequest(req.raw, reply.raw, req.body)
+                return
+            }
+        }
+
         const identity = await resolveIdentity({ token, scope, log: req.log })
         if (isNil(identity)) {
             return unauthorized({ req, reply, scope, message: 'Invalid or expired access token', invalidToken: true })
@@ -69,8 +100,14 @@ function registerMcpEndpoint(app: Parameters<FastifyPluginAsyncZod>[0], scope: M
         })
 
         reply.raw.on('close', async () => {
-            await transport.close()
-            await server.close()
+            // Guarded for the same reason as the external-user branch above.
+            try {
+                await transport.close()
+                await server.close()
+            }
+            catch (error) {
+                req.log.error({ error }, '[MCP] Failed to close MCP transport on response close')
+            }
         })
 
         await server.connect(transport)

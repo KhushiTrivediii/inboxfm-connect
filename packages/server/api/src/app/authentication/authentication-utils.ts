@@ -131,10 +131,15 @@ export const authenticationUtils = (log: FastifyBaseLogger) => ({
         if (!platform.plan.ssoEnabled) {
             return
         }
-        const emailDomain = email.split('@')[1]
+        // Email domains are case-insensitive: the identity lookup normalizes the
+        // address (lowercase), and assertEmailMatchesSsoDomain already compares
+        // lowercased - the allowlist must too, or a federated claim that preserves
+        // the user's chosen casing (User@GOODCORP.TEST) is rejected even though
+        // the same member signs in fine with the lowercase form.
+        const emailDomain = email.split('@')[1]?.toLowerCase() ?? ''
         const isAllowedDomaiin =
             !platform.enforceAllowedAuthDomains ||
-            platform.allowedAuthDomains.includes(emailDomain)
+            platform.allowedAuthDomains.some((allowed) => allowed.toLowerCase() === emailDomain)
 
         if (!isAllowedDomaiin) {
             throw new ActivepiecesError({

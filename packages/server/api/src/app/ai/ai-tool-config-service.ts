@@ -14,17 +14,48 @@ export const aiToolConfigService = (_log: FastifyBaseLogger) => ({
     },
 
     async upsert(platformId: PlatformId, request: CreateAiToolConfigRequest): Promise<void> {
-        const existing = await aiToolConfigRepo().findOneBy({ platformId, capability: request.capability })
+        // The previous find-then-save had a first-configure race: two concurrent
+        // POSTs for the same capability both read `existing = null` before either
+        // insert lands, so both save a fresh row and the loser of the unique
+        // index idx_ai_tool_config_platform_capability gets a raw driver error
+        // (23505 on Postgres / its PGLite equivalent) surfaced as a 500 on a
+        // platform-admin settings route. Building the upsert as a single
+        // INSERT ... ON CONFLICT DO UPDATE makes the unique index itself
+        // arbitrate: exactly one row is created, the loser converges into the
+        // winner's row, and no column outside the conflict target (notably id)
+        // is ever rewritten — same shape as the project-member and oauth-app
+        // upserts.
         const encryptedAuth = await encryptUtils.encryptObject(request.auth)
-        await aiToolConfigRepo().save({
-            id: existing?.id ?? apId(),
-            platformId,
-            capability: request.capability,
-            provider: request.provider,
-            auth: encryptedAuth,
-            config: request.config ?? null,
-            enabled: request.enabled ?? true,
-        })
+        // `config` joins the DO UPDATE column set only when the request carries
+        // one: the update() route treats an omitted config as "keep the stored
+        // value" (spreadIfDefined), and the upsert must not disagree - otherwise
+        // re-posting a capability just to flip `enabled` would silently erase the
+        // stored provider config, since EXCLUDED.config is null for a request
+        // that omitted it.
+        const overwriteColumns = isNil(request.config)
+            ? ['provider', 'auth', 'enabled']
+            : ['provider', 'auth', 'config', 'enabled']
+        await aiToolConfigRepo()
+            .createQueryBuilder()
+            .insert()
+            .into(AiToolConfigEntity)
+            .values({
+                id: apId(),
+                platformId,
+                capability: request.capability,
+                provider: request.provider,
+                auth: encryptedAuth,
+                // Nullable jsonb column: spreadIfDefined omits the key when
+                // absent so the column falls back to its NULL default instead
+                // of fighting the _QueryDeepPartialEntity union.
+                ...spreadIfDefined('config', request.config),
+                enabled: request.enabled ?? true,
+            })
+            .orUpdate(
+                overwriteColumns,
+                ['platformId', 'capability'],
+            )
+            .execute()
     },
 
     async update(platformId: PlatformId, id: string, request: UpdateAiToolConfigRequest): Promise<void> {

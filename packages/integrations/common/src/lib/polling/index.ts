@@ -69,6 +69,12 @@ export const pollingHelper = {
         if (isNil(lastEpochMilliSeconds)) {
           throw new Error("lastPoll doesn't exist in the store.");
         }
+        if (!Number.isFinite(lastEpochMilliSeconds)) {
+          // A NaN/Infinity cursor makes `epochMilliSeconds > lastPoll` false for
+          // every item, so the trigger would silently stop emitting forever.
+          // Treat a corrupted cursor like a missing one and fail loudly.
+          throw new Error("lastPoll is not a finite epoch in the store.");
+        }
         const items = await polling.items({
           store,
           auth,
@@ -76,12 +82,20 @@ export const pollingHelper = {
           lastFetchEpochMS: lastEpochMilliSeconds,
           server,
         });
-        const newLastEpochMilliSeconds = items.reduce(
+        // A non-finite epochMilliSeconds is invalid item data: folding it into
+        // the cursor via Math.max would store NaN/Infinity as lastPoll and kill
+        // every subsequent poll. Valid (finite) items keep their exact
+        // semantics: emitted iff epochMilliSeconds > lastPoll, cursor advanced
+        // to the newest valid epoch.
+        const validItems = items.filter((item) =>
+          Number.isFinite(item.epochMilliSeconds)
+        );
+        const newLastEpochMilliSeconds = validItems.reduce(
           (acc, item) => Math.max(acc, item.epochMilliSeconds),
           lastEpochMilliSeconds
         );
         await store.put('lastPoll', newLastEpochMilliSeconds);
-        return items
+        return validItems
           .filter((f) => f.epochMilliSeconds > lastEpochMilliSeconds)
           .map((item) => item.data);
       }

@@ -1,4 +1,15 @@
-import type { ConnectionsPage, CreateConnectSessionResponseContract, ExecuteRequestContract, IntegrationToolsResponse, ListConnectionsQueryContract, Tool, ToolContract, ToolInput, ToolInputContract } from './api-types'
+import type {
+    ConnectionsPage,
+    CreateConnectSessionResponseContract,
+    CreateMcpTokenResponseContract,
+    ExecuteRequestContract,
+    IntegrationToolsResponse,
+    ListConnectionsQueryContract,
+    Tool,
+    ToolContract,
+    ToolInput,
+    ToolInputContract,
+} from './api-types'
 import { ConnectError } from './errors'
 import { transport } from './transport'
 
@@ -28,6 +39,19 @@ export class InboxFM {
 
     async createConnectSession({ externalUserId, allowedPieceNames, expiresInSeconds, ...requestOptions }: CreateConnectSessionParams): Promise<CreateConnectSessionResult> {
         return this.request<CreateConnectSessionResult>('/v1/connect-sessions', {
+            method: 'POST',
+            body: {
+                projectId: this.projectId,
+                externalUserId,
+                allowedPieceNames,
+                expiresInSeconds,
+            },
+            ...requestOptions,
+        })
+    }
+
+    async createMcpToken({ externalUserId, allowedPieceNames, expiresInSeconds, ...requestOptions }: CreateMcpTokenParams): Promise<CreateMcpTokenResult> {
+        return this.request<CreateMcpTokenResult>('/v1/connect-mcp/token', {
             method: 'POST',
             body: {
                 projectId: this.projectId,
@@ -84,6 +108,42 @@ export class InboxFM {
         await this.request(`/v1/connections/${connectionId}`, {
             method: 'DELETE',
             retryable: true,
+            ...requestOptions,
+        })
+    }
+
+    async proxy({
+        externalUserId,
+        provider,
+        connectionId,
+        subdomain,
+        method = 'GET',
+        path,
+        headers,
+        query,
+        body,
+        timeoutMs,
+        idempotencyKey,
+        ...requestOptions
+    }: ConnectProxyParams): Promise<ConnectProxyResult> {
+        return this.request<ConnectProxyResult>('/v1/connect-proxy/request', {
+            method: 'POST',
+            body: {
+                projectId: this.projectId,
+                externalUserId,
+                provider,
+                connectionId,
+                subdomain,
+                method,
+                path,
+                headers,
+                query,
+                body,
+                timeoutMs,
+                idempotencyKey,
+            },
+            idempotencyKey,
+            timeoutMs,
             ...requestOptions,
         })
     }
@@ -157,6 +217,14 @@ export type CreateConnectSessionParams = {
 
 export type CreateConnectSessionResult = CreateConnectSessionResponseContract
 
+export type CreateMcpTokenParams = {
+    externalUserId: string
+    allowedPieceNames?: string[]
+    expiresInSeconds?: number
+} & ConnectRequestOptions
+
+export type CreateMcpTokenResult = CreateMcpTokenResponseContract
+
 export type ListConnectionsParams = {
     externalUserId: string
     pieceName?: string
@@ -174,3 +242,9 @@ export type ExecuteParams = Omit<ExecuteRequestContract, 'projectId'> & ConnectR
 export type DeleteConnectionParams = {
     connectionId: string
 } & ConnectRequestOptions
+
+export type ConnectProxyParams = Omit<import('./api-types').ConnectProxyRequest, 'projectId'> & ConnectRequestOptions
+
+export type ConnectProxyResult = import('./api-types').ConnectProxyResponse
+
+export type { ConnectProxyRequest, ConnectProxyResponse, ProxyHttpMethod } from './api-types'

@@ -107,12 +107,15 @@ export const emailService = (log: FastifyBaseLogger) => ({
             return
         }
 
+        // The OTP is a single-use bearer credential for password reset / email
+        // verification. Log the intent without the value and without the setup
+        // link (the link embeds the OTP) so application logs never carry a
+        // usable credential.
         log.info({
             email: userIdentity.email,
-            otp,
             identityId: userIdentity.id,
             type,
-        }, 'Sending OTP email')
+        }, '[emailService#sendOtp] sending OTP email')
 
         const frontendPath = {
             [OtpType.EMAIL_VERIFICATION]: 'verify-email',

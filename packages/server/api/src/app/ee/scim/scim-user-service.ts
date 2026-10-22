@@ -247,28 +247,52 @@ export const scimUserService = (log: FastifyBaseLogger) => ({
                 }
             }
             else if ( op === 'add') {
-                const path = operation.path as string
-                addOperationFields = addOperationFields ?? {}
+                // Providers spell the custom-attribute sub-attribute path both
+                // ways in the wild: RFC 7644 attribute notation (colon-separated)
+                // and a dotted variant, and attribute names are case-insensitive
+                // per RFC 7644 §2.1. Match any casing of either spelling, validate
+                // the role once, and ignore every other unknown add path per
+                // RFC 7644 §3.5.2 instead of falling through with an empty
+                // pending-fields object.
+                // RFC 7644 §3.5.2.1 allows omitting `path` when `value` is an
+                // object (the replace branch above handles that form), so an
+                // empty path must stay a no-op here instead of crashing.
+                const path = (operation.path ?? '').toLowerCase()
+                const platformRolePaths = [
+                    `${SCIM_CUSTOM_USER_ATTRIBUTES_SCHEMA}:platformRole`.toLowerCase(),
+                    `${SCIM_CUSTOM_USER_ATTRIBUTES_SCHEMA}.platformRole`.toLowerCase(),
+                ]
+                const isPlatformRolePath = platformRolePaths.includes(path)
 
-                if (path === `${SCIM_CUSTOM_USER_ATTRIBUTES_SCHEMA}.platformRole` && !isEnumValue(PlatformRole, operation.value as string)) {
-                    throw new Error(`Invalid platform role: ${operation.value}`)
+                if (isPlatformRolePath) {
+                    if (!isEnumValue(PlatformRole, operation.value as string)) {
+                        throw new ScimError(
+                            StatusCodes.BAD_REQUEST,
+                            `Invalid platform role: ${operation.value}`,
+                        )
+                    }
+                    addOperationFields = addOperationFields ?? {}
+                    addOperationFields['platformRole'] = operation.value as PlatformRole
                 }
-                switch (path) {
-                    case `${SCIM_CUSTOM_USER_ATTRIBUTES_SCHEMA}:platformRole`:
-                        addOperationFields['platformRole'] = operation.value as PlatformRole
-                        break
-                    case 'name.givenName':
-                        addOperationFields['firstName'] = operation.value as string
-                        break
-                    case 'name.familyName':
-                        addOperationFields['lastName'] = operation.value as string
-                        break
-                    case 'externalId':
-                        addOperationFields['externalId'] = operation.value as string
-                        break
-                    case 'active':
-                        addOperationFields['active'] = operation.value as boolean
-                        break
+                else {
+                    switch (path) {
+                        case 'name.givenname':
+                            addOperationFields = addOperationFields ?? {}
+                            addOperationFields['firstName'] = operation.value as string
+                            break
+                        case 'name.familyname':
+                            addOperationFields = addOperationFields ?? {}
+                            addOperationFields['lastName'] = operation.value as string
+                            break
+                        case 'externalid':
+                            addOperationFields = addOperationFields ?? {}
+                            addOperationFields['externalId'] = operation.value as string
+                            break
+                        case 'active':
+                            addOperationFields = addOperationFields ?? {}
+                            addOperationFields['active'] = operation.value as boolean
+                            break
+                    }
                 }
             }
         }

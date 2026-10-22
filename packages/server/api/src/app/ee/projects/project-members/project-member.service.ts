@@ -1,4 +1,4 @@
-import { ActivepiecesError, ApId, apId, Cursor, ErrorCode, isNil, Permission, PlatformId, ProjectId, ProjectRole, SeekPage, UserId } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, ApId, apId, assertNotNullOrUndefined, Cursor, ErrorCode, isNil, Permission, PlatformId, ProjectId, ProjectRole, SeekPage, UserId } from '@inboxfm-connect/core-utils'
 import { ApEdition, DefaultProjectRole, PlatformRole, ProjectMember, ProjectMemberId, ProjectMemberWithUser, UserStatus } from '@inboxfm-connect/shared'
 import dayjs from 'dayjs'
 import { FastifyBaseLogger } from 'fastify'
@@ -45,17 +45,30 @@ export const projectMemberService = (log: FastifyBaseLogger) => ({
             projectRoleId: projectRole.id,
         }
 
-        await repo().upsert(projectMember, [
-            'projectId',
-            'userId',
-            'platformId',
-        ])
+        // A concurrent first-write for the same (projectId, userId, platformId)
+        // already inserted the row between our findOneBy and here, so this
+        // insert hits the unique index. TypeORM 0.3.x `repo().upsert()` derives
+        // the DO UPDATE column set from the entity (all defined columns minus
+        // the conflict paths), which includes `id` — the loser's fresh id then
+        // OVERWRITES the winner's primary key, and both `findOneOrFail(id)`
+        // read-backs miss (phantom ids) -> EntityNotFoundError -> 500. Explicit
+        // orUpdate columns keep the winner's id in place; the natural-key
+        // read-back resolves both racing calls to the same surviving row.
+        await repo()
+            .createQueryBuilder()
+            .insert()
+            .into(ProjectMemberEntity)
+            .values(projectMember)
+            .orUpdate(['projectRoleId'], ['projectId', 'userId', 'platformId'])
+            .execute()
 
-        return repo().findOneOrFail({
-            where: {
-                id: projectMemberId,
-            },
+        const savedMember = await repo().findOneBy({
+            projectId,
+            userId,
+            platformId,
         })
+        assertNotNullOrUndefined(savedMember, 'savedMember')
+        return savedMember
     },
     async list(
         {

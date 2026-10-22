@@ -117,8 +117,8 @@ export const IntegrationMetadataSummary = z.object({
   ...IntegrationBase.shape,
   actions: z.number(),
   triggers: z.number(),
-  suggestedActions: z.optional(z.array(TriggerBase)),
-  suggestedTriggers: z.optional(z.array(ToolBase)),
+  suggestedActions: z.optional(z.array(ToolBase)),
+  suggestedTriggers: z.optional(z.array(TriggerBase)),
 })
 export type IntegrationMetadataSummary = Omit<IntegrationMetadata, "actions" | "triggers"> & {
   actions: number;

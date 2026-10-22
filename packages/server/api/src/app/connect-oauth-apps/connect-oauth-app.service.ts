@@ -8,16 +8,24 @@ const connectOAuthAppRepo = repoFactory<ConnectOAuthAppWithEncryptedSecret>(Conn
 
 export const connectOAuthAppService = {
     async upsert({ platformId, request }: { platformId: string, request: UpsertConnectOAuthAppRequest }): Promise<ConnectOAuthAppWithEncryptedSecret> {
-        await connectOAuthAppRepo().upsert(
-            {
+        // repo().upsert() derives the DO UPDATE column set from the entity
+        // (all defined columns minus the conflict paths), which includes the fresh
+        // apId() - every re-upsert OVERWRITES the row primary key. The id handed
+        // back by the previous upsert then dangles. Explicit orUpdate columns keep
+        // the existing id in place. Same fix as the EE twin in ee/oauth-apps.
+        await connectOAuthAppRepo()
+            .createQueryBuilder()
+            .insert()
+            .into(ConnectOAuthAppEntity)
+            .values({
                 id: apId(),
                 platformId,
                 pieceName: request.pieceName,
                 clientId: request.clientId,
                 clientSecret: await encryptUtils.encryptString(request.clientSecret),
-            },
-            ['platformId', 'pieceName'],
-        )
+            })
+            .orUpdate(['clientId', 'clientSecret'], ['platformId', 'pieceName'])
+            .execute()
         return connectOAuthAppRepo().findOneByOrFail({ platformId, pieceName: request.pieceName })
     },
 

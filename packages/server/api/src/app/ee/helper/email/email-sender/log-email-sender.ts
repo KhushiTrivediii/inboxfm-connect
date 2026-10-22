@@ -7,11 +7,15 @@ import { EmailSender } from './email-sender'
 export const logEmailSender = (log: FastifyBaseLogger): EmailSender => {
     return {
         async send({ emails, platformId, templateData, replyTo }) {
+            // templateData.vars carries setup links that embed one-time
+            // credentials (e.g. ?otpcode=...) for verify-email /
+            // reset-password mails. Log the template name only, mirroring
+            // smtpEmailSender#send.
             log.debug({
                 name: 'LogEmailSender#send',
                 emails,
                 platform: { id: platformId },
-                templateData,
+                template: templateData.name,
                 ...(replyTo ? { replyTo } : {}),
             })
         },

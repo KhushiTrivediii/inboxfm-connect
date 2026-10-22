@@ -137,6 +137,38 @@ describe('Signing Key API', () => {
             expect(responseBody.publicKey).toBe(mockSigningKey.publicKey)
             expect(responseBody.algorithm).toBe(mockSigningKey.algorithm)
         })
+
+        it('Returns 404 when the id belongs to another platform (#375)', async () => {
+            // arrange — two separate platforms, each with an owner
+            const setupA = await setupEnabledPlatform()
+            const setupB = await setupEnabledPlatform()
+
+            // Platform A owns the signing key
+            const mockSigningKey = createMockSigningKey({
+                platformId: setupA.mockPlatform.id,
+            })
+            await db.save('signing_key', mockSigningKey)
+
+            // Platform B's owner asks for A's key by raw id
+            const testToken = await generateMockToken({
+                type: PrincipalType.USER,
+                id: setupB.mockOwner.id,
+
+                platform: { id: setupB.mockPlatform.id },
+            })
+
+            // act
+            const response = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/signing-keys/${mockSigningKey.id}`,
+                headers: {
+                    authorization: `Bearer ${testToken}`,
+                },
+            })
+
+            // assert — cross-tenant read must not succeed
+            expect(response?.statusCode).toBe(StatusCodes.NOT_FOUND)
+        })
     })
 
     describe('Delete Signing Key endpoint', () => {

@@ -51,17 +51,22 @@ export function insertAt<T>(array: T[], index: number, item: T): T[] {
 }
 
 export function debounce<T>(func: (...args: T[]) => void, wait: number): (key?: string, ...args: T[]) => void {
-    let timeout: NodeJS.Timeout
-    let currentKey: string | undefined
+    // One pending timer per key. A single shared timer variable cannot express
+    // "restart only the pending call for THIS key": after a different key is
+    // scheduled, the previous key's timer is no longer reachable for clearing,
+    // so returning to that key fires both the superseded and the latest call.
+    const pendingTimers = new Map<string, NodeJS.Timeout>()
     return function (key?: string, ...args: T[]) {
-        const later = () => {
+        const timerKey = key ?? ''
+        const existingTimer = pendingTimers.get(timerKey)
+        if (existingTimer) {
+            clearTimeout(existingTimer)
+        }
+        const timeout = setTimeout(() => {
+            pendingTimers.delete(timerKey)
             func(...args)
-        }
-        if (currentKey === key) {
-            clearTimeout(timeout)
-        }
-        currentKey = key
-        timeout = setTimeout(later, wait)
+        }, wait)
+        pendingTimers.set(timerKey, timeout)
     }
 }
 
@@ -146,6 +151,12 @@ export function pickBy<T extends Record<string, unknown>>(
 
 export function chunk<T>(records: T[], size: number) {
     const chunks: T[][] = []
+    // Guard against a non-positive or non-finite size: the loop below advances
+    // by `size`, so 0 would spin forever (blocking the event loop) and a
+    // negative size walks the index backwards, also forever.
+    if (!Number.isFinite(size) || size < 1) {
+        return chunks
+    }
     for (let i = 0; i < records.length; i += size) {
         chunks.push(records.slice(i, i + size))
     }

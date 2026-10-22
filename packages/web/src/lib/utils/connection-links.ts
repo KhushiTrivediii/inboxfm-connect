@@ -4,7 +4,8 @@ interface NewConnectionHrefParams {
 
 interface ReconnectHrefParams {
   pieceName: string
-  externalId?: string
+  /** The reconnect flow keys on externalId — without it the page degrades to creating a new connection. */
+  externalId: string
   displayName?: string
 }
 

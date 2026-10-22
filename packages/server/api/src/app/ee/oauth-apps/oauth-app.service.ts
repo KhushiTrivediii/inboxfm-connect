@@ -16,15 +16,27 @@ export const oauthAppService = {
         platformId: string
         request: UpsertOAuth2AppRequest
     }): Promise<OAuthApp> {
-        await oauthRepo().upsert(
-            {
+        // repo().upsert() derives the DO UPDATE column set from the entity
+        // (all defined columns minus the conflict paths), which includes the
+        // fresh apId() — every re-upsert OVERWRITES the row primary key. The
+        // id returned by the first upsert then dangles: DELETE
+        // /v1/oauth-apps/:id resolves by (platformId, id) and platform OAuth2
+        // claim/refresh lookups can race mid-rotation. Explicit orUpdate
+        // columns keep the existing id in place and the natural-key read-back
+        // returns the surviving row (same shape as the project-member upsert).
+        await oauthRepo()
+            .createQueryBuilder()
+            .insert()
+            .into(OAuthAppEntity)
+            .values({
                 platformId,
-                ...request,
+                pieceName: request.pieceName,
+                clientId: request.clientId,
                 clientSecret: await encryptUtils.encryptString(request.clientSecret),
                 id: apId(),
-            },
-            ['platformId', 'pieceName'],
-        )
+            })
+            .orUpdate(['clientId', 'clientSecret'], ['platformId', 'pieceName'])
+            .execute()
         const connection = await oauthRepo().findOneByOrFail({
             platformId,
             pieceName: request.pieceName,

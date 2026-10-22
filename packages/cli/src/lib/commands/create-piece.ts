@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { mkdir, readdir, writeFile } from 'fs/promises';
 import inquirer from 'inquirer';
 import path from 'node:path';
+import { piecesPath } from '../utils/piece-utils';
 
 const validatePieceName = async (pieceName: string) => {
   console.log(chalk.yellow('Validating piece name....'));
@@ -31,7 +32,7 @@ const validatePackageName = async (packageName: string) => {
 };
 
 const checkIfPieceExists = async (pieceName: string, pieceType: string) => {
-  const piecePath = path.resolve('packages', 'pieces', pieceType, pieceName);
+  const piecePath = path.resolve(piecesPath(), pieceType, pieceName);
   try {
     await readdir(piecePath);
     console.log(chalk.red(`🚨 Piece already exists at ${piecePath}`));
@@ -50,7 +51,7 @@ const scaffoldPiece = async (
   packageName: string,
   pieceType: string
 ) => {
-  const baseDir = path.resolve('packages', 'pieces', pieceType, pieceName);
+  const baseDir = path.resolve(piecesPath(), pieceType, pieceName);
   const srcDir = path.join(baseDir, 'src');
   const libDir = path.join(srcDir, 'lib');
   const i18nDir = path.join(srcDir, 'i18n');
@@ -199,7 +200,7 @@ export const createPiece = async (
   console.log(chalk.green('✨  Done!'));
   console.log(
     chalk.yellow(
-      `The piece has been generated at: packages/pieces/${pieceType}/${pieceName}`
+      `The piece has been generated at: packages/integrations/${pieceType}/${pieceName}`
     )
   );
 };
@@ -232,6 +233,8 @@ export const createPieceCommand = new Command('create')
     ];
 
     const answers = await inquirer.prompt(questions);
-    createPiece(answers.pieceName, answers.packageName, answers.pieceType);
+    // Await so failures inside createPiece (write errors, invalid names) reject
+    // the commander action instead of becoming an unhandled rejection.
+    await createPiece(answers.pieceName, answers.packageName, answers.pieceType);
   });
 

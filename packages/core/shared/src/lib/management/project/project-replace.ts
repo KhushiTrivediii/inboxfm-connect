@@ -250,6 +250,11 @@ export const ProjectReplacePlan = z.object({
         connections: ConnectionPreflightReportSchema.optional(),
     }),
     connectionMappings: z.array(ConnectionMappingSchema).optional(),
+    // Provider remaps applied when the plan was generated. Carried in the artifact so an
+    // apply driven by `--plan-file` can see that a remap happened instead of silently
+    // writing destination agents against the source provider (#502). Signed alongside
+    // connectionMappings.
+    providerMappings: z.array(ProviderMappingSchema).optional(),
     changes: z.object({
         creates: z.array(ProjectReplaceDiffItem),
         updates: z.array(ProjectReplaceDiffItem),

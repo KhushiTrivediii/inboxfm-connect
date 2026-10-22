@@ -3,9 +3,19 @@ import { Scheduler, SchedulerTaskErrorContext } from './types'
 
 const activeTasks = new Map<string, cron.ScheduledTask | NodeJS.Timeout>()
 
-function handleError({ id, name, error, onError }: SchedulerTaskErrorContext & { onError?: (ctx: SchedulerTaskErrorContext) => void }): void {
+function handleError({ id, name, error, onError }: SchedulerTaskErrorContext & { onError?: (ctx: SchedulerTaskErrorContext) => Promise<void> | void }): void {
     if (onError) {
-        onError({ id, name, error })
+        try {
+            const res = onError({ id, name, error })
+            if (res instanceof Promise) {
+                res.catch((callbackError) => {
+                    console.error(`[LocalScheduler] Error in onError handler for task "${name}" (${id}):`, callbackError)
+                })
+            }
+        }
+        catch (callbackError) {
+            console.error(`[LocalScheduler] Error in onError handler for task "${name}" (${id}):`, callbackError)
+        }
     }
     else {
         console.error(`[LocalScheduler] Error in task "${name}" (${id}):`, error)

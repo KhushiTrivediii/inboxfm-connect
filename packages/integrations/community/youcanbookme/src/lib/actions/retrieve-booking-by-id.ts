@@ -46,7 +46,7 @@ export const retrieveBookingById = createAction({
       method: HttpMethod.GET,
       url: `https://api.youcanbook.me/v1/bookings/${bookingId}`,
       headers: {
-        Authorization: `Bearer ${auth}`,
+        Authorization: `Bearer ${auth.secret_text}`,
         'Content-Type': 'application/json',
       },
       queryParams,

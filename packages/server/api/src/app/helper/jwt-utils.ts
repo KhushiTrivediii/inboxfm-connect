@@ -24,12 +24,32 @@ export enum JwtAudience {
     MCP_OAUTH_ACCESS = 'MCP_OAUTH_ACCESS',
     MCP_OAUTH_AUTH_REQUEST = 'MCP_OAUTH_AUTH_REQUEST',
     FILE_READ = 'FILE_READ',
+    CONNECT_EXTERNAL_MCP = 'CONNECT_EXTERNAL_MCP',
 }
 
 const ONE_WEEK = 7 * 24 * 3600
 const KEY_ID = '1'
-const ISSUER = 'activepieces'
+// Legacy issuer inherited from upstream. Verification keeps accepting it during
+// the rebrand migration window so tokens minted before an issuer change (the
+// 100-year AP_WORKER_TOKENs, user sessions, signed file tokens) do not brick
+// on upgrade — see issue #373. The window closes automatically once the
+// configured issuer equals the legacy one.
+const LEGACY_ISSUER = 'activepieces'
 const ALGORITHM = JwtSignAlgorithm.HS256
+
+// AP_JWT_ISSUER picks the issuer for NEW tokens. Default is the legacy value,
+// so nothing changes until an operator opts in.
+const getIssuer = (): string => {
+    return system.get(AppSystemProp.JWT_ISSUER) ?? LEGACY_ISSUER
+}
+
+// Verification accepts the configured issuer plus the legacy issuer while the
+// two differ — the dual-issuer migration window from #373. When they match the
+// set collapses to a single value, closing the window.
+const getVerifyIssuers = (): string[] => {
+    const configured = getIssuer()
+    return configured === LEGACY_ISSUER ? [LEGACY_ISSUER] : [configured, LEGACY_ISSUER]
+}
 
 const redisType = redisConnections.getRedisType()
 
@@ -47,7 +67,7 @@ export const jwtUtils = {
             algorithm,
             keyid: keyId,
             expiresIn: expiresInSeconds,
-            issuer: issuer ?? ISSUER,
+            issuer: issuer ?? getIssuer(),
             ...spreadIfDefined('audience', audience),
         }
         return new Promise((resolve, reject) => {
@@ -87,7 +107,7 @@ export const jwtUtils = {
             `System property AP_${AppSystemProp.JWT_SECRET} must be defined`,
         )
     },
-    async decodeAndVerify<T>({ jwt, key, algorithm = ALGORITHM, issuer = ISSUER, audience }: VerifyParams): Promise<T> {
+    async decodeAndVerify<T>({ jwt, key, algorithm = ALGORITHM, issuer = getVerifyIssuers(), audience }: VerifyParams): Promise<T> {
         const verifyOptions: VerifyOptions = {
             algorithms: [algorithm],
             ...spreadIfDefined('issuer', issuer),

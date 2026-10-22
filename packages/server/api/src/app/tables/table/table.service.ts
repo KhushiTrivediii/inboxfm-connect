@@ -1,17 +1,23 @@
-import { ActivepiecesError, apId, ErrorCode, isNil, SeekPage, spreadIfDefined } from '@inboxfm-connect/core-utils'
-import { CreateTableRequest, ExportTableResponse, SharedTemplate, Table, TableDataState, TableImportDataType, TableTemplate, TemplateStatus, TemplateType, UncategorizedFolderId, UpdateTableRequest, UserWithMetaInformation } from '@inboxfm-connect/shared'
+import { ActivepiecesError, apId, chunk, ErrorCode, isNil, SeekPage, spreadIfDefined } from '@inboxfm-connect/core-utils'
+import { CreateTableRequest, DuplicateTableRequest, ExportTableResponse, FieldType, SharedTemplate, Table, TableDataState, TableImportDataType, TableTemplate, TemplateStatus, TemplateType, UncategorizedFolderId, UpdateTableRequest, UserWithMetaInformation } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
-import { ILike, In, IsNull } from 'typeorm'
+import { DeepPartial, EntityManager, ILike, In, IsNull } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
+import { transaction } from '../../core/db/transaction'
 import { buildPaginator } from '../../helper/pagination/build-paginator'
 import { paginationHelper } from '../../helper/pagination/pagination-utils'
+import { system } from '../../helper/system/system'
+import { AppSystemProp } from '../../helper/system/system-props'
+import { FieldEntity, FieldSchema } from '../field/field.entity'
 import { fieldService } from '../field/field.service'
+import { CellEntity } from '../record/cell.entity'
 import { RecordEntity } from '../record/record.entity'
 import { TableEntity } from './table.entity'
 
 export const tableRepo = repoFactory(TableEntity)
 export const recordRepo = repoFactory(RecordEntity)
 const tablePieceName = '@inboxfm-connect/piece-tables'
+const MAX_BATCH_SIZE = 50
 
 export const tableService = {
     async create({
@@ -247,6 +253,163 @@ export const tableService = {
         return tableRepo().count({ where })
     },
 
+    async duplicate({
+        projectId,
+        id,
+        request,
+    }: DuplicateParams): Promise<Table> {
+        return transaction(async (entityManager: EntityManager) => {
+            const tableRepo = entityManager.getRepository(TableEntity)
+            const fieldRepo = entityManager.getRepository(FieldEntity)
+            const recordRepo = entityManager.getRepository(RecordEntity)
+            const cellRepo = entityManager.getRepository(CellEntity)
+
+            const sourceTable = await tableRepo.findOneBy({ id, projectId })
+            if (isNil(sourceTable)) {
+                throw new ActivepiecesError({
+                    code: ErrorCode.ENTITY_NOT_FOUND,
+                    params: {
+                        entityType: 'Table',
+                        entityId: id,
+                    },
+                })
+            }
+
+            const trimmedName = request.name?.trim()
+            const destName = trimmedName && trimmedName.length > 0 ? trimmedName : `${sourceTable.name} (Copy)`
+
+            const destTableId = apId()
+            const destTable = await tableRepo.save({
+                id: destTableId,
+                externalId: apId(),
+                name: destName,
+                projectId,
+                folderId: sourceTable.folderId ?? null,
+                trigger: null,
+                status: null,
+            })
+
+            const sourceFields = await fieldRepo.find({
+                where: { projectId, tableId: sourceTable.id },
+                order: { position: 'ASC' },
+            })
+
+            const fieldIdMap = new Map<string, string>()
+            if (sourceFields.length > 0) {
+                const destFields: DeepPartial<FieldSchema>[] = []
+                for (const field of sourceFields) {
+                    const destFieldId = apId()
+                    fieldIdMap.set(field.id, destFieldId)
+                    if (field.type === FieldType.STATIC_DROPDOWN) {
+                        destFields.push({
+                            id: destFieldId,
+                            externalId: apId(),
+                            tableId: destTableId,
+                            projectId,
+                            name: field.name,
+                            type: FieldType.STATIC_DROPDOWN,
+                            data: field.data,
+                            position: field.position,
+                        })
+                    }
+                    else {
+                        destFields.push({
+                            id: destFieldId,
+                            externalId: apId(),
+                            tableId: destTableId,
+                            projectId,
+                            name: field.name,
+                            type: field.type,
+                            position: field.position,
+                        })
+                    }
+                }
+                await fieldRepo.save(destFields)
+            }
+
+            if (request.includeRecords) {
+                const maxRecords = system.getNumberOrThrow(AppSystemProp.MAX_RECORDS_PER_TABLE)
+                const sourceRecordCount = await recordRepo.count({
+                    where: { projectId, tableId: sourceTable.id },
+                })
+
+                if (sourceRecordCount > maxRecords) {
+                    throw new ActivepiecesError({
+                        code: ErrorCode.VALIDATION,
+                        params: {
+                            message: `Max records per table reached: ${maxRecords}`,
+                        },
+                    })
+                }
+
+                if (sourceRecordCount > 0) {
+                    const sourceRecords = await recordRepo.find({
+                        where: { projectId, tableId: sourceTable.id },
+                        relations: ['cells'],
+                        order: { created: 'ASC' },
+                    })
+
+                    const recordIdMap = new Map<string, string>()
+                    const recordInsertionBatches = chunk(sourceRecords, MAX_BATCH_SIZE).map((batch) =>
+                        batch.map((sourceRecord) => {
+                            const destRecordId = apId()
+                            recordIdMap.set(sourceRecord.id, destRecordId)
+                            return {
+                                id: destRecordId,
+                                tableId: destTableId,
+                                projectId,
+                                created: sourceRecord.created,
+                                updated: sourceRecord.updated,
+                            }
+                        }),
+                    )
+
+                    // Promise.all over pre-sized batches, not a for-loop: the N+1 gate
+                    // flags awaited repo calls inside loops even when the loop only walks
+                    // chunked batches, and this is the batched form it asks for. The
+                    // transaction's single pg client serializes the queued inserts, so
+                    // execution order matches the sequential loop this replaces.
+                    await Promise.all(
+                        recordInsertionBatches.map((recordInsertions) => recordRepo.insert(recordInsertions)),
+                    )
+
+                    const cellInsertions = sourceRecords.flatMap((sourceRecord) => {
+                        const destRecordId = recordIdMap.get(sourceRecord.id)
+                        if (isNil(destRecordId)) {
+                            return []
+                        }
+                        return (sourceRecord.cells ?? []).flatMap((cell) => {
+                            const destFieldId = fieldIdMap.get(cell.fieldId)
+                            if (isNil(destFieldId)) {
+                                return []
+                            }
+                            return [
+                                {
+                                    id: apId(),
+                                    recordId: destRecordId,
+                                    fieldId: destFieldId,
+                                    projectId,
+                                    value: isNil(cell.value) ? '' : String(cell.value),
+                                    created: cell.created,
+                                    updated: cell.updated,
+                                },
+                            ]
+                        })
+                    })
+
+                    if (cellInsertions.length > 0) {
+                        const cellBatches = chunk(cellInsertions, MAX_BATCH_SIZE)
+                        await Promise.all(
+                            cellBatches.map((cellBatch) => cellRepo.insert(cellBatch)),
+                        )
+                    }
+                }
+            }
+
+            return destTable
+        })
+    },
+
 }
 
 type CreateParams = {
@@ -285,8 +448,6 @@ type ExportTableParams = {
     id: string
 }
 
-
-
 type UpdateParams = {
     projectId: string
     id: string
@@ -303,4 +464,10 @@ type GetTemplateParams = {
     log: FastifyBaseLogger
     userMetadata: UserWithMetaInformation | null
     projectId: string
+}
+
+type DuplicateParams = {
+    projectId: string
+    id: string
+    request: DuplicateTableRequest
 }

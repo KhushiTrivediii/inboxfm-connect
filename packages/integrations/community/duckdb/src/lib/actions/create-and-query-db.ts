@@ -23,7 +23,8 @@ export const createAndQueryDB = createAction({
       properties: {
         name: Property.ShortText({
           displayName: 'Table Name',
-          description: 'Name of the table to create',
+          description:
+            'Name of the table to create. Must be a valid identifier: start with a letter or underscore, then only letters, digits, underscores, or dollar signs.',
           required: true,
         }),
         data: Property.Json({
@@ -72,6 +73,19 @@ More information on data types and accepted values:
 
     const dbTables: any[] = context.propsValue.tables ?? [];
     for (const dbTable of dbTables) {
+      const tableName = dbTable.name as string;
+      // The table name cannot be bound as a prepared-statement parameter, so
+      // it is interpolated into the CREATE TABLE statement below. Reject
+      // anything that is not a plain DuckDB identifier: a crafted name such
+      // as `t AS SELECT 1; DROP TABLE x; --` breaks out of the statement and
+      // runs arbitrary SQL inside the database (verified against
+      // @duckdb/node-api 1.4.3-r.2), while a name with spaces or punctuation
+      // dies as a raw parser error.
+      if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(tableName)) {
+        throw new Error(
+          `Invalid table name "${tableName}". Table names must start with a letter or underscore and may only contain letters, digits, underscores, and dollar signs.`
+        );
+      }
       const dbData = JSON.stringify(dbTable.data);
       let dbSchema = null;
 

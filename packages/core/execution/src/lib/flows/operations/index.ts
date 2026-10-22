@@ -1,14 +1,13 @@
 import { z } from 'zod'
-import { Nullable } from '@inboxfm-connect/core-utils'
-import { Metadata } from '@inboxfm-connect/core-utils'
-import { BranchCondition, CodeActionSchema, CodeActionSettings, FlowActionType, LoopOnItemsActionSchema, LoopOnItemsActionSettings, PieceActionSchema, PieceActionSettings, RouterActionSchema, RouterActionSettings } from '../actions/action'
+import { formErrors, isNil, Metadata, Nullable } from '@inboxfm-connect/core-utils'
+import { CodeActionSchema, CodeActionSettings, FlowActionType, LoopOnItemsActionSchema, LoopOnItemsActionSettings, PieceActionSchema, PieceActionSettings, RouterActionSchema, RouterActionSettings, ValidBranchCondition } from '../actions/action'
 import { FlowStatus } from '../flow'
 import { FlowVersion, FlowVersionState } from '../flow-version'
 import { Note } from '../note'
 import { SampleDataSetting, SaveSampleDataRequest } from '../sample-data'
 import { EmptyTrigger, FlowTrigger, FlowTriggerType, PieceTrigger, PieceTriggerSettings } from '../triggers/trigger'
 import { flowPieceUtil } from '../util/flow-piece-util'
-import { flowStructureUtil } from '../util/flow-structure-util'
+import { flowStructureUtil, Step } from '../util/flow-structure-util'
 import { _addAction } from './add-action'
 import { _addBranch } from './add-branch'
 import { _getActionsForCopy } from './copy-action-operations'
@@ -65,10 +64,16 @@ export const DeleteNoteRequest = z.object({
 })
 export const AddNoteRequest = Note.omit({ createdAt: true, updatedAt: true, ownerId: true })
 
+/**
+ * Request to add a branch to a router step.
+ * If `conditions` is omitted, the branch is initialized with an unconfigured `emptyCondition` draft template
+ * to allow interactive authoring in the builder.
+ * If `conditions` are explicitly supplied, they must satisfy `ValidBranchCondition` (non-empty values).
+ */
 export const AddBranchRequest = z.object({
     branchIndex: z.number(),
     stepName: z.string(),
-    conditions: z.array(z.array(BranchCondition)).optional(),
+    conditions: z.array(z.array(ValidBranchCondition)).optional(),
     branchName: z.string(),
 })
 export const MoveBranchRequest = z.object({
@@ -125,9 +130,110 @@ export const ImportFlowRequest = z.object({
     trigger: FlowTrigger,
     schemaVersion: Nullable(z.string()),
     notes: Nullable(z.array(Note)),
+}).superRefine((request, ctx) => {
+    for (const issue of collectBranchConditionIssues(request.trigger, ['trigger'])) {
+        ctx.addIssue({
+            code: 'custom',
+            message: issue.message,
+            path: [...issue.path],
+        })
+    }
 })
 
 export type ImportFlowRequest = z.infer<typeof ImportFlowRequest>
+
+type IssuePath = ReadonlyArray<string | number>
+
+type BranchConditionIssue = {
+    path: IssuePath
+    message: string
+}
+
+function collectIssueMessages(issues: readonly z.ZodIssue[]): string[] {
+    return issues.flatMap((issue) => {
+        if (issue.code === 'invalid_union') {
+            return issue.errors.flatMap((memberIssues) => collectIssueMessages(memberIssues))
+        }
+        return [issue.message]
+    })
+}
+
+function collectConditionIssue(condition: unknown, path: IssuePath): BranchConditionIssue[] {
+    const result = ValidBranchCondition.safeParse(condition)
+    if (result.success) {
+        return []
+    }
+    const messages = collectIssueMessages(result.error.issues)
+    return [{
+        path,
+        message: messages.includes(formErrors.required) ? formErrors.required : formErrors.invalidBranchCondition,
+    }]
+}
+
+function collectGroupIssues(group: unknown, path: IssuePath): BranchConditionIssue[] {
+    if (!Array.isArray(group)) {
+        return []
+    }
+    return group.flatMap((condition, conditionIndex) =>
+        collectConditionIssue(condition, [...path, conditionIndex]),
+    )
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+    return !isNil(value) && typeof value === 'object'
+}
+
+function collectBranchIssues(branch: unknown, path: IssuePath): BranchConditionIssue[] {
+    if (!isObjectRecord(branch)) {
+        return []
+    }
+    const conditions = branch['conditions']
+    if (!Array.isArray(conditions)) {
+        return []
+    }
+    return conditions.flatMap((group, groupIndex) =>
+        collectGroupIssues(group, [...path, 'conditions', groupIndex]),
+    )
+}
+
+function collectRouterIssues(step: Step, path: IssuePath): BranchConditionIssue[] {
+    if (step.type !== FlowActionType.ROUTER) {
+        return []
+    }
+    const branches = Array.isArray(step.settings?.branches) ? step.settings.branches : []
+    const children = Array.isArray(step.children) ? step.children : []
+    return [
+        ...branches.flatMap((branch, branchIndex) =>
+            collectBranchIssues(branch, [...path, 'settings', 'branches', branchIndex]),
+        ),
+        ...children.flatMap((child, childIndex) =>
+            collectBranchConditionIssues(child, [...path, 'children', childIndex]),
+        ),
+    ]
+}
+
+function collectBranchConditionIssues(step: Step | undefined | null, path: IssuePath): BranchConditionIssue[] {
+    // trigger.nextAction is parsed as z.any, so this tree is raw JSON: check every
+    // structural assumption before it is used.
+    if (isNil(step) || typeof step !== 'object') {
+        return []
+    }
+    const loopIssues = 'firstLoopAction' in step
+        ? collectBranchConditionIssues(step.firstLoopAction, [...path, 'firstLoopAction'])
+        : []
+    const failureBranchIssues = 'continueOnFailureBranches' in step
+        ? [
+            ...collectBranchConditionIssues(step.continueOnFailureBranches?.onSuccess, [...path, 'continueOnFailureBranches', 'onSuccess']),
+            ...collectBranchConditionIssues(step.continueOnFailureBranches?.onFailure, [...path, 'continueOnFailureBranches', 'onFailure']),
+        ]
+        : []
+    return [
+        ...collectRouterIssues(step, path),
+        ...loopIssues,
+        ...failureBranchIssues,
+        ...collectBranchConditionIssues(step.nextAction, [...path, 'nextAction']),
+    ]
+}
 
 export const ChangeFolderRequest = z.object({
     folderId: Nullable(z.string()),

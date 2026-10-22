@@ -2,6 +2,7 @@ import { createAction, Property, StoreScope } from '@inboxfm-connect/pieces-fram
 import { groqAuth } from '../..';
 import { httpClient, HttpMethod, AuthenticationType } from '@inboxfm-connect/pieces-common';
 import { askAiActionOutputSchema } from '../output-schemas';
+import { trimHistoryToBudget } from '../history-guard';
 
 export const askGroq = createAction({
   audience: 'human',
@@ -125,6 +126,10 @@ export const askGroq = createAction({
 		// If memory key is set, retrieve messages stored in history
 		if (memoryKey) {
 			messageHistory = (await store.get(memoryKey, StoreScope.PROJECT)) ?? [];
+			// Trim the RESTORED history too (review #386): a wedged memoryKey must
+			// recover on this run — the store.put side never runs when the request
+			// itself fails.
+			messageHistory = trimHistoryToBudget(messageHistory);
 		}
 
 		// Add user prompt to message history
@@ -171,6 +176,9 @@ export const askGroq = createAction({
 
 		// Store history if memory key is set
 		if (memoryKey) {
+			// Bound the stored history so long-running memoryKey flows cannot
+			// wedge themselves past the model context window (issue #381).
+			messageHistory = trimHistoryToBudget(messageHistory);
 			await store.put(memoryKey, messageHistory, StoreScope.PROJECT);
 		}
 

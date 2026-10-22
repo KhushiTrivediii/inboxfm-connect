@@ -202,6 +202,12 @@ export const SECRET_MANAGER_PROVIDERS_METADATA: SecretManagerProviderMetaData[] 
                 placeholder: 'Your Conjur API Key',
                 type: 'password',
             },
+            skipTlsVerification: {
+                displayName: 'Skip TLS Verification',
+                placeholder: 'Leave empty to verify the Conjur server certificate (recommended). Set to true ONLY if your Conjur uses a self-signed certificate — opting out disables TLS verification and exposes your Conjur API key and secrets to interception',
+                optional: true,
+                type: 'text',
+            },
         },
         secretParams: [
             {

@@ -168,15 +168,15 @@ export const capsuleCrmClient = {
         return [];
       }
       
-      // Temporarily return all parties to debug
-      console.log('Parties response:', response.body.parties);
+      // Capsule returns people and organisations mixed in `parties`; the
+      // organisations dropdown only wants the organisation records.
       const organisations = response.body.parties.filter(
         (party) => party.type === 'organisation'
       );
-      console.log('Filtered organisations:', organisations);
       return organisations;
-    } catch (error) {
-      console.error('searchOrganisations error:', error);
+    } catch {
+      // Leave the dropdown empty when the lookup fails so the rest of the
+      // form stays usable (reconnect or check the API token).
       return [];
     }
   },

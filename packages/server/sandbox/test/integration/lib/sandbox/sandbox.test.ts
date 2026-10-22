@@ -1,10 +1,10 @@
 import { ChildProcess } from 'child_process'
 import { EventEmitter } from 'node:events'
 import { ActivepiecesError, ErrorCode } from '@inboxfm-connect/core-utils'
-import { EngineOperation, EngineOperationType, EngineResponseStatus, TriggerHookType } from '@inboxfm-connect/shared'
+import { EngineOperation, EngineOperationType, EngineResponseStatus, FlowRunStatus, TriggerHookType } from '@inboxfm-connect/shared'
 import { type Socket as ClientSocket, io as ioClient } from 'socket.io-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createSandbox } from '../../../../src/lib/sandbox/sandbox'
+import { createSandbox, mapSandboxErrorCodeToFlowRunStatus } from '../../../../src/lib/sandbox/sandbox'
 import { Sandbox, SandboxLogger, SandboxMount, SandboxProcessMaker } from '../../../../src/lib/sandbox/types'
 
 const { treeKillMock } = vi.hoisted(() => ({
@@ -68,7 +68,6 @@ function createTestProcessMaker() {
 const defaultOptions = {
     env: { MY_VAR: 'value' },
     memoryLimitMb: 256,
-    cpuMsPerSec: 1000,
     timeLimitSeconds: 300,
     reusable: false,
     maxHttpBufferSizeBytes: 100 * 1024 * 1024,
@@ -134,7 +133,6 @@ describe('createSandbox', () => {
                     }),
                     resourceLimits: {
                         memoryLimitMb: 256,
-                        cpuMsPerSec: 1000,
                         timeLimitSeconds: 300,
                     },
                 }),
@@ -594,7 +592,7 @@ describe('createSandbox', () => {
             }
         })
 
-        it('rejects with SANDBOX_MEMORY_ISSUE on exit code 134 / SIGABRT', async () => {
+        it('rejects with SANDBOX_MEMORY_ISSUE on exit code 134 / SIGABRT and maps to FlowRunStatus.MEMORY_LIMIT_EXCEEDED', async () => {
             const { sandbox } = await startSandbox()
             const client = testPM.getClient()
             const child = testPM.getChild()
@@ -614,11 +612,13 @@ describe('createSandbox', () => {
                 await executePromise
             }
             catch (err) {
-                expect((err as ActivepiecesError).error.code).toBe(ErrorCode.SANDBOX_MEMORY_ISSUE)
+                const code = (err as ActivepiecesError).error.code
+                expect(code).toBe(ErrorCode.SANDBOX_MEMORY_ISSUE)
+                expect(mapSandboxErrorCodeToFlowRunStatus(code)).toBe(FlowRunStatus.MEMORY_LIMIT_EXCEEDED)
             }
         })
 
-        it('rejects with SANDBOX_LOG_SIZE_EXCEEDED', async () => {
+        it('rejects with SANDBOX_LOG_SIZE_EXCEEDED and maps to FlowRunStatus.LOG_SIZE_EXCEEDED', async () => {
             const { sandbox } = await startSandbox()
             const client = testPM.getClient()
             const child = testPM.getChild()
@@ -641,7 +641,9 @@ describe('createSandbox', () => {
                 await executePromise
             }
             catch (err) {
-                expect((err as ActivepiecesError).error.code).toBe(ErrorCode.SANDBOX_LOG_SIZE_EXCEEDED)
+                const code = (err as ActivepiecesError).error.code
+                expect(code).toBe(ErrorCode.SANDBOX_LOG_SIZE_EXCEEDED)
+                expect(mapSandboxErrorCodeToFlowRunStatus(code)).toBe(FlowRunStatus.LOG_SIZE_EXCEEDED)
             }
         })
 
@@ -697,7 +699,7 @@ describe('createSandbox', () => {
             }
         })
 
-        it('classifies a native heap-OOM crash (exit code 1 / null) as SANDBOX_MEMORY_ISSUE', async () => {
+        it('classifies a native heap-OOM crash (exit code 1 / null) as SANDBOX_MEMORY_ISSUE and maps to FlowRunStatus.MEMORY_LIMIT_EXCEEDED', async () => {
             const { sandbox } = await startSandbox()
             const client = testPM.getClient()
             const child = testPM.getChild()
@@ -718,7 +720,36 @@ describe('createSandbox', () => {
                 await executePromise
             }
             catch (err) {
-                expect((err as ActivepiecesError).error.code).toBe(ErrorCode.SANDBOX_MEMORY_ISSUE)
+                const code = (err as ActivepiecesError).error.code
+                expect(code).toBe(ErrorCode.SANDBOX_MEMORY_ISSUE)
+                expect(mapSandboxErrorCodeToFlowRunStatus(code)).toBe(FlowRunStatus.MEMORY_LIMIT_EXCEEDED)
+            }
+        })
+
+        it('exits with MEMORY_LIMIT_EXCEEDED when an oversized step exhausts memory in sandbox', async () => {
+            const { sandbox } = await startSandbox()
+            const client = testPM.getClient()
+            const child = testPM.getChild()
+
+            client.on('rpc', () => {
+                (child.stderr as unknown as EventEmitter).emit('data', Buffer.from('Allocation failed - JavaScript heap out of memory\n'))
+                setTimeout(() => child.emit('close', 1, null), 20)
+            })
+
+            const executePromise = sandbox.execute(
+                testOperationType,
+                testOperation,
+                { timeoutInSeconds: 10 },
+            )
+
+            await expect(executePromise).rejects.toThrow()
+            try {
+                await executePromise
+            }
+            catch (err) {
+                const code = (err as ActivepiecesError).error.code
+                expect(code).toBe(ErrorCode.SANDBOX_MEMORY_ISSUE)
+                expect(mapSandboxErrorCodeToFlowRunStatus(code)).toBe(FlowRunStatus.MEMORY_LIMIT_EXCEEDED)
             }
         })
 

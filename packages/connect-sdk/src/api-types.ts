@@ -28,3 +28,49 @@ export type Tool = ToolContract & {
 export type IntegrationToolsResponse = {
     actions: Record<string, ToolContract & { props: Record<string, ToolInputContract> }>
 }
+
+export type ProxyHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export type ConnectProxyRequest = {
+    projectId: string
+    externalUserId: string
+    provider: string
+    connectionId?: string
+    subdomain?: string
+    method?: ProxyHttpMethod
+    path: string
+    headers?: Record<string, string>
+    query?: Record<string, string | number | boolean | Array<string | number | boolean>>
+    body?: unknown
+    timeoutMs?: number
+    idempotencyKey?: string
+}
+
+export type ConnectProxyResponse = {
+    status: number
+    statusText: string
+    headers: Record<string, string>
+    data: unknown
+    provider: string
+    rateLimit?: {
+        limit?: number
+        remaining?: number
+        reset?: number
+    }
+}
+
+export type CreateMcpTokenRequestContract = {
+    projectId: string
+    externalUserId: string
+    allowedPieceNames?: string[]
+    expiresInSeconds?: number
+}
+
+export type CreateMcpTokenResponseContract = {
+    token: string
+    mcpServerUrl: string
+    expiresAt: string
+    projectId: string
+    externalUserId: string
+    allowedPieceNames: string[] | null
+}

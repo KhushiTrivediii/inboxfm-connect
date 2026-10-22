@@ -1,0 +1,139 @@
+---
+title: "Web Design System & UI Kit"
+description: "Specification for CSS tokens, typography, spacing, UI primitives, and state contracts across packages/web"
+icon: "palette"
+---
+
+# Web Design System Contract (`packages/web`)
+
+This document defines the formal contract for styling, tokens, UI primitives, and state handling in `packages/web` (the Inboxfm Connect developer console and dashboard).
+
+---
+
+## 1. CSS Custom Properties & Token Contract
+
+The design system is token-driven and declared in `packages/web/src/styles/globals.css` using Tailwind CSS v4 `@theme inline` and CSS custom variables under `@layer base`.
+
+### Public Tokens (Safe for Product Code)
+
+Product screens and feature components must consume tokens exclusively via Tailwind utility classes (e.g. `bg-background`, `text-primary`, `border-border`, `bg-card`) or semantic CSS variables.
+
+| Token | Light Value | Dark Value | Purpose & Product Usage |
+|---|---|---|---|
+| `--color-background` (`--background`) | `hsl(0 0% 98%)` | `hsl(0 0% 4%)` | Application viewport and page canvas |
+| `--color-foreground` (`--foreground`) | `hsl(0 0% 9%)` | `hsl(0 0% 98%)` | Primary high-contrast text |
+| `--color-card` (`--card`) | `hsl(0 0% 100%)` | `hsl(0 0% 9%)` | Elevated surface containers, tables, lists |
+| `--color-card-foreground` (`--card-foreground`) | `hsl(0 0% 9%)` | `hsl(0 0% 98%)` | Text rendered on top of card surfaces |
+| `--color-popover` (`--popover`) | `hsl(0 0% 100%)` | `hsl(0 0% 12%)` | Floating menus, dropdowns, and tooltips |
+| `--color-popover-foreground` (`--popover-foreground`) | `hsl(0 0% 9%)` | `hsl(0 0% 98%)` | Text rendered inside floating popovers |
+| `--color-primary` (`--primary`) | `hsl(257 74% 57%)` (`#8142E3`) | `hsl(257 74% 57%)` (`#8142E3`) | Brand purple accent, primary actions, active tabs |
+| `--color-primary-foreground` (`--primary-foreground`) | `hsl(0 0% 100%)` | `hsl(0 0% 100%)` | High-contrast text on primary backgrounds |
+| `--color-secondary` (`--secondary`) | `hsl(0 0% 96%)` | `hsl(0 0% 15%)` | Secondary action fills, subtle pill backgrounds |
+| `--color-secondary-foreground` (`--secondary-foreground`) | `hsl(0 0% 9%)` | `hsl(0 0% 98%)` | Text on secondary elements |
+| `--color-muted` (`--muted`) | `hsl(0 0% 96%)` | `hsl(0 0% 15%)` | Inactive pills, code blocks, row hover backgrounds |
+| `--color-muted-foreground` (`--muted-foreground`) | `hsl(0 0% 45%)` | `hsl(0 0% 64%)` | Secondary helper descriptions, subtext, timestamps |
+| `--color-accent` (`--accent`) | `hsl(257 75% 95%)` | `hsl(257 74% 20%)` | Soft purple tint for active selections |
+| `--color-accent-foreground` (`--accent-foreground`) | `hsl(257 74% 35%)` | `hsl(257 75% 85%)` | Text/icons inside accent containers |
+| `--color-destructive` (`--destructive`) | `hsl(350 89% 60%)` | `hsl(351 95% 72%)` | Destructive errors, delete buttons, critical alerts |
+| `--color-destructive-foreground` (`--destructive-foreground`) | `hsl(0 0% 98%)` | `hsl(0 0% 9%)` | Text on destructive buttons |
+| `--color-success` (`--success`) | `hsl(160 84% 39%)` | `hsl(160 60% 52%)` | Active status badges, completed execution tags |
+| `--color-success-foreground` (`--success-foreground`) | `hsl(0 0% 100%)` | `hsl(0 0% 9%)` | Text on success badges |
+| `--color-warning` (`--warning`) | `hsl(38 92% 50%)` | `hsl(43 97% 56%)` | Cautionary status badges, rate limit warnings |
+| `--color-warning-foreground` (`--warning-foreground`) | `hsl(0 0% 9%)` | `hsl(0 0% 9%)` | Text on warning badges |
+| `--color-border` (`--border`) | `hsl(0 0% 90%)` | `hsl(0 0% 100% / 0.14)` | 1px border dividers, table borders |
+| `--color-input` (`--input`) | `hsl(0 0% 90%)` | `hsl(0 0% 100% / 0.14)` | Form input borders and bounding boxes |
+| `--color-ring` (`--ring`) | `hsl(257 74% 57%)` | `hsl(257 74% 57%)` | Focus outline and keyboard navigation ring |
+
+### Corner Radius System
+
+| Token | Calculation | Base Equivalent | Recommended Usage |
+|---|---|---|---|
+| `--radius-sm` | `calc(var(--radius) - 4px)` | `6px` | Badges, small pills, tooltips |
+| `--radius-md` | `calc(var(--radius) - 2px)` | `8px` | Buttons, form inputs, dropdown menus |
+| `--radius-lg` (`--radius`) | `var(--radius)` | `10px` (`0.625rem`) | Cards, tables, modals |
+| `--radius-xl` | `calc(var(--radius) + 4px)` | `14px` | Elevated panels, large drawers |
+| `--radius-2xl` | `calc(var(--radius) + 8px)` | `18px` | Outer dialog containers, hero callouts |
+
+---
+
+## 2. Typography Scale & Spacing Rhythm
+
+### Typography Scale
+Inboxfm Connect uses a dense, tool-like information density tailored for enterprise automation workflows:
+
+- **Font Family**: Inter, `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`.
+- **Default Body**: `14px` (`text-sm`, `leading-5`). Avoid loose 16px body copy in tables and lists.
+- **Secondary / Helper Text**: `12px` (`text-xs`, `leading-4`) with `text-muted-foreground`.
+- **Monospace / Identifiers**: `font-mono text-xs` or `text-[11px]` (used for IDs, tokens, JSON keys, endpoints).
+- **Page Titles**: `text-xl font-semibold tracking-tight` (20px).
+- **Section Headers**: `text-base font-semibold tracking-tight` (16px).
+- **Card / Group Headers**: `text-sm font-medium` (14px).
+
+### Spacing Rhythm
+- **Page Gutters**: `p-6` (24px) or `space-y-6`.
+- **Card Padding**: `p-4` (16px) or `p-6` (24px) for major panels.
+- **Form Row Gaps**: `gap-4` or `space-y-4`.
+- **Button / Input Internal Padding**: `px-3 py-1.5` (`text-sm`).
+- **No Negative Margins**: Never use negative margins (`-m-*`). Structure components with `flex`, `grid`, `gap`, and explicit container bounds.
+
+---
+
+## 3. UI Primitive Component Library (`src/components/ui/`)
+
+The web workspace includes 18 core accessible primitives built on Radix UI and Lucide icons:
+
+| Component | Exported Members | Available Variants & Props | Usage Guidelines |
+|---|---|---|---|
+| **Avatar** | `Avatar`, `AvatarImage`, `AvatarFallback` | Default sizes via Tailwind classes (`h-8 w-8`) | User profile pictures and workspace icons |
+| **Badge** | `Badge`, `badgeVariants` | `variant: 'default' \| 'secondary' \| 'destructive' \| 'outline' \| 'success' \| 'warning'` | Status badges (Active, Inactive, Failed, Running) |
+| **Button** | `Button`, `buttonVariants` | `variant: 'default' \| 'destructive' \| 'outline' \| 'secondary' \| 'ghost' \| 'link'`, `size: 'default' \| 'sm' \| 'lg' \| 'icon' \| 'xs' \| 'icon-sm' \| 'icon-xs'` | Primary and secondary user actions; supports loading spinners |
+| **Card** | `Card`, `CardHeader`, `CardFooter`, `CardTitle`, `CardDescription`, `CardContent` | Standard surface with 1px border (`border-border`) | Primary content grouping and surface container |
+| **Command** | `Command`, `CommandDialog`, `CommandInput`, `CommandList`, `CommandEmpty`, `CommandGroup`, `CommandItem`, `CommandShortcut`, `CommandSeparator` | Built on `cmdk` | Global search and ⌘K command palette |
+| **ConfirmDialog** | `ConfirmDialog` | `title`, `description`, `confirmLabel?`, `cancelLabel?`, `variant?: 'default' \| 'destructive'`, `loading?`, `open`, `onOpenChange`, `onConfirm` | Reversible confirmation and destructive delete actions |
+| **Dialog** | `Dialog`, `DialogTrigger`, `DialogContent`, `DialogHeader`, `DialogFooter`, `DialogTitle`, `DialogDescription` | Full Radix dialog primitives | Modal overlays, creation forms, inspectors |
+| **DropdownMenu** | `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `DropdownMenuItem`, `DropdownMenuCheckboxItem`, `DropdownMenuRadioItem`, `DropdownMenuLabel`, `DropdownMenuSeparator`, `DropdownMenuGroup` | Standard Radix dropdown menu | Action menus, filter selectors, row ellipses menus |
+| **EmptyState** | `EmptyState` | `title: string`, `icon?: LucideIcon`, `description?: string`, `actionLabel?: string`, `onAction?: () => void` | Unpopulated lists, zero records, search misses |
+| **ErrorState** | `ErrorState` | `title?: string`, `description?: string`, `onRetry?: () => void`, `className?: string` | Failed network queries, server fetch errors |
+| **Input** | `Input` | Standard HTML input attributes | Text fields, query search boxes, token inputs |
+| **LoadingState** | `LoadingState` | `rows?: number` | Suspense fallback and initial page loading skeletons |
+| **Separator** | `Separator` | `orientation: 'horizontal' \| 'vertical'`, `decorative: boolean` | 1px content and list dividing lines |
+| **Skeleton** | `Skeleton` | `className` for width, height, and radius | Inline layout skeleton placeholders while fetching data |
+| **Sonner / Toaster** | `Toaster` | Built on `sonner` | Toast alerts and asynchronous mutation feedback |
+| **Switch** | `Switch` | `checked`, `onCheckedChange` | Binary toggles (e.g. enable trigger, dark mode) |
+| **Tabs** | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | Radix Tabs | Section navigation, multi-tab configuration |
+| **Tooltip** | `Tooltip`, `TooltipTrigger`, `TooltipContent`, `TooltipProvider` | Radix Tooltip | Informational hover tooltips on icon buttons |
+
+---
+
+## 4. State Handling & Presentation Contract
+
+Every dashboard view must conform to the 4-state lifecycle contract:
+
+```
+[ Initial Query Fetch ] ───────────► <LoadingState> / <Skeleton>
+        │
+        ├─── Query Error ──────────► <ErrorState> + Toast Alert
+        │
+        ├─── Zero Results ─────────► <EmptyState> + Action CTA
+        │
+        └─── Data Available ───────► Table / Card Grid + Cursor Pagination
+```
+
+### When to use `<Skeleton>` vs `<LoadingState>`
+- **`<Skeleton>`**: Use inside components for granular inline loading (e.g., table rows, card metrics) where the container layout is already known.
+- **`<LoadingState>`**: Use as the fallback for whole-page route transitions (`React.Suspense`) or major view switches.
+
+### When to use `<EmptyState>` vs `<ErrorState>`
+- **`<EmptyState>`**: Use when the query was **successful** (HTTP 200) but returned an empty dataset (`items.length === 0`). Must provide a helpful description and an actionable button (`actionLabel` + `onAction`) guiding the user to create or connect the resource.
+- **`<ErrorState>`**: Use when the query **failed** (HTTP 4xx/5xx or network error). Must clearly explain that a network or server issue occurred and provide a retry callback (`onRetry`) with the default button label ("Try again").
+
+---
+
+## 5. Query Error Handling Policy (`meta`)
+
+All queries created with `@tanstack/react-query` must follow the error disclosure policy:
+
+- **Primary Page Data Queries** (Connections, API Keys, Activity, Executions, Triggers):
+  Set `meta: { showErrorToast: true }` so failure triggers a global toast notification with the error details.
+- **Auxiliary Queries** (Feature flags, categories, dropdown options, tags):
+  Omit `showErrorToast` and fail silently or show fallback options to avoid alert spam.

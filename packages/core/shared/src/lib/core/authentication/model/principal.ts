@@ -32,7 +32,9 @@ export type UserPrincipal = {
 export type EnginePrincipal = {
     id: ApId
     type: PrincipalType.ENGINE
-    projectId: ProjectId
+    // Optional: platform-scoped engine operations (e.g. piece metadata extraction) mint
+    // tokens without a project; project-scoped authz denies those by default.
+    projectId: ProjectId | undefined
     platform: {
         id: PlatformId
     }

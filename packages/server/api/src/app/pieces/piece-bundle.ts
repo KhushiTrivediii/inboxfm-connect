@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { isNil, tryCatch } from '@inboxfm-connect/core-utils'
 import { apDayjs, safeHttp } from '@inboxfm-connect/server-utils'
 import { FileType, PackageType, PieceType } from '@inboxfm-connect/shared'
@@ -10,6 +12,7 @@ import { SystemJobName } from '../helper/system-jobs/common'
 import { systemJobHandlers } from '../helper/system-jobs/job-handlers'
 import { systemJobsSchedule } from '../helper/system-jobs/system-job'
 import { pieceMetadataService } from './metadata/piece-metadata-service'
+import { filePiecesUtils } from './metadata/utils/file-pieces-utils'
 
 // Resolves a piece to a single downloadable link (see ADR 0002 — "Pieces are distributed as links").
 // Official/registry pieces resolve to a signed-S3 object when cached, else to the npm tarball (and a
@@ -50,6 +53,14 @@ export const pieceBundle = (log: FastifyBaseLogger) => ({
             if (await cdnBundleExists({ url: cdnUrl, log })) {
                 return { type: 'redirect', url: cdnUrl }
             }
+        }
+        // Source deployments keep every piece under packages/integrations/**/dist, but this fork's
+        // packages are published nowhere (npm/CDN carry other names), so registry pieces would 404
+        // on the npm fallback. Serve a tarball packed from the local dist when the exact
+        // (name, version) exists — checked last so hosted resolution (S3/CDN) is unchanged.
+        const distPath = await findLocalDistPath({ name, version, log })
+        if (!isNil(distPath)) {
+            return { type: 'local-dist', distPath }
         }
         return { type: 'redirect', url: npmTarballUrl({ name, version }) }
     },
@@ -101,6 +112,27 @@ async function cdnBundleExists({ url, log }: CdnBundleExistsParams): Promise<boo
     return exists
 }
 
+// Any failure here means "no local dist available" — it must never mask the hosted sources.
+async function findLocalDistPath({ name, version, log }: FindLocalDistPathParams): Promise<string | null> {
+    const { data: distPath, error: lookupError } = await tryCatch(async () =>
+        filePiecesUtils(log).findDistPiecePathByPackageName(name))
+    if (lookupError !== null || isNil(distPath)) {
+        return null
+    }
+    const { data: packageJson, error: readError } = await tryCatch(async () =>
+        JSON.parse(await readFile(join(distPath, 'package.json'), 'utf-8')))
+    if (readError !== null || !isLocalDistPackageJson(packageJson)) {
+        log.warn({ distPath }, '[pieceBundle] Failed to read local dist package.json')
+        return null
+    }
+    return packageJson.version === version ? distPath : null
+}
+
+// A bare type guard keeps the JSON.parse result out of `any` without casting.
+function isLocalDistPackageJson(value: unknown): value is { version: string } {
+    return typeof value === 'object' && value !== null && 'version' in value && typeof value.version === 'string'
+}
+
 function npmTarballUrl({ name, version }: PieceRef): string {
     const unscopedName = name.startsWith('@') ? name.split('/')[1] : name
     return `${NPM_REGISTRY_URL}/${name}/-/${unscopedName}-${version}.tgz`
@@ -130,15 +162,20 @@ type CdnBundleExistsParams = {
     log: FastifyBaseLogger
 }
 
+type FindLocalDistPathParams = PieceRef & {
+    log: FastifyBaseLogger
+}
+
 type ResolveParams = {
     name?: string
     version?: string
     archiveId?: string
     platformId: string
-    projectId: string
+    projectId: string | undefined
 }
 
 type PieceBundleResolution =
     | { type: 'redirect', url: string }
     | { type: 'stream', archiveId: string }
+    | { type: 'local-dist', distPath: string }
     | { type: 'not-found' }

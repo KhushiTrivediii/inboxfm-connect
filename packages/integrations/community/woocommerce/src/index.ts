@@ -11,6 +11,7 @@ import { wooCreateCustomer } from './lib/actions/create-customer';
 import { wooCreateProduct } from './lib/actions/create-product';
 import { wooFindCustomer } from './lib/actions/find-customer';
 import { wooFindProduct } from './lib/actions/find-product';
+import { wooFindCoupon } from './lib/actions/find-coupon';
 import { triggers } from './lib/triggers';
 import { wooAuth } from './lib/auth';
 
@@ -40,6 +41,7 @@ export const woocommerce = createPiece({
     wooCreateProduct,
     wooFindCustomer,
     wooFindProduct,
+    wooFindCoupon,
     createCustomApiCallAction({
       baseUrl: (auth) => (auth?.props.baseUrl ?? ''),
       auth: wooAuth,

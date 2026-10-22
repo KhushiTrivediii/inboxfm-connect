@@ -1,3 +1,4 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apId } from '@inboxfm-connect/core-utils'
 import { AppConnectionScope, AppConnectionStatus, AppConnectionType, PackageType, PieceType, PLACEHOLDER_CONNECTION_TYPE } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger, FastifyInstance } from 'fastify'
@@ -11,6 +12,7 @@ import {
 } from '../../../helpers/mocks'
 import { createTestContext } from '../../../helpers/test-context'
 import { setupTestEnvironment, teardownTestEnvironment } from '../../../helpers/test-setup'
+import { appConnectionService } from '../../../../src/app/app-connection/app-connection-service/app-connection-service'
 
 let app: FastifyInstance | null = null
 let mockLog: FastifyBaseLogger
@@ -538,6 +540,136 @@ describe('AppConnection CE API', () => {
 
             const stillExists = await db.findOneBy('app_connection', { id: platformConnection.id })
             expect(stillExists).not.toBeNull()
+        })
+    })
+
+    describeWithAuth('POST /v1/connections/:id (Update)', () => app!, (setup) => {
+        it('should update display name and metadata on existing connection', async () => {
+            const ctx = await setup()
+            const mockPiece = createMockPieceMetadata({
+                platformId: ctx.platform.id,
+                packageType: PackageType.REGISTRY,
+                pieceType: PieceType.OFFICIAL,
+            })
+            await db.save('integration_metadata', mockPiece)
+            pieceMetadataService(mockLog).getOrThrow = vi.fn().mockResolvedValue(mockPiece)
+
+            const createResponse = await ctx.post('/v1/connections', {
+                externalId: 'test-update-conn',
+                displayName: 'Original Name',
+                pieceName: mockPiece.name,
+                projectId: ctx.project.id,
+                type: AppConnectionType.SECRET_TEXT,
+                value: { type: AppConnectionType.SECRET_TEXT, secret_text: 's' },
+                pieceVersion: mockPiece.version,
+            })
+            const connectionId = createResponse?.json().id
+
+            const updateResponse = await ctx.post(`/v1/connections/${connectionId}`, {
+                displayName: 'Updated Name',
+                metadata: { env: 'staging' },
+            })
+
+            expect(updateResponse?.statusCode).toBe(StatusCodes.OK)
+            const body = updateResponse?.json()
+            expect(body.id).toBe(connectionId)
+            expect(body.displayName).toBe('Updated Name')
+            expect(body.metadata).toEqual({ env: 'staging' })
+        })
+
+        it('should return 404 with ENTITY_NOT_FOUND when updating non-existent connection', async () => {
+            const ctx = await setup()
+            const nonExistentId = apId()
+
+            const response = await ctx.post(`/v1/connections/${nonExistentId}`, {
+                displayName: 'Missing Conn',
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.NOT_FOUND)
+            const body = response?.json()
+            expect(body.code).toBe('ENTITY_NOT_FOUND')
+            expect(body.params).toEqual({
+                entityType: 'app_connection',
+                entityId: nonExistentId,
+            })
+        })
+
+        it('should return 404 when updating connection belonging to another platform', async () => {
+            const ctx = await setup()
+            const otherCtx = await createTestContext(app!)
+
+            const mockPiece = createMockPieceMetadata({
+                platformId: otherCtx.platform.id,
+                packageType: PackageType.REGISTRY,
+                pieceType: PieceType.OFFICIAL,
+            })
+            await db.save('integration_metadata', mockPiece)
+            pieceMetadataService(mockLog).getOrThrow = vi.fn().mockResolvedValue(mockPiece)
+
+            const otherConn = await otherCtx.post('/v1/connections', {
+                externalId: 'other-platform-conn',
+                displayName: 'Other Platform',
+                pieceName: mockPiece.name,
+                projectId: otherCtx.project.id,
+                type: AppConnectionType.SECRET_TEXT,
+                value: { type: AppConnectionType.SECRET_TEXT, secret_text: 's' },
+                pieceVersion: mockPiece.version,
+            })
+            const otherId = otherConn?.json().id
+
+            // In appConnectionService.update, cross-platform id throws ENTITY_NOT_FOUND
+            await expect(
+                appConnectionService(mockLog).update({
+                    id: otherId,
+                    platformId: ctx.platform.id,
+                    projectIds: [ctx.project.id],
+                    scope: AppConnectionScope.PROJECT,
+                    request: {
+                        displayName: 'Hacked Name',
+                        projectIds: null,
+                    },
+                }),
+            ).rejects.toMatchObject({
+                error: {
+                    code: 'ENTITY_NOT_FOUND',
+                    params: {
+                        entityType: 'AppConnection',
+                        entityId: otherId,
+                    },
+                },
+            })
+
+            // Via HTTP endpoint, cross-platform request is rejected by platform authorization with 403
+            const response = await ctx.post(`/v1/connections/${otherId}`, {
+                displayName: 'Hacked Name',
+            })
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+
+        it('should return 404 when updating a platform-scoped connection from project update route', async () => {
+            const ctx = await setup()
+
+            const platformConn = {
+                ...createMockConnection({
+                    platformId: ctx.platform.id,
+                    projectIds: [ctx.project.id],
+                    externalId: 'platform-scoped-update-test',
+                }, ctx.user.id),
+                scope: AppConnectionScope.PLATFORM,
+            }
+            await db.save('app_connection', platformConn)
+
+            const response = await ctx.post(`/v1/connections/${platformConn.id}`, {
+                displayName: 'Attempted Scope Escape',
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.NOT_FOUND)
+            const body = response?.json()
+            expect(body.code).toBe('ENTITY_NOT_FOUND')
+            expect(body.params).toEqual({
+                entityType: 'AppConnection',
+                entityId: platformConn.id,
+            })
         })
     })
 })

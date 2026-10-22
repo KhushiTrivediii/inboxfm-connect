@@ -12,7 +12,10 @@ test('sign in, create an automation, and execute a real integration action', asy
     const login = await loginResponse
     expect(login.ok()).toBe(true)
     const auth = z.object({ token: z.string(), projectId: z.string() }).parse(await login.json())
-    await expect(page).toHaveURL(/\/$/)
+    // #173 preserves the deep-link return URL: the journey starts at /actions, so the
+    // unauthenticated visit bounces to /login carrying state.from = /actions and the
+    // post-login target resolves back to /actions - not to /.
+    await expect(page).toHaveURL(/\/actions$/)
     const headers = { Authorization: `Bearer ${auth.token}` }
 
     await page.goto('/automations/schedules/new')

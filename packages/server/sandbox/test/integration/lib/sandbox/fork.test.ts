@@ -27,7 +27,6 @@ describe('simpleProcess', () => {
             env: { CUSTOM_VAR: 'hello', AP_SANDBOX_WS_PORT: '9999' },
             resourceLimits: {
                 memoryLimitMb: 512,
-                cpuMsPerSec: 1000,
                 timeLimitSeconds: 300,
             },
         })
@@ -58,7 +57,6 @@ describe('simpleProcess', () => {
             env: {},
             resourceLimits: {
                 memoryLimitMb: 300,
-                cpuMsPerSec: 1000,
                 timeLimitSeconds: 60,
             },
         })

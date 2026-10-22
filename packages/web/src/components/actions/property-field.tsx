@@ -44,6 +44,25 @@ function optionKey(value: unknown): string {
   }
 }
 
+/**
+ * JSON/OBJECT fields edit their value as JSON text, but edit mode prefills them
+ * with the parsed value stored in settings — render that back as editable JSON
+ * instead of showing an empty textarea for a configured field.
+ */
+function jsonText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+  if (value === null || value === undefined) {
+    return ''
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return ''
+  }
+}
+
 const DYNAMIC_TYPES = new Set(['DROPDOWN', 'MULTI_SELECT_DROPDOWN'])
 
 const CONTROL_TEXTAREA_TYPES = new Set(['LONG_TEXT', 'JSON', 'OBJECT'])
@@ -263,7 +282,7 @@ export function PropertyField({
           {...commonProps}
           rows={5}
           spellCheck={false}
-          value={typeof value === 'string' ? value : ''}
+          value={jsonText(value)}
           onChange={(event) => onChange(event.target.value)}
           placeholder='{ "key": "value" }'
           className={cn(

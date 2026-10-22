@@ -71,6 +71,9 @@ function censorClientSecret(
     return page
 }
 
+// Credential rows carry OAuth client ids and (server-side) secrets, so the list
+// route requires a project member with READ_APP_CONNECTION on the projectId in
+// the query — not an anonymous enumeration surface (issue #358).
 const ListCredsRequest = {
     config: {
         security: securityAccess.project(
@@ -78,6 +81,7 @@ const ListCredsRequest = {
             Permission.READ_APP_CONNECTION,
             {
                 type: ProjectResourceType.QUERY,
+                queryKey: 'projectId',
             },
         ),
     },

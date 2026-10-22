@@ -146,9 +146,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe('New connection page', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     document.body.innerHTML = ''
     vi.restoreAllMocks()
-    window.localStorage.setItem('ap-token', 'test-token')
+    // The client reads ap-token from sessionStorage since #383.
+    window.sessionStorage.setItem('ap-token', 'test-token')
   })
 
   it('shows guidance when no pieceName is provided', async () => {

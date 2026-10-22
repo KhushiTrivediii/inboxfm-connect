@@ -3,8 +3,14 @@ import { publishPieceFromFolder, findPiece, assertPieceExists } from '../utils/p
 import chalk from "chalk";
 import inquirer from 'inquirer';
 import * as dotenv from 'dotenv';
+import path from 'node:path';
+import { findRepoRoot } from '../utils/workspace-utils';
 
-dotenv.config({path: 'packages/server/api/.env'});
+try {
+  dotenv.config({ path: path.join(findRepoRoot(process.cwd()), 'packages', 'server', 'api', '.env') });
+} catch {
+  dotenv.config({ path: 'packages/server/api/.env' });
+}
 
 async function publishPiece(
     {apiUrl, apiKey, pieceName, failOnError}:
@@ -23,7 +29,7 @@ async function publishPiece(
     });
 }
 
-function assertNullOrUndefinedOrEmpty(value: any, message: string) {
+function assertNullOrUndefinedOrEmpty(value: unknown, message: string) {
     if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
         console.error(chalk.red(message));
         process.exit(1);

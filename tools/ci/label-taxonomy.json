@@ -1,0 +1,57 @@
+{
+  "types": [
+    "bug",
+    "changes-requested",
+    "documentation",
+    "duplicate",
+    "enhancement",
+    "feature",
+    "help wanted",
+    "in-review",
+    "invalid",
+    "mergeable",
+    "question",
+    "skip-changelog",
+    "testing",
+    "wontfix"
+  ],
+  "areas": [
+    "area:docs",
+    "area:engine",
+    "area:infra",
+    "area:integrations",
+    "area:product",
+    "area:security",
+    "area:server",
+    "area:web"
+  ],
+  "categories": [
+    "category:docs",
+    "category:engine",
+    "category:feature",
+    "category:i18n",
+    "category:infra",
+    "category:rebrand",
+    "category:security",
+    "category:tests"
+  ],
+  "sizes": [
+    "size:L",
+    "size:M",
+    "size:S",
+    "size:XL",
+    "size:XS",
+    "size:XXL"
+  ],
+  "depths": [
+    "depth:deep",
+    "depth:moderate",
+    "depth:substantial",
+    "depth:trivial"
+  ],
+  "process": [
+    "changes-requested",
+    "in-review",
+    "mergeable"
+  ]
+}

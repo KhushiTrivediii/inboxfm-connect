@@ -208,7 +208,7 @@ export const createDeepResearchTaskAction = createAction({
       body['webhook_url'] = context.propsValue.webhook_url;
     }
 
-    const response = await makeRequest(apiKey as unknown as string, HttpMethod.POST, '/v1/deepresearch/tasks', body);
+    const response = await makeRequest(apiKey.secret_text, HttpMethod.POST, '/v1/deepresearch/tasks', body);
     return response;
   },
 });

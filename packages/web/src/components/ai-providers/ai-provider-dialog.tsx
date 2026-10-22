@@ -18,6 +18,7 @@ import type {
   UpdateAIProviderRequest,
 } from '@inboxfm-connect/shared'
 import { AIProviderName } from '@/lib/api/ai-providers'
+import { ApiClientError } from '@/lib/api/client'
 
 const PROVIDER_OPTIONS: { name: AIProviderName; label: string; defaultDisplayName: string }[] = [
   { name: AIProviderName.OPENAI, label: 'OpenAI', defaultDisplayName: 'OpenAI' },
@@ -296,21 +297,7 @@ export function AIProviderDialog({
         onOpenChange(false)
       }
     } catch (err: unknown) {
-      let message = 'Failed to validate credentials. Please check your API key and try again.'
-      if (err instanceof Error) {
-        message = err.message
-      } else if (typeof err === 'object' && err !== null) {
-        const errorRecord = err as Record<string, unknown>
-        const resp = errorRecord.response as Record<string, unknown> | undefined
-        const data = resp?.data as Record<string, unknown> | undefined
-        const errObj = data?.error as Record<string, unknown> | undefined
-        message =
-          (typeof data?.message === 'string' ? data.message : undefined) ||
-          (typeof errObj?.message === 'string' ? errObj.message : undefined) ||
-          (typeof errorRecord.message === 'string' ? errorRecord.message : undefined) ||
-          message
-      }
-      setValidationError(message)
+      setValidationError(extractProviderErrorMessage(err))
     }
   }
 
@@ -658,4 +645,39 @@ export function AIProviderDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+const DEFAULT_VALIDATION_ERROR = 'Failed to validate credentials. Please check your API key and try again.'
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+// Credential validation happens server-side: the API rejects a bad key with an
+// ActivepiecesError whose JSON body is `{ code, params }` — the human-readable
+// reason lives in `params.message`, with no top-level `message` field. Read the
+// raw response body from ApiClientError.details so the banner explains what
+// failed instead of collapsing to "Request failed with status 400".
+function extractProviderErrorMessage(err: unknown): string {
+  if (err instanceof ApiClientError && isRecord(err.details)) {
+    const params = err.details.params
+    if (isRecord(params)) {
+      if (typeof params.message === 'string' && params.message.length > 0) {
+        return params.message
+      }
+      if (typeof params.error === 'string' && params.error.length > 0) {
+        return params.error
+      }
+    }
+    if (typeof err.details.message === 'string' && err.details.message.length > 0) {
+      return err.details.message
+    }
+  }
+  if (err instanceof Error && err.message.length > 0) {
+    return err.message
+  }
+  if (isRecord(err) && typeof err.message === 'string' && err.message.length > 0) {
+    return err.message
+  }
+  return DEFAULT_VALIDATION_ERROR
 }

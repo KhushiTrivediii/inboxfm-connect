@@ -1,6 +1,6 @@
 import { isNil, isObject } from '@inboxfm-connect/core-utils'
 import { PiecePropertyMap, PropertyType } from '@inboxfm-connect/pieces-framework'
-import { EngineResponse, EngineResponseStatus, McpToolDefinition, ProjectScopedMcpServer, WorkerJobType } from '@inboxfm-connect/shared'
+import { McpToolDefinition, ProjectScopedMcpServer, WorkerJobType } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { z } from 'zod'
 import { userInteractionWatcher } from '../../helper/user-interaction/user-interaction-watcher'
@@ -57,13 +57,13 @@ export const apResolvePropertyChainTool = (mcp: ProjectScopedMcpServer, log: Fas
                         }
                     }
 
-                    let result: EngineResponse<{ options: Array<{ label: string, value: unknown }> | PiecePropertyMap, disabled?: boolean }>
+                    let result: { options: Array<{ label: string, value: unknown }> | PiecePropertyMap, disabled?: boolean }
                     try {
                         result = await withTimeout({
-                            promise: userInteractionWatcher.submitAndWaitForResponse<EngineResponse<{
+                            promise: userInteractionWatcher.submitAndWaitForResponse<{
                                 options: Array<{ label: string, value: unknown }> | PiecePropertyMap
                                 disabled?: boolean
-                            }>>({
+                            }>({
                                 jobType: WorkerJobType.EXECUTE_PROPERTY,
                                 platformId,
                                 projectId: mcp.projectId,
@@ -89,7 +89,7 @@ export const apResolvePropertyChainTool = (mcp: ProjectScopedMcpServer, log: Fas
                         break
                     }
 
-                    if (result.status !== EngineResponseStatus.OK || isNil(result.response?.options)) {
+                    if (isNil(result?.options)) {
                         resolvedProperties.push({
                             propertyName: chainItem.propertyName,
                             options: [],
@@ -99,7 +99,7 @@ export const apResolvePropertyChainTool = (mcp: ProjectScopedMcpServer, log: Fas
                         break
                     }
 
-                    const { options } = result.response
+                    const { options } = result
 
                     if (propDef.type === PropertyType.DYNAMIC && isObject(options) && !Array.isArray(options)) {
                         const dynamicFields = mcpUtils.buildPropSummaries(options as PiecePropertyMap)

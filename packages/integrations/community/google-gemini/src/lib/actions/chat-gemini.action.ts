@@ -1,4 +1,5 @@
 import { Content, GoogleGenerativeAI } from '@google/generative-ai';
+import { trimHistoryToBudget } from '../common/history-guard';
 import {
   Property,
   StoreScope,
@@ -52,8 +53,14 @@ export const chatGemini = createAction({
 
     if (memoryKey) {
       const storedHistory = await store.get(memoryKey, StoreScope.PROJECT);
+      // Trim the RESTORED history too (review #386): a wedged memoryKey must
+      // recover on this run — the store.put side never runs when the request
+      // itself fails.
       if (Array.isArray(storedHistory)) {
-        history = storedHistory;
+        // Trim the RESTORED history (review #386): a wedged memoryKey must
+        // recover on this run — the store.put side never runs when the
+        // request itself fails.
+        history = trimHistoryToBudget(storedHistory);
       }
     }
 
@@ -66,7 +73,10 @@ export const chatGemini = createAction({
 
     if (memoryKey) {
       const updatedHistory = await chat.getHistory();
-      await store.put(memoryKey, updatedHistory, StoreScope.PROJECT);
+      // Bound the stored history so long-running memoryKey flows cannot
+      // wedge themselves past the model context window (issue #381).
+      const boundedHistory = trimHistoryToBudget(updatedHistory);
+      await store.put(memoryKey, boundedHistory, StoreScope.PROJECT);
     }
 
     return {

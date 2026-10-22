@@ -7,7 +7,7 @@ import { SecretManagerProvider, throwConnectionError, throwGetSecretError } from
 async function buildClient(config: OnePasswordProviderConfig) {
     return createClient({
         auth: config.serviceAccountToken,
-        integrationName: 'Activepieces',
+        integrationName: 'Inboxfm Connect',
         integrationVersion: 'v1.0.0',
     })
 }

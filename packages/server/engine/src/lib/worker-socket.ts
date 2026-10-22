@@ -15,6 +15,7 @@ const INITIAL_CONNECT_TIMEOUT_MS = 60_000
 let socket: Socket | undefined
 let notifyClient: WorkerNotifyContract | undefined
 let initialConnectWatchdog: NodeJS.Timeout | undefined
+let gcInterval: NodeJS.Timeout | undefined
 
 function clearInitialConnectWatchdog(): void {
     if (initialConnectWatchdog) {
@@ -91,9 +92,13 @@ export const workerSocket = {
         const gc = global.gc
         if (typeof gc === 'function') {
             const GC_INTERVAL_MS = 60_000
-            setInterval(() => {
+            // unref + tracked: disconnect() is the dispose path (used by tests
+            // that never hit the socket's process.exit handlers), so the
+            // interval must not keep the host event loop alive afterwards.
+            gcInterval = setInterval(() => {
                 gc()
             }, GC_INTERVAL_MS)
+            gcInterval.unref()
         }
 
         socket.connect()
@@ -105,6 +110,10 @@ export const workerSocket = {
 
     disconnect: (): void => {
         clearInitialConnectWatchdog()
+        if (gcInterval) {
+            clearInterval(gcInterval)
+            gcInterval = undefined
+        }
         socket?.disconnect()
         socket = undefined
         notifyClient = undefined

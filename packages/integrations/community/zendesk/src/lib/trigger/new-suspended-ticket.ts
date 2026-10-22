@@ -129,7 +129,7 @@ export const newSuspendedTicket = createTrigger({
         },
         body: {
           webhook: {
-            name: `Activepieces Suspended Ticket Webhook - ${Date.now()}`,
+            name: `Inboxfm Connect Suspended Ticket Webhook - ${Date.now()}`,
             endpoint: context.webhookUrl,
             http_method: 'POST',
             request_format: 'json',

@@ -14,6 +14,7 @@ export enum SystemJobName {
     HARD_DELETE_PLATFORM = 'hard-delete-platform',
     TOOL_SEARCH_REINDEX = 'tool-search-reindex',
     BUNDLE_PIECE = 'bundle-piece',
+    CONNECT_SESSION_CLEANUP = 'connect-session-cleanup',
 }
 
 type BundlePieceSystemJobData = {
@@ -63,6 +64,7 @@ type SystemJobDataMap = {
     [SystemJobName.HARD_DELETE_PLATFORM]: HardDeletePlatformSystemJobData
     [SystemJobName.TOOL_SEARCH_REINDEX]: ToolSearchReindexSystemJobData
     [SystemJobName.BUNDLE_PIECE]: BundlePieceSystemJobData
+    [SystemJobName.CONNECT_SESSION_CLEANUP]: Record<string, never>
 }
 
 export type SystemJobData<T extends SystemJobName = SystemJobName> = T extends SystemJobName ? SystemJobDataMap[T] : never

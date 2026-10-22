@@ -19,7 +19,11 @@ export const PlatformAnalyticsReportEntity = new EntitySchema<PlatformAnalyticsR
             nullable: false,
         },
         cachedAt: {
-            type: Date,
+            // `type: Date` maps to TIMESTAMP WITHOUT TIME ZONE (PostgresDriver.normalizeType),
+            // dropping the UTC offset the service writes and shifting the value by the server's
+            // timezone offset on read (cache then never hits outside UTC) — see migration
+            // 1791985230890. Every other timestamp column here is timestamptz.
+            type: 'timestamp with time zone',
             nullable: false,
         },
         runs: {

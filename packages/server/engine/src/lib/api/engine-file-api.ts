@@ -18,7 +18,8 @@ export const engineFileApi = {
     async upload({ engineToken, apiUrl, fileId, type, fileName, compression, data }: UploadParams): Promise<UploadResult> {
         const fetchWithRetry = fetchRetry(global.fetch)
         const headers = buildPutHeaders({ type, fileName, compression, contentLength: data.length })
-        const putUrl = `${apiUrl}v1/files/${fileId}?token=${encodeURIComponent(engineToken)}`
+        const baseApiUrl = apiUrl.endsWith('/') ? apiUrl : `${apiUrl}/`
+        const putUrl = `${baseApiUrl}v1/files/${fileId}?token=${encodeURIComponent(engineToken)}`
 
         const initial = await fetchWithRetry(putUrl, {
             method: 'PUT',
@@ -72,7 +73,8 @@ export const engineFileApi = {
     },
     async download({ engineToken, apiUrl, fileId }: DownloadFileParams): Promise<Uint8Array> {
         const fetchWithRetry = fetchRetry(global.fetch)
-        const response = await fetchWithRetry(`${apiUrl}v1/files/${fileId}?token=${encodeURIComponent(engineToken)}`, {
+        const baseApiUrl = apiUrl.endsWith('/') ? apiUrl : `${apiUrl}/`
+        const response = await fetchWithRetry(`${baseApiUrl}v1/files/${fileId}?token=${encodeURIComponent(engineToken)}`, {
             method: 'GET',
             redirect: 'follow',
             ...RETRY_CONFIG,

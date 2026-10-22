@@ -21,10 +21,21 @@ import {
 // (threadSafeMkdir / cache-state), so there is no per-key provision dedup here. execute owns the slot
 // lifecycle: acquire -> provision -> run -> release on success / invalidate on throw, re-raising the
 // sandbox ActivepiecesError codes (timeout / memory / log-size) that handlers already catch. See ADR 0004.
+//
+// "One in-flight operation at a time" is enforced HERE, not by the caller: callers like the
+// user-interaction watcher hand out worker indices round-robin, which reuses a busy box whenever
+// more than `concurrency` requests are in flight. Two operations sharing one sandbox process
+// cross-strip each other's socket listeners (each execute's finally calls removeAllListeners on the
+// shared socket/process), reset shared native-output buffers, and misreport `busy`, so a colliding
+// execute turns a crash into a silent RPC-timeout hang. A per-box promise chain serializes the
+// executes regardless of how callers route work.
 export function createSandboxRuntime({ concurrency = 1, basePath, getSettings }: CreateSandboxRuntimeParams): Runtime {
     const managers: SandboxManager[] = Array.from({ length: concurrency }, (_, index) =>
         createSandboxManager({ boxId: index + 1, basePath, getSettings }),
     )
+    // Tail of the per-box execute chain. Never allowed to reject, so a failed operation
+    // cannot poison the box for the queued ones.
+    const boxQueues: Promise<void>[] = Array.from({ length: concurrency }, () => Promise.resolve())
 
     return {
         async execute({ workerIndex, log, operationType, operation, timeoutInSeconds, provision }: ExecuteParams): Promise<RuntimeExecutionResult> {
@@ -35,58 +46,68 @@ export function createSandboxRuntime({ concurrency = 1, basePath, getSettings }:
                     params: { message: `No sandbox manager for worker index ${workerIndex} (concurrency=${concurrency})` },
                 })
             }
-            const sandbox = manager.acquire({ log })
 
-            const provisionStartedAt = Date.now()
-            const { error: provisionError } = await tryCatch(() => localExecutionCache(log, basePath, getSettings).provision({
-                pieces: provision.pieces,
-                codeSteps: provision.codes,
-                publicApiUrl: provision.publicApiUrl,
-                engineToken: provision.engineToken,
-            }))
-            if (provisionError) {
-                await manager.invalidate(log)
-                throw provisionError
-            }
-            const provisionMs = Date.now() - provisionStartedAt
+            const execute = async (): Promise<RuntimeExecutionResult> => {
+                const sandbox = manager.acquire({ log })
 
-            try {
-                let bootMs = 0
-                let runMs = 0
-                // Break the engine timeline into its two worker-observable phases:
-                //   sandboxStart = fork the engine child + Node boot + parse main.js (V8-cached) +
-                //                  isolated-vm init + socket connect handshake.
-                //   sandboxRun   = send the operation + the engine runs the flow steps + returns.
-                // executionMs wraps both (total), so the report shows execution = start + run.
-                const result = await wideEvent.timed({
-                    name: 'execution',
-                    fn: async () => {
-                        const bootStartedAt = Date.now()
-                        await wideEvent.timed({
-                            name: 'sandboxStart',
-                            fn: () => sandbox.start({
-                                flowVersionId: provision.flowVersionId,
-                                platformId: provision.platformId,
-                                mounts: [],
-                            }),
-                        })
-                        bootMs = Date.now() - bootStartedAt
-                        const runStartedAt = Date.now()
-                        const runResult = await wideEvent.timed({
-                            name: 'sandboxRun',
-                            fn: () => sandbox.execute(operationType, operation, { timeoutInSeconds }),
-                        })
-                        runMs = Date.now() - runStartedAt
-                        return runResult
-                    },
-                })
-                await manager.release(log)
-                return { ...result, timings: { provisionMs, bootMs, runMs } }
+                const provisionStartedAt = Date.now()
+                const { error: provisionError } = await tryCatch(() => localExecutionCache(log, basePath, getSettings).provision({
+                    pieces: provision.pieces,
+                    codeSteps: provision.codes,
+                    publicApiUrl: provision.publicApiUrl,
+                    engineToken: provision.engineToken,
+                }))
+                if (provisionError) {
+                    await manager.invalidate(log)
+                    throw provisionError
+                }
+                const provisionMs = Date.now() - provisionStartedAt
+
+                try {
+                    let bootMs = 0
+                    let runMs = 0
+                    // Break the engine timeline into its two worker-observable phases:
+                    //   sandboxStart = fork the engine child + Node boot + parse main.js (V8-cached) +
+                    //                  isolated-vm init + socket connect handshake.
+                    //   sandboxRun   = send the operation + the engine runs the flow steps + returns.
+                    // executionMs wraps both (total), so the report shows execution = start + run.
+                    const result = await wideEvent.timed({
+                        name: 'execution',
+                        fn: async () => {
+                            const bootStartedAt = Date.now()
+                            await wideEvent.timed({
+                                name: 'sandboxStart',
+                                fn: () => sandbox.start({
+                                    flowVersionId: provision.flowVersionId,
+                                    platformId: provision.platformId,
+                                    mounts: [],
+                                }),
+                            })
+                            bootMs = Date.now() - bootStartedAt
+                            const runStartedAt = Date.now()
+                            const runResult = await wideEvent.timed({
+                                name: 'sandboxRun',
+                                fn: () => sandbox.execute(operationType, operation, { timeoutInSeconds }),
+                            })
+                            runMs = Date.now() - runStartedAt
+                            return runResult
+                        },
+                    })
+                    await manager.release(log)
+                    return { ...result, timings: { provisionMs, bootMs, runMs } }
+                }
+                catch (error) {
+                    await manager.invalidate(log)
+                    throw error
+                }
             }
-            catch (error) {
-                await manager.invalidate(log)
-                throw error
-            }
+
+            // Serialize operations per box: wait for the previous execute on this
+            // workerIndex to settle before acquiring the sandbox for this one.
+            const previous = boxQueues[workerIndex]
+            const chained = previous.then(execute)
+            boxQueues[workerIndex] = chained.then(() => undefined, () => undefined)
+            return chained
         },
         getActiveExecutors(): RuntimeExecutorInfo[] {
             return managers

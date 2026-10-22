@@ -25,9 +25,13 @@ function reportMigration({ pieceFolder, label, dryRun }: { pieceFolder: string, 
 }
 
 async function migrateByName({ pieceName, dryRun }: { pieceName: string, dryRun: boolean }): Promise<void> {
+    if (pieceName === 'framework' || pieceName === 'common') {
+        console.error(chalk.red(`🚨 '${pieceName}' is a foundation package, not a piece`))
+        process.exit(1)
+    }
     const pieceFolder = await findPiece(pieceName)
     if (!pieceFolder) {
-        console.error(chalk.red(`🚨 Piece '${pieceName}' not found under packages/pieces`))
+        console.error(chalk.red(`🚨 Piece '${pieceName}' not found under packages/integrations`))
         process.exit(1)
     }
     reportMigration({ pieceFolder, label: pieceName, dryRun })
@@ -45,7 +49,7 @@ export const migratePieceCommand = new Command('migrate')
     .description('Migrate a piece to the self-contained bundle model: repoint imports to @inboxfm-connect/pieces-framework, fix package.json, and add the import-boundary lint rule')
     .argument('[name]', 'name of the piece to migrate')
     .option('--name <pieceName>', 'name of the piece to migrate')
-    .option('--all', 'migrate every piece under packages/pieces')
+    .option('--all', 'migrate every piece under packages/integrations')
     .option('--dry-run', 'report the changes without writing them')
     .action(async (positionalName, options) => {
         const dryRun = options.dryRun ?? false

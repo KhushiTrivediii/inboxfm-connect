@@ -4,7 +4,7 @@ extend-exclude = [
     "**/database/**",
     "packages/ui/core/src/locale/",
     # French
-    "packages/pieces/community/wedof/src/",
+    "packages/integrations/community/wedof/src/",
 ]
 ignore-hidden = false
 

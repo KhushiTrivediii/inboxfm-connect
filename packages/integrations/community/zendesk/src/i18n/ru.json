@@ -3,7 +3,7 @@
   "Customer service software and support ticket system": "Программное обеспечение обслуживания клиентов и система поддержки заявок",
   "Agent Email": "E-mail Агента",
   "Token": "Токен",
-  "Organization (e.g activepieceshelp)": "Организация (например, активная помощь)",
+  "Organization (e.g inboxfmhelp)": "Организация (например, активная помощь)",
   "The email address you use to login to Zendesk": "Адрес электронной почты, который вы используете для входа в Zendesk",
   "The API token you can generate in Zendesk": "API-токен, который вы можете сгенерировать в Zendesk",
   "The subdomain of your Zendesk instance": "Поддомен вашего экземпляра Zendesk",

@@ -1,4 +1,4 @@
-import { apId, isNil } from '@inboxfm-connect/core-utils'
+import { ActivepiecesError, apId, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
 import { Agent, AgentOutputField, AgentTool } from '@inboxfm-connect/shared'
 import { repoFactory } from '../core/db/repo-factory'
 import { AgentEntity, AgentSchema } from './agent.entity'
@@ -38,7 +38,28 @@ export const agentService = {
             status: params.status ?? 'ENABLED',
         }
 
-        return agentRepo().save(newAgent)
+        // create() is only reachable from the project-replace apply loop, which is
+        // meant to be idempotent against its destination project. Two concurrent
+        // applies (a retried deploy, two replicas) both pass their checks and both
+        // INSERT, and the loser of idx_agent_project_id_external_id failed the
+        // whole replace batch with the raw driver error. The row it was about to
+        // write already exists under the same natural key, so converge on the
+        // winner's row the same way the get-or-create legs do (#469/#509); a
+        // violation that does not resolve to the natural key (e.g. a colliding
+        // explicit id) still propagates raw.
+        try {
+            return await agentRepo().save(newAgent)
+        }
+        catch (error: unknown) {
+            if (!isUniqueViolation(error)) {
+                throw error
+            }
+            const winner = await agentRepo().findOneBy({ projectId: params.projectId, externalId: params.externalId })
+            if (isNil(winner)) {
+                throw error
+            }
+            return winner
+        }
     },
 
     async update(params: {
@@ -74,7 +95,28 @@ export const agentService = {
             ...(params.status !== undefined && { status: params.status }),
         }
 
-        return agentRepo().save(updated)
+        // A unique loss on update means the requested externalId is already taken
+        // by a DIFFERENT agent in the same project. Unlike the create race there
+        // is no winner row to converge on - returning the conflicting row would
+        // hand back an entity the caller never named - so map it to the
+        // 409-mapped conflict code (the shape project-role and the ai-provider
+        // create use) instead of leaking the raw driver error with its constraint
+        // name. Violations that cannot come from the (projectId, externalId)
+        // index still propagate raw.
+        try {
+            return await agentRepo().save(updated)
+        }
+        catch (error: unknown) {
+            if (isUniqueViolation(error) && params.externalId !== undefined) {
+                throw new ActivepiecesError({
+                    code: ErrorCode.VALIDATION,
+                    params: {
+                        message: `Agent with externalId "${params.externalId}" already exists in this project`,
+                    },
+                })
+            }
+            throw error
+        }
     },
 
     async delete(params: { id: string, projectId: string, platformId: string }): Promise<void> {
@@ -103,4 +145,12 @@ export const agentService = {
             ...(params.platformId && { platformId: params.platformId }),
         })
     },
+}
+
+// Postgres surfaces a unique violation as SQLSTATE 23505 on `code`, and pglite puts it
+// on `driverError.code` instead, so a matcher keyed on the message misses half the
+// supported drivers. Same shape as the user-service / managed-authn helpers.
+function isUniqueViolation(error: unknown): boolean {
+    const candidate = error as { code?: string, driverError?: { code?: string } } | null | undefined
+    return candidate?.code === '23505' || candidate?.driverError?.code === '23505'
 }

@@ -36,12 +36,12 @@ import {
 import { FastifyBaseLogger } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
 import semver from 'semver'
-import { ArrayContains } from 'typeorm'
+import { ArrayContains, In } from 'typeorm'
 import { AgentEntity, AgentSchema } from '../../agents/agent.entity'
 import { agentService } from '../../agents/agent.service'
 import { AIProviderEntity, AIProviderSchema } from '../../ai/ai-provider-entity'
 import { appConnectionService } from '../../app-connection/app-connection-service/app-connection-service'
-import { ConnectionEntity } from '../../app-connection/app-connection.entity'
+import { ConnectionEntity, ConnectionSchema } from '../../app-connection/app-connection.entity'
 import { repoFactory } from '../../core/db/repo-factory'
 import { databaseConnection } from '../../database/database-connection'
 import { distributedLock } from '../../database/redis-connections'
@@ -147,36 +147,68 @@ function sanitizeMcpTool(tool: AgentTool): AgentTool {
     return tool
 }
 
+function isTableNotFoundError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') {
+        return false
+    }
+    const errObj = err as Record<string, unknown>
+    if (errObj.code === '42P01') {
+        return true
+    }
+    const message = typeof errObj.message === 'string' ? errObj.message.toLowerCase() : ''
+    if (
+        message.includes('does not exist') ||
+        message.includes('no such table') ||
+        message.includes('undefined_table') ||
+        message.includes('relation "flow"') ||
+        message.includes('relation "flow_version"')
+    ) {
+        return true
+    }
+    return false
+}
+
 function extractAgentsFromFlows(flows?: Array<Record<string, unknown>>): AgentSnapshotSchema[] {
     if (!flows || !Array.isArray(flows)) return []
     const agents: AgentSnapshotSchema[] = []
     const seenExtIds = new Set<string>()
 
     for (const flow of flows) {
+        if (!flow || typeof flow !== 'object') continue
         const flowVersion = (flow.version ?? flow) as Record<string, unknown>
+        if (!flowVersion || typeof flowVersion !== 'object') continue
         const trigger = flowVersion.trigger as Record<string, unknown> | undefined
-        if (!trigger) continue
+        if (!trigger || typeof trigger !== 'object') continue
 
         const steps: Array<Record<string, unknown>> = []
+        const visited = new Set<Record<string, unknown>>()
         const collectSteps = (step?: Record<string, unknown>): void => {
-            if (!step) return
+            if (!step || typeof step !== 'object' || visited.has(step)) return
+            visited.add(step)
             steps.push(step)
-            if (step.nextAction) collectSteps(step.nextAction as Record<string, unknown>)
+            if (step.nextAction && typeof step.nextAction === 'object') {
+                collectSteps(step.nextAction as Record<string, unknown>)
+            }
             if (Array.isArray(step.children)) {
-                for (const c of step.children) collectSteps(c as Record<string, unknown>)
+                for (const c of step.children) {
+                    if (c && typeof c === 'object') {
+                        collectSteps(c as Record<string, unknown>)
+                    }
+                }
             }
         }
         collectSteps(trigger)
 
         for (const step of steps) {
             const settings = step.settings as Record<string, unknown> | undefined
-            const input = settings?.input as Record<string, unknown> | undefined
-            if (!input) continue
+            if (!settings || typeof settings !== 'object') continue
+            const input = settings.input as Record<string, unknown> | undefined
+            if (!input || typeof input !== 'object') continue
 
             const agentId = (input.agentId ?? input.externalAgentId) as string | undefined
-            if (agentId && !seenExtIds.has(agentId)) {
+            if (agentId && typeof agentId === 'string' && agentId.trim().length > 0 && !seenExtIds.has(agentId)) {
                 seenExtIds.add(agentId)
-                const modelInput = input.model as { provider?: string, model?: string } | undefined
+                const modelInput = input.model && typeof input.model === 'object' ? (input.model as { provider?: string, model?: string }) : undefined
                 agents.push({
                     externalId: agentId,
                     displayName: (step.displayName as string) ?? (step.name as string) ?? `Flow Agent (${agentId})`,
@@ -184,8 +216,8 @@ function extractAgentsFromFlows(flows?: Array<Record<string, unknown>>): AgentSn
                     prompt: (input.prompt as string) ?? '',
                     maxSteps: typeof input.maxSteps === 'number' ? input.maxSteps : 10,
                     model: {
-                        provider: modelInput?.provider ?? (input.provider as string) ?? '',
-                        model: modelInput?.model ?? (input.modelName as string) ?? '',
+                        provider: modelInput?.provider ?? (typeof input.provider === 'string' ? input.provider : ''),
+                        model: modelInput?.model ?? (typeof input.modelName === 'string' ? input.modelName : ''),
                     },
                     tools: Array.isArray(input.agentTools) ? (input.agentTools as AgentTool[]) : [],
                     structuredOutput: null,
@@ -385,6 +417,10 @@ function computePlanSignature(plan: Omit<ProjectReplacePlan, 'signature'>): stri
         destinationStateHash: plan.destinationStateHash,
         preflight: plan.preflight,
         connectionMappings: (plan.connectionMappings ?? []).map(sanitizeMappingForPlan),
+        providerMappings: (plan.providerMappings ?? []).map((pm: ProviderMappingSchema) => ({
+            sourceProvider: pm.sourceProvider,
+            destProvider: pm.destProvider,
+        })),
         changes: plan.changes,
         summary: plan.summary,
     })
@@ -419,17 +455,32 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
         const requiredPiecesMap = new Map<string, string>()
         const requiredConnectionsMap = new Map<string, string>()
 
+        // One batched lookup for every referenced connection instead of one
+        // findOne per binding: identical filters (platform + project membership),
+        // identical results - ids are the primary key, so In() returns each
+        // referenced connection at most once - in a single round trip.
+        const referencedConnectionIds = Array.from(new Set(
+            triggerBindings.map((tb) => tb.connectionId).filter((id): id is string => id != null),
+        ))
+        const connectionsById = new Map<string, ConnectionSchema>()
+        if (referencedConnectionIds.length > 0) {
+            const connections = await connectionRepo().find({
+                where: {
+                    id: In(referencedConnectionIds),
+                    platformId,
+                    projectIds: ArrayContains([projectId]),
+                },
+            })
+            for (const conn of connections) {
+                connectionsById.set(conn.id, conn)
+            }
+        }
+
         for (const tb of triggerBindings) {
             requiredPiecesMap.set(`${tb.pieceName}::${tb.pieceVersion}`, tb.pieceVersion)
             let connExternalId: string | null = null
             if (tb.connectionId) {
-                const conn = await connectionRepo().findOne({
-                    where: {
-                        id: tb.connectionId,
-                        platformId,
-                        projectIds: ArrayContains([projectId]),
-                    },
-                })
+                const conn = connectionsById.get(tb.connectionId)
                 if (conn && conn.externalId) {
                     connExternalId = conn.externalId
                     requiredConnectionsMap.set(conn.externalId, conn.pieceName)
@@ -531,13 +582,25 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
                 if (flowIds.length > 0) {
                     const placeholders = flowIds.map((_, i) => `$${i + 1}`).join(', ')
                     flowVersions = await databaseConnection().query<Array<Record<string, unknown>>>(
-                        `SELECT * FROM "flow_version" WHERE "flowId" IN (${placeholders})`,
+                        `SELECT * FROM "flow_version" WHERE "flowId" IN (${placeholders}) ORDER BY "created" DESC`,
                         flowIds,
                     )
                 }
                 const versionsByFlowId = new Map<string, Record<string, unknown>>()
                 for (const fv of flowVersions) {
-                    versionsByFlowId.set(fv.flowId as string, fv)
+                    const flowId = fv.flowId as string
+                    if (!flowId) continue
+                    const existing = versionsByFlowId.get(flowId)
+                    if (!existing) {
+                        versionsByFlowId.set(flowId, fv)
+                    }
+                    else {
+                        const existingCreated = new Date((existing.created as string | number | Date) ?? 0).getTime()
+                        const currentCreated = new Date((fv.created as string | number | Date) ?? 0).getTime()
+                        if (currentCreated > existingCreated) {
+                            versionsByFlowId.set(flowId, fv)
+                        }
+                    }
                 }
 
                 flowsSnapshot = flows.map((f) => ({
@@ -553,8 +616,13 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
                 }
             }
         }
-        catch {
-            flowsSnapshot = []
+        catch (err) {
+            if (isTableNotFoundError(err)) {
+                flowsSnapshot = []
+            }
+            else {
+                throw err
+            }
         }
 
         // 5. MCP server (externalId and disabledTools only, NO live bearer tokens!)
@@ -634,9 +702,17 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
 
     async computeDestinationStateHash(projectId: string, platformId?: string): Promise<string> {
         const tables = await tableRepo().find({ where: { projectId } })
+        // One batched fields query instead of one getAll per table:
+        // getAllByTableIds orders each table's fields by position ASC exactly
+        // like getAll, and the hash sorts the mapped fields by externalId
+        // afterwards, so the normalized state is byte-identical.
+        const fieldsByTable = await fieldService.getAllByTableIds({
+            projectId,
+            tableIds: tables.map((t) => t.id),
+        })
         const tablesWithFields = []
         for (const t of tables) {
-            const fields: Field[] = await fieldService.getAll({ projectId, tableId: t.id })
+            const fields: Field[] = fieldsByTable.get(t.id) ?? []
             tablesWithFields.push({
                 name: t.name,
                 externalId: t.externalId,
@@ -1538,6 +1614,10 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
                 connections: connectionsReport,
             },
             connectionMappings: (connectionMappings ?? []).map(sanitizeMappingForPlan),
+            providerMappings: (providerMappings ?? []).map((pm: ProviderMappingSchema) => ({
+                sourceProvider: pm.sourceProvider,
+                destProvider: pm.destProvider,
+            })),
             changes: {
                 creates,
                 updates,
@@ -1601,6 +1681,7 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
             destinationStateHash: plan.destinationStateHash,
             preflight: plan.preflight,
             connectionMappings: plan.connectionMappings,
+            providerMappings: plan.providerMappings,
             changes: plan.changes,
             summary: plan.summary,
         }
@@ -2130,6 +2211,25 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
                     }
                 }
 
+                // Provider remaps used to be dropped from the artifact, so an apply driven by
+                // `--plan-file` had no way to know a remap was ever requested and fell through
+                // to `?? rawProvider` - silently writing destination agents against the SOURCE
+                // provider and reporting success (#502). They are now signed into the plan, so
+                // this map is authoritative and cannot be edited without breaking the HMAC.
+                const planProviderMap = new Map<string, string>()
+                for (const pm of plan.providerMappings ?? []) {
+                    planProviderMap.set(pm.sourceProvider.toLowerCase(), pm.destProvider)
+                }
+
+                // Request-time mappings override the artifact, so an operator can still change
+                // the destination at apply time. The artifact is the fallback. Falling through
+                // to the raw provider is correct here: it means nothing ever remapped that
+                // provider, which is the common case and must keep applying unchanged.
+                const resolveTargetProvider = (rawProvider: string): string => {
+                    const key = rawProvider.toLowerCase()
+                    return providerMap.get(key) ?? planProviderMap.get(key) ?? rawProvider
+                }
+
                 const effectiveAgents: AgentSnapshotSchema[] = [...(snapshot.agents ?? [])]
                 if (snapshot.flows && snapshot.flows.length > 0) {
                     const flowAgents = extractAgentsFromFlows(snapshot.flows)
@@ -2145,7 +2245,7 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
                         const srcAgent = effectiveAgents.find((a) => a.externalId === change.externalId)
                         if (srcAgent) {
                             const rawProvider = srcAgent.model.provider
-                            const targetProvider = providerMap.get(rawProvider.toLowerCase()) ?? rawProvider
+                            const targetProvider = resolveTargetProvider(rawProvider)
 
                             const mappedTools = remapAgentTools(srcAgent.tools, resolvedConnections, request.connectionMappings)
 
@@ -2184,7 +2284,7 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
                         }
 
                         const rawProvider = srcAgent.model.provider
-                        const targetProvider = providerMap.get(rawProvider.toLowerCase()) ?? rawProvider
+                        const targetProvider = resolveTargetProvider(rawProvider)
 
                         const mappedTools = remapAgentTools(srcAgent.tools, resolvedConnections, request.connectionMappings, existing.tools)
 
@@ -2523,3 +2623,13 @@ export const projectReplaceService = (log: FastifyBaseLogger) => ({
         })
     },
 })
+
+export const projectReplaceTesting = {
+    canonicalJson,
+    computePlanSignature,
+    computeSha256,
+    sanitizeMappingForPlan,
+    getSigningSecret,
+    extractAgentsFromFlows,
+    isTableNotFoundError,
+}

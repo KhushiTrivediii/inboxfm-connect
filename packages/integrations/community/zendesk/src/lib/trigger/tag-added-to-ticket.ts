@@ -129,7 +129,7 @@ export const tagAddedToTicket = createTrigger({
         },
         body: {
           webhook: {
-            name: `Activepieces Tag Added Webhook - ${Date.now()}`,
+            name: `Inboxfm Connect Tag Added Webhook - ${Date.now()}`,
             endpoint: context.webhookUrl,
             http_method: 'POST',
             request_format: 'json',

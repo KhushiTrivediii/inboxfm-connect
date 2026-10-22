@@ -13,9 +13,9 @@ Open-source AI-first workflow automation platform. Self-hosted or cloud. 400+ in
 - **Side effects**: Separated into `*-side-effects.ts` files, called explicitly after mutations.
 - **Multi-server**: Use `distributedLock`, BullMQ deduplication, or `FOR UPDATE SKIP LOCKED` for concurrent operations.
 - **Managed PostgreSQL**: No custom extensions. Use `sanitizeObjectForPostgresql()` for external data.
-- **Before modifying a module**: Read its `.agents/features/<name>.md` file for entities, services, and integration details.
+- **Before modifying a module**: Check `.agents/features/<name>.md` for context if present, but **never treat feature docs as authoritative**. Inherited feature docs may be stale or describe removed upstream features; the code under `packages/` is always the source of truth. If a feature doc is missing, stale, or references nonexistent files, rely on actual code and tests, and update or prune stale doc references.
 - **Cross-cutting libraries live in `packages/core/*`**, ordered thin → thick: `core-utils`, `core-integration-types`, `core-formula`, `core-execution` (thin, bundleable, framework-agnostic) and `core/shared` (the one thick, app-level member — **keeps the name `@inboxfm-connect/shared`**, carries DB/EE/management schemas + heavy deps). Integrations and the engine may import the thin members but **never** `@inboxfm-connect/shared`; integrations get what they need via `@inboxfm-connect/integrations-framework`. See `.claude/rules/core-packages.md`.
-| `.agents/features/*.md` | ~60 lines each | When Claude explores the feature | Entity schemas, services, data flows |
+| `.agents/features/*.md` | ~60 lines each | When Claude explores the feature | Advisory entity schemas, services, data flows (verify against source) |
 | `.claude/rules/` | 3-5 lines each | Every session | Critical safety checks (entity registration, data isolation, edition safety) |
 | `.agents/skills/` | 30-65 lines each | When invoked | Step-by-step workflows (`/add-feature`, `/add-entity`, `/add-endpoint`) |
 - **Exported types and constants must be placed at the end of the file**, after all logic (functions, hooks, components, classes, etc.). This keeps the logic front and centre when reading a file, and groups the public contract at a predictable location.
@@ -105,7 +105,7 @@ When running in `--mode=cloud`, do not use OAuth2 connections — the OAuth prov
 
 ## Database Migrations
 
-- Before creating or modifying a database migration, **always read the [Database Migrations Playbook](https://www.inboxfm-connect.com/docs/handbook/engineering/playbooks/database-migration#database-migrations)** first. Follow its instructions for generating and structuring migrations.
+- Before creating or modifying a database migration, **always read the [Database Migrations Playbook](docs/handbook/engineering/playbooks/database-migration.mdx)** first. Follow its instructions for generating and structuring migrations.
 
 ## Verification
 
@@ -125,5 +125,5 @@ When running in `--mode=cloud`, do not use OAuth2 connections — the OAuth prov
 
 ## Useful Links
 
-- [Database Migrations Playbook](https://www.inboxfm-connect.com/docs/handbook/engineering/playbooks/database-migration)
+- [Database Migrations Playbook](docs/handbook/engineering/playbooks/database-migration.mdx)
 - [TypeORM Migrations Docs](https://orkhan.gitbook.io/typeorm/docs/migrations)

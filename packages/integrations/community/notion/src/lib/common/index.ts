@@ -20,6 +20,69 @@ export function getNotionToken(auth: NotionAuthValue): string {
   return getAccessTokenOrThrow(auth);
 }
 
+export type NotionUsersListResponse = {
+  results: Array<{
+    id: string;
+    name?: string | null;
+    type?: string;
+    [key: string]: unknown;
+  }>;
+  has_more?: boolean | null;
+  next_cursor?: string | null;
+};
+
+export type NotionUsersClient = {
+  users: {
+    list: (args: {
+      page_size?: number;
+      start_cursor?: string;
+    }) => Promise<NotionUsersListResponse>;
+  };
+};
+
+export const fetchAllWorkspaceUsers = async (
+  notion: Pick<Client, 'users'> | NotionUsersClient
+): Promise<{
+  users: NotionUsersListResponse['results'];
+  truncated: boolean;
+}> => {
+  const users: NotionUsersListResponse['results'] = [];
+  let cursor: string | undefined = undefined;
+  let hasMore = true;
+  let truncated = false;
+  const MAX_PAGES = 50; // Safety cap: up to 5,000 members
+  let pageCount = 0;
+
+  while (hasMore && pageCount < MAX_PAGES) {
+    pageCount++;
+    try {
+      const response: NotionUsersListResponse = await notion.users.list({
+        page_size: 100,
+        start_cursor: cursor,
+      });
+      if (Array.isArray(response.results)) {
+        users.push(...response.results);
+      }
+      hasMore = response.has_more ?? false;
+      cursor = response.next_cursor ?? undefined;
+      if (hasMore && !cursor) {
+        truncated = true;
+        break;
+      }
+    } catch (error) {
+      console.error('Notion: failed to fetch workspace users page', error);
+      truncated = true;
+      break;
+    }
+  }
+
+  if (pageCount >= MAX_PAGES && hasMore) {
+    truncated = true;
+  }
+
+  return { users, truncated };
+};
+
 export const notionCommon = {
   baseUrl: 'https://api.notion.com/v1',
   database_id: Property.Dropdown<string, true, typeof notionAuth>({
@@ -172,6 +235,16 @@ export const notionCommon = {
           auth: getNotionToken(auth as NotionAuthValue),
           notionVersion: '2022-02-22',
         });
+        // Cached per database resolution to avoid redundant Notion API roundtrips across multiple people properties
+        let cachedUsers: Awaited<
+          ReturnType<typeof fetchAllWorkspaceUsers>
+        > | null = null;
+        const getWorkspaceUsers = async () => {
+          if (!cachedUsers) {
+            cachedUsers = await fetchAllWorkspaceUsers(notion);
+          }
+          return cachedUsers;
+        };
         const { properties } = await notion.databases.retrieve({
           database_id: database_id as unknown as string,
         });
@@ -196,22 +269,26 @@ export const notionCommon = {
               continue;
             }
             if (property.type === 'people') {
-              const { results } = await notion.users.list({ page_size: 100 });
+              const { users: results, truncated } = await getWorkspaceUsers();
+              const userOptions = results
+                .filter((user) => user.type === 'person' && user.name !== null)
+                .map((option) => ({
+                  label: option.name as string,
+                  value: option.id,
+                }));
+              if (truncated) {
+                userOptions.push({
+                  label:
+                    '⚠️ Could not load all workspace members (partial list)',
+                  value: '__truncated_notice__',
+                });
+              }
               fields[property.name] = Property.StaticMultiSelectDropdown({
                 displayName: property.name,
                 required: false,
                 options: {
                   disabled: false,
-                  options: results
-                    .filter(
-                      (user) => user.type === 'person' && user.name !== null
-                    )
-                    .map((option: { id: string; name: any }) => {
-                      return {
-                        label: option.name,
-                        value: option.id,
-                      };
-                    }),
+                  options: userOptions,
                 },
               });
             } else {
@@ -253,6 +330,16 @@ export const notionCommon = {
           auth: getNotionToken(auth as NotionAuthValue),
           notionVersion: '2022-02-22',
         });
+        // Cached per database resolution to avoid redundant Notion API roundtrips across multiple people properties
+        let cachedUsers: Awaited<
+          ReturnType<typeof fetchAllWorkspaceUsers>
+        > | null = null;
+        const getWorkspaceUsers = async () => {
+          if (!cachedUsers) {
+            cachedUsers = await fetchAllWorkspaceUsers(notion);
+          }
+          return cachedUsers;
+        };
         const { properties } = await notion.databases.retrieve({
           database_id: database_id as unknown as string,
         });
@@ -277,20 +364,26 @@ export const notionCommon = {
               continue;
             }
             if (property.type === 'people') {
-              const { results } = await notion.users.list({ page_size: 100 });
+              const { users: results, truncated } = await getWorkspaceUsers();
+              const userOptions = results
+                .filter((user) => user.type === 'person' && user.name !== null)
+                .map((option) => ({
+                  label: option.name as string,
+                  value: option.id,
+                }));
+              if (truncated) {
+                userOptions.push({
+                  label:
+                    '⚠️ Could not load all workspace members (partial list)',
+                  value: '__truncated_notice__',
+                });
+              }
               fields[property.name] = Property.StaticDropdown({
                 displayName: property.name,
                 required: false,
                 options: {
                   disabled: false,
-                  options: results
-                    .filter(
-                      (user) => user.type === 'person' && user.name !== null
-                    )
-                    .map((option) => ({
-                      label: option.name as string,
-                      value: option.id,
-                    })),
+                  options: userOptions,
                 },
               });
             } else {

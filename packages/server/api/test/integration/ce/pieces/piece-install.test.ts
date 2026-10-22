@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
     DefaultProjectRole,
-    EngineResponseStatus,
     PackageType,
     PieceScope,
     PieceType,
@@ -54,11 +53,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
     await databaseConnection().getRepository('integration_metadata').createQueryBuilder().delete().execute()
-    interactionSpy = vi.spyOn(userInteractionWatcher, 'submitAndWaitForResponse').mockResolvedValue({
-        status: EngineResponseStatus.OK,
-        response: mockPieceMetadata,
-        error: undefined,
-    })
+    interactionSpy = vi.spyOn(userInteractionWatcher, 'submitAndWaitForResponse').mockResolvedValue(mockPieceMetadata)
 })
 
 afterEach(() => {

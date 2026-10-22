@@ -69,7 +69,20 @@ interface RetellAiAgent {
   };
 }
 
-type RetellAiAgentListResponse = RetellAiAgent[];
+// Retell removed GET /list-agents on 2026-07-31. The unified replacement is
+// POST /v2/list-agents, which serves both voice and chat agents and returns the
+// paginated envelope rather than a top-level array.
+type RetellAiAgentListResponse = {
+  items?: RetellAiAgent[];
+  has_more?: boolean;
+  pagination_key?: string;
+};
+
+// Retell caps `limit` at 1000; 100 keeps each response small while still
+// covering the overwhelming majority of workspaces in a single request.
+const AGENT_PAGE_SIZE = 100
+// Safety bound on the pagination loop - a dropdown is not worth unbounded paging.
+const MAX_AGENT_PAGES = 20
 
 interface RetellAiCall {
   call_id: string;
@@ -105,15 +118,56 @@ export const agentIdDropdown = (displayName:string,required=false)=>  Property.D
       };
     }
     try {
-      const agents = await retellAiApiCall<RetellAiAgentListResponse>({
-       auth,
-        method: HttpMethod.GET,
-        url: '/list-agents',
-        body: {
-          limit: 100,
+      // `limit` is a query parameter on v2 (the body schema documents only
+      // filter_criteria), and v2 lists voice AND chat agents - filter to voice so
+      // this dropdown keeps its pre-migration behaviour.
+      // v2 is paginated: results arrive in pages with has_more + pagination_key.
+      // Walk them so a workspace with more than one page of voice agents can
+      // still select them. Bounded so a malformed cursor can never spin.
+      const agentList: RetellAiAgent[] = [];
+      let paginationKey: string | undefined
+      let exhaustedBound = false
+      for (let page = 0; page < MAX_AGENT_PAGES; page++) {
+        const query = paginationKey
+          ? `?limit=${AGENT_PAGE_SIZE}&pagination_key=${encodeURIComponent(paginationKey)}`
+          : `?limit=${AGENT_PAGE_SIZE}`
+        const response = await retellAiApiCall<RetellAiAgentListResponse>({
+          auth,
+          method: HttpMethod.POST,
+          url: `/v2/list-agents${query}`,
+          body: {
+            filter_criteria: {
+              channel: {
+                type: 'string',
+                op: 'eq',
+                value: 'voice',
+              },
+            },
+          },
+        })
+        if (Array.isArray(response?.items)) {
+          agentList.push(...response.items)
         }
-      });
-      const agentList = Array.isArray(agents) ? agents : [];
+        // Stop when the API says there is no more, or when it hands back a
+        // cursor we have already followed (guards against a repeat-key loop).
+        if (!response?.has_more || !response.pagination_key || response.pagination_key === paginationKey) {
+          break
+        }
+        paginationKey = response.pagination_key
+        // The API still had more after the final permitted page, so the dropdown
+        // is showing a truncated list. Say so - a silently short dropdown is
+        // indistinguishable from a workspace that genuinely has few agents.
+        if (page === MAX_AGENT_PAGES - 1) {
+          exhaustedBound = true
+        }
+      }
+      if (exhaustedBound) {
+        console.warn(
+          `[retell-ai] agent dropdown stopped at the ${MAX_AGENT_PAGES}-page bound `
+          + `(${agentList.length} agents loaded); more voice agents exist. `
+          + 'Raise MAX_AGENT_PAGES if this workspace needs them.',
+        )
+      }
       if (agentList.length === 0) {
         return {
           disabled: true,

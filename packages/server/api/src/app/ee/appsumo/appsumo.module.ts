@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto'
+import { isNil } from '@inboxfm-connect/core-utils'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
@@ -10,10 +12,6 @@ import { appsumoService } from './appsumo.service'
 export const appSumoModule: FastifyPluginAsyncZod = async (app) => {
     await app.register(appsumoController, { prefix: '/v1/appsumo' })
 }
-
-const exchangeCredentialUsername = system.get(AppSystemProp.APPSUMO_TOKEN)
-const exchangeCredentialPassword = system.get(AppSystemProp.APPSUMO_TOKEN)
-const token = system.get(AppSystemProp.APPSUMO_TOKEN)
 
 const ActionRequest = z.object({
     action: z.string(),
@@ -35,6 +33,27 @@ const AuthorizationHeaders = z.object({
 })
 type AuthorizationHeaders = z.infer<typeof AuthorizationHeaders>
 
+// Constant-time, fail-closed credential comparison (see issue #463).
+// 1. The token is read at REQUEST time, not import time — the previous
+//    top-level `const token = system.get(...)` captured the value once, so a
+//    deployment that never set AP_APPSUMO_TOKEN baked `undefined` into the
+//    module forever, and `Bearer ${token}` coerced to the literal string
+//    "Bearer undefined", which an attacker could send verbatim to pass the
+//    gate on the public /v1/appsumo/action endpoint.
+// 2. isNil short-circuits to reject: an unset token must never match
+//    anything, including a client that literally sends "undefined".
+// 3. timingSafeEqual prevents the prefix-based timing signal of a plain
+//    `!==` (same shape as the admin API-key compare fixed for #369); the
+//    length check first avoids its throw — length is not secret material.
+function isCertainTokenCredential(a: string | undefined, b: string | undefined): boolean {
+    if (isNil(a) || isNil(b)) {
+        return false
+    }
+    const aBuf = Buffer.from(a)
+    const bBuf = Buffer.from(b)
+    return aBuf.length === bBuf.length && timingSafeEqual(aBuf, bBuf)
+}
+
 const appsumoController: FastifyPluginAsyncZod = async (
     fastify: FastifyInstance,
 ) => {
@@ -54,12 +73,13 @@ const appsumoController: FastifyPluginAsyncZod = async (
             }>,
             reply,
         ) => {
-            if (
-                request.body.username === exchangeCredentialUsername &&
-        request.body.password === exchangeCredentialPassword
-            ) {
+            const appsumoToken = system.get(AppSystemProp.APPSUMO_TOKEN)
+            const matchesCredentials =
+                isCertainTokenCredential(request.body.username, appsumoToken) &&
+                isCertainTokenCredential(request.body.password, appsumoToken)
+            if (matchesCredentials) {
                 return reply.status(StatusCodes.OK).send({
-                    access: token,
+                    access: appsumoToken,
                 })
             }
             else {
@@ -86,7 +106,13 @@ const appsumoController: FastifyPluginAsyncZod = async (
             }>,
             reply,
         ) => {
-            if (request.headers.authorization != `Bearer ${token}`) {
+            const appsumoToken = system.get(AppSystemProp.APPSUMO_TOKEN)
+            const authorization = request.headers.authorization
+            const bearerScheme = 'Bearer '
+            const bearerToken = authorization?.startsWith(bearerScheme) === true
+                ? authorization.slice(bearerScheme.length)
+                : undefined
+            if (!isCertainTokenCredential(bearerToken, appsumoToken)) {
                 return reply.status(StatusCodes.UNAUTHORIZED).send()
             }
             else {

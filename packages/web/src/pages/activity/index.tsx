@@ -225,8 +225,8 @@ export default function ActivityPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <label htmlFor="activity-limit-filter" className="text-xs font-semibold text-muted-foreground">
-            Per page
+          <label htmlFor="activity-limit-filter" className="text-xs font-semibold text-muted-foreground" title="The executions API returns only the most recent entries up to this limit — older executions are not reachable from this view yet.">
+            Show last
           </label>
           <select
             id="activity-limit-filter"

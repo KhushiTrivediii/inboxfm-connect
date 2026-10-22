@@ -11,15 +11,18 @@ import { globalRegistry } from 'zod/v4/core'
 import { aiProviderService } from './ai/ai-provider-service'
 import { aiProviderModule } from './ai/ai-provider.module'
 import { aiToolConfigModule } from './ai/ai-tool-config.module'
+import { platformAnalyticsModule } from './analytics/platform-analytics.module'
 import { setPlatformOAuthService } from './app-connection/app-connection-service/oauth2'
 import { appConnectionModule } from './app-connection/app-connection.module'
 import { platformAppConnectionModule } from './app-connection/platform-app-connection.module'
 import { authenticationModule } from './authentication/authentication.module'
 import { connectApiKeyModule } from './connect-api-keys/connect-api-key.module'
+import { connectMcpModule } from './connect-mcp/connect-mcp.module'
 import { connectOAuthAppModule } from './connect-oauth-apps/connect-oauth-app.module'
+import { connectProxyModule } from './connect-proxy/connect-proxy.module'
 import { connectSessionModule } from './connect-sessions/connect-session.module'
 import { oidcModule } from './core/security/oidc/oidc.module'
-import { rateLimitModule } from './core/security/rate-limit'
+import { publicIngressRateLimitMiddleware } from './core/security/public-ingress-rate-limit-middleware'
 import { authenticationMiddleware } from './core/security/v2/authn/authentication-middleware'
 import { apiKeyRateLimitMiddleware } from './core/security/v2/authz/api-key-rate-limit-middleware'
 import { authorizationMiddleware } from './core/security/v2/authz/authorization-middleware'
@@ -84,6 +87,7 @@ import { startDevPieceWatcher } from './pieces/dev-piece-watcher'
 import { pieceModule } from './pieces/metadata/piece-metadata-controller'
 import { pieceMetadataService } from './pieces/metadata/piece-metadata-service'
 import { pieceFilteringHooks } from './pieces/metadata/utils/piece-filtering-hooks'
+import { pieceBundleModule } from './pieces/piece-bundle-module'
 import { pieceSyncService } from './pieces/piece-sync-service'
 import { platformBackgroundJobs } from './platform/platform-jobs'
 import { platformModule } from './platform/platform.module'
@@ -128,7 +132,7 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
                 },
             },
             info: {
-                title: 'Activepieces Documentation',
+                title: 'Inboxfm Connect Documentation',
                 version: '0.0.0',
             },
             externalDocs: {
@@ -139,7 +143,6 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     })
 
 
-    await app.register(rateLimitModule)
     app.addHook('onResponse', async (request, reply) => {
         // eslint-disable-next-line                                                                                                                                                                                                                     
         reply.header('x-request-id', request.id)
@@ -184,6 +187,7 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     app.addHook('preHandler', authorizationMiddleware)
     app.addHook('preHandler', projectRateLimitMiddleware)
     app.addHook('preHandler', apiKeyRateLimitMiddleware)
+    app.addHook('preHandler', publicIngressRateLimitMiddleware)
     app.addHook('preHandler', rbacMiddleware)
 
     await systemJobsSchedule(app.log).init()
@@ -199,6 +203,7 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     rejectedPromiseHandler(toolSearchReindexJob(app.log).backfillIfEmpty(), app.log)
     await pieceMetadataService(app.log).setup()
     await app.register(pieceModule)
+    await app.register(pieceBundleModule)
     // await app.register(collaborativeModule)
     // await app.register(flowModule)
     // await app.register(flowRunModule)
@@ -217,6 +222,8 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     await app.register(connectApiKeyModule)
     await app.register(connectOAuthAppModule)
     await app.register(connectSessionModule)
+    await app.register(connectProxyModule)
+    await app.register(connectMcpModule)
     await app.register(executionModule)
     await app.register(knowledgeSearchModule)
     // await app.register(humanInputModule)
@@ -242,7 +249,7 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     // await app.register(knowledgeBaseModule)
     await app.register(userModule)
     // await app.register(templateModule)
-    // await app.register(platformAnalyticsModule)
+    await app.register(platformAnalyticsModule)
 
     // Dev-only: accept browser debug logs into the shared evlog fs drain so a
     // chat run can be reconstructed end-to-end (web + api + worker). Never in cloud/prod.
@@ -276,7 +283,7 @@ export const setupApp = async (app: FastifyInstance): Promise<FastifyInstance> =
     const edition = system.getEdition()
     app.log.info({
         edition,
-    }, 'Activepieces Edition')
+    }, 'Inboxfm Connect Edition')
     switch (edition) {
         case ApEdition.CLOUD:
             await app.register(licenseKeysModule)
@@ -399,7 +406,11 @@ The application started on ${await domainHelper.getPublicApiUrl({ path: '' })}, 
             `[WARNING]: This is only shows pieces specified in AP_DEV_PIECES ${pieces} environment variable.`,
         )
     }
-    void startDevPieceWatcher(app)
+    // Best-effort dev watcher: a bad AP_DEV_PIECES path (missing pieces folder,
+    // malformed piece package.json) rejects startDevPieceWatcher via
+    // readdir/stat/readFile — an unguarded `void` would turn that into an
+    // unhandledRejection and abort the freshly-booted API process.
+    rejectedPromiseHandler(startDevPieceWatcher(app), app.log)
 }
 
 function extractPlatformId(principal: { platform?: { id?: string } } | null | undefined): string | undefined {

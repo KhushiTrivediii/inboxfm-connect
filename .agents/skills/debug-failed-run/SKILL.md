@@ -51,7 +51,7 @@ Scope the time window to the job's `processedAt`/`finishedAt` from Step 1 (± a 
 Steps 1–2 tell you *what* failed at runtime; this step finds *where* in the code and decides **product bug vs. user/config issue**. Work from this repo (the Activepieces source you're already in):
 
 - Take the distinctive part of the stacktrace / `failedReason` / log `Body` — the exact thrown message, an `ActivepiecesError` `code` (e.g. `ENTITY_NOT_FOUND`, `PIECE_NOT_FOUND`), or a function name — and `Grep` for it across `packages/`. Quoted error strings and error `code` enums are the fastest anchors.
-- For a piece failure, the failing step's `settings.pieceName`/`pieceVersion` (from Step 1) points at `packages/pieces/**/<piece>`; open the failing action/trigger.
+- For a piece failure, the failing step's `settings.pieceName`/`pieceVersion` (from Step 1) points at `packages/integrations/**/<piece>`; open the failing action/trigger.
 - For engine/worker failures, look under `packages/server/{api,worker}` and `packages/engine`. Read the throwing code path and the surrounding error handling to see whether the input that triggered it (from `triggerPayload` / step `input`) is being mishandled.
 - Classify the outcome:
   - **Product bug** — the code mishandles valid input (unguarded `undefined`, bad assumption, regression). Identify the file:line, explain the path that reaches it, and propose a fix. Only edit code if the user asks.

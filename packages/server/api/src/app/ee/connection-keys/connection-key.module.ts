@@ -1,6 +1,5 @@
 import {
     AppConnectionScope,
-    ConnectionKeyId,
     GetOrDeleteConnectionFromTokenRequest,
     ListConnectionKeysRequest,
     PrincipalType,
@@ -8,10 +7,12 @@ import {
 import { FastifyRequest } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
+import { z } from 'zod'
 import { appConnectionService } from '../../app-connection/app-connection-service/app-connection-service'
 import { ProjectResourceType } from '../../core/security/authorization/common'
 import { securityAccess } from '../../core/security/authorization/fastify-security'
 import { projectService } from '../../project/project-service'
+import { ConnectionKeyEntity } from './connection-key.entity'
 import { connectionKeyService } from './connection-key.service'
 
 export const connectionKeyModule: FastifyPluginAsyncZod = async (app) => {
@@ -138,15 +139,32 @@ const connectionKeyController: FastifyPluginAsyncZod = async (fastify) => {
 
     fastify.delete(
         '/:connectionkeyId',
-        async (
-            request: FastifyRequest<{
-                Params: {
-                    connectionkeyId: ConnectionKeyId
-                }
-            }>,
-            reply,
-        ) => {
-            await connectionKeyService(request.log).delete(request.params.connectionkeyId)
+        {
+            config: {
+                // Issue #413: without a security config the route is treated as
+                // PUBLIC by the authn/authz middlewares, and the id-only delete
+                // below is cross-tenant. TABLE binds authz to the row's own
+                // projectId (looked up by the :connectionkeyId param) and 404s
+                // on unknown ids — same shape as app-credentials DELETE /:id.
+                security: securityAccess.project(
+                    [PrincipalType.USER, PrincipalType.SERVICE],
+                    undefined,
+                    {
+                        type: ProjectResourceType.TABLE,
+                        tableName: ConnectionKeyEntity,
+                        lookup: { paramKey: 'connectionkeyId', entityField: 'id' },
+                    },
+                ),
+            },
+            schema: {
+                params: z.object({ connectionkeyId: z.string() }),
+            },
+        },
+        async (request, reply) => {
+            await connectionKeyService(request.log).delete({
+                id: request.params.connectionkeyId,
+                projectId: request.projectId,
+            })
             return reply.status(StatusCodes.OK).send()
         },
     )

@@ -174,12 +174,65 @@ function parseCronExpression(expression: string): ParsedCronSchedule {
 
 function validateCronExpression(expression: string): boolean {
     try {
-        parseCronExpression(expression)
+        const parsed = parseCronExpression(expression)
+        // Syntax alone accepts expressions that can never fire (e.g. "0 0 31 2 *" —
+        // 31 February). Reject those at the API boundary with the service's clean
+        // 400 instead of an uncaught computeNextRunAt throw turning create/update
+        // into a 500 (issue #389).
+        if (!isFireable(parsed)) {
+            return false
+        }
         return true
     }
     catch {
         return false
     }
+}
+
+// Structural fireability check — O(1) on the parsed field sets, no clock scan.
+// Models the same dom/dow branching computeNextTick uses (CR on #390):
+//   - dom wildcard, dow wildcard → any day matches
+//   - both restricted → dayMatches = dom.has(day) || dow.has(weekday)
+//   - only one restricted → that field alone
+// Every real month contains all 7 weekdays, so a dow-restricted schedule always
+// has candidates in any allowed month — including the both-restricted OR case
+// (e.g. "0 0 31 2 MON" fires every February Monday). A dom-only restriction is
+// the only case that can be structurally unfireable: it needs a month whose
+// length reaches the largest requested day. Feb 29 only exists in leap years,
+// so {29} + {2} is kept (probing that would be a 4-year scan; this answers it
+// without one).
+const MONTH_DAYS: Record<number, number> = {
+    1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
+    7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,
+}
+
+function isFireable(parsed: ParsedCronSchedule): boolean {
+    const { daysOfMonth, daysOfWeek, months } = parsed
+    // Wildcard dom or month: every real day/month combination exists.
+    if (daysOfMonth.wildcard || months.wildcard) {
+        return true
+    }
+    // Restricted dow (alone or OR'd with a restricted dom per the computeNextTick
+    // branch): weekdays exist in every month, so any allowed month has a match.
+    if (!daysOfWeek.wildcard) {
+        return true
+    }
+    // dom-only restriction: need a month whose length reaches a requested day.
+    for (const month of months.values) {
+        const monthMax = MONTH_DAYS[month]
+        if (monthMax === undefined) {
+            // parseCronExpression bounds months to 1-12, so this means the
+            // parser's bounds drifted from this table — fail loudly instead of
+            // silently over-admitting (CR on #390, item 2).
+            throw new Error(`cron fireability probe: month out of range (${month})`)
+        }
+        for (const day of daysOfMonth.values) {
+            if (day <= monthMax) {
+                return true
+            }
+        }
+    }
+    return false
 }
 
 function computeNextTick({ cronExpression, timezone = 'UTC', fromDate = new Date() }: NextTickOptions & { cronExpression: string }): Date {

@@ -2,6 +2,7 @@ import { deepseekAuth } from '../auth';
 import { createAction, Property, StoreScope } from "@inboxfm-connect/pieces-framework";
 import OpenAI from 'openai';
 import { baseUrl } from '../common/common';
+import { trimHistoryToBudget } from '../common/history-guard';
 import * as z from 'zod/mini'
 import { propsValidation } from '@inboxfm-connect/pieces-common';
 
@@ -151,6 +152,10 @@ export const askDeepseek = createAction({
     // If memory key is set, retrieve messages stored in history
     if (memoryKey) {
       messageHistory = (await store.get(memoryKey, StoreScope.PROJECT)) ?? [];
+      // Trim the RESTORED history too (review #386): a memoryKey wedged by an
+      // oversized stored history must recover on this run, not keep failing —
+      // the store.put side alone never runs when the request itself fails.
+      messageHistory = trimHistoryToBudget(messageHistory);
     }
 
     // Add user prompt to message history
@@ -190,6 +195,9 @@ export const askDeepseek = createAction({
     messageHistory = [...messageHistory, completion.choices[0].message];
 
     if (memoryKey) {
+      // Bound the stored history so long-running memoryKey flows cannot
+      // wedge themselves past the model context window (issue #381).
+      messageHistory = trimHistoryToBudget(messageHistory);
       await store.put(memoryKey, messageHistory, StoreScope.PROJECT);
     }
 

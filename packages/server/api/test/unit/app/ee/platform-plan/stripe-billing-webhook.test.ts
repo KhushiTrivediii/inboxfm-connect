@@ -627,4 +627,233 @@ describe('Stripe Billing Webhook Controller & Resilience', () => {
             }
         })
     })
+
+    describe('Dunning Retry Ladder & Recovery Simulation (Issue #131)', () => {
+        it('simulates full dunning ladder: active -> invoice.payment_failed (past_due) -> retry payment_failed (unpaid) -> invoice.paid (active)', async () => {
+            // Step 1: First failed charge enters past_due
+            mockRetrieveSubscription.mockResolvedValueOnce({
+                id: 'sub_ladder_1',
+                status: 'past_due',
+                metadata: { platformId: 'plat_ladder_1' },
+            })
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'invoice.payment_failed',
+                data: {
+                    object: {
+                        id: 'in_ladder_attempt_1',
+                        parent: {
+                            subscription_details: {
+                                subscription: 'sub_ladder_1',
+                            },
+                        },
+                    },
+                },
+            })
+
+            const res1 = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+            expect(res1.statusCode).toBe(200)
+            expect(mockPlatformPlanUpdate).toHaveBeenLastCalledWith({
+                platformId: 'plat_ladder_1',
+                stripeSubscriptionStatus: ApSubscriptionStatus.PAST_DUE,
+            })
+
+            // Step 2: Next retry in dunning ladder fails; Stripe marks subscription unpaid
+            mockRetrieveSubscription.mockResolvedValueOnce({
+                id: 'sub_ladder_1',
+                status: 'unpaid',
+                metadata: { platformId: 'plat_ladder_1' },
+            })
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'invoice.payment_failed',
+                data: {
+                    object: {
+                        id: 'in_ladder_attempt_2',
+                        parent: {
+                            subscription_details: {
+                                subscription: 'sub_ladder_1',
+                            },
+                        },
+                    },
+                },
+            })
+
+            const res2 = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+            expect(res2.statusCode).toBe(200)
+            expect(mockPlatformPlanUpdate).toHaveBeenLastCalledWith({
+                platformId: 'plat_ladder_1',
+                stripeSubscriptionStatus: ApSubscriptionStatus.UNPAID,
+            })
+
+            // Step 3: Customer updates payment method; invoice.paid event restores ACTIVE status
+            mockRetrieveSubscription.mockResolvedValueOnce({
+                id: 'sub_ladder_1',
+                status: 'active',
+                metadata: { platformId: 'plat_ladder_1' },
+            })
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'invoice.paid',
+                data: {
+                    object: {
+                        id: 'in_ladder_success',
+                        parent: {
+                            subscription_details: {
+                                subscription: 'sub_ladder_1',
+                            },
+                        },
+                    },
+                },
+            })
+
+            const res3 = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+            expect(res3.statusCode).toBe(200)
+            expect(mockPlatformPlanUpdate).toHaveBeenLastCalledWith({
+                platformId: 'plat_ladder_1',
+                stripeSubscriptionStatus: ApSubscriptionStatus.ACTIVE,
+            })
+        })
+    })
+
+    describe('Clock fixtures for trial and period boundaries (Issue #131)', () => {
+        it('correctly maps trialing subscription with trial period boundaries', async () => {
+            const trialStart = 1710000000
+            const trialEnd = 1711209600
+
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'customer.subscription.created',
+                data: {
+                    object: {
+                        id: 'sub_trial_1',
+                        status: 'trialing',
+                        items: { data: [] },
+                        metadata: { platformId: 'plat_trial_1' },
+                    },
+                },
+            })
+
+            const response = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+
+            expect(response.statusCode).toBe(200)
+            expect(mockPlatformPlanUpdate).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    platformId: 'plat_trial_1',
+                    stripeSubscriptionStatus: ApSubscriptionStatus.TRIALING,
+                    plan: PlanName.STANDARD,
+                }),
+            )
+        })
+
+        it('maps incomplete and incomplete_expired subscription states correctly', async () => {
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'customer.subscription.updated',
+                data: {
+                    object: {
+                        id: 'sub_inc_1',
+                        status: 'incomplete',
+                        items: { data: [] },
+                        metadata: { platformId: 'plat_inc_1' },
+                    },
+                },
+            })
+
+            const res1 = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+            expect(res1.statusCode).toBe(200)
+            expect(mockPlatformPlanUpdate).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    platformId: 'plat_inc_1',
+                    stripeSubscriptionStatus: ApSubscriptionStatus.INCOMPLETE,
+                }),
+            )
+
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'customer.subscription.updated',
+                data: {
+                    object: {
+                        id: 'sub_inc_exp',
+                        status: 'incomplete_expired',
+                        items: { data: [] },
+                        metadata: { platformId: 'plat_inc_1' },
+                    },
+                },
+            })
+
+            const res2 = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+            expect(res2.statusCode).toBe(200)
+            expect(mockPlatformPlanUpdate).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    platformId: 'plat_inc_1',
+                    stripeSubscriptionStatus: ApSubscriptionStatus.INCOMPLETE_EXPIRED,
+                }),
+            )
+        })
+    })
+
+    describe('Plan limits gating and active flows calculation (Issue #131)', () => {
+        it('calculates active flows add-on limit correctly based on price item quantity', async () => {
+            mockConstructEvent.mockReturnValueOnce({
+                type: 'customer.subscription.updated',
+                data: {
+                    object: {
+                        id: 'sub_addon_1',
+                        status: 'active',
+                        items: {
+                            data: [
+                                {
+                                    price: { id: 'price_active_flows_test' },
+                                    quantity: 15,
+                                },
+                            ],
+                        },
+                        metadata: { platformId: 'plat_addon_1' },
+                    },
+                },
+            })
+
+            const response = await app.inject({
+                method: 'POST',
+                url: '/stripe/webhook',
+                headers: { 'stripe-signature': 'valid_sig', 'content-type': 'application/json' },
+                payload: JSON.stringify({}),
+            })
+
+            expect(response.statusCode).toBe(200)
+            const expectedActiveFlows = (STANDARD_CLOUD_PLAN.activeFlowsLimit ?? 0) + 15
+            expect(mockPlatformPlanUpdate).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    platformId: 'plat_addon_1',
+                    activeFlowsLimit: expectedActiveFlows,
+                    stripeSubscriptionStatus: ApSubscriptionStatus.ACTIVE,
+                }),
+            )
+        })
+    })
 })

@@ -1,7 +1,7 @@
 import { tryCatch } from '@inboxfm-connect/core-utils'
 import { ExecutionEvent, ExecutionEventType } from '@inboxfm-connect/shared'
-import { describe, expect, it } from 'vitest'
-import { executionEventService } from '../../../../src/app/execution/execution-event.service'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { __resetMemoryTtlSweepForTests, executionEventService } from '../../../../src/app/execution/execution-event.service'
 import { pubsub } from '../../../../src/app/helper/pubsub'
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -255,5 +255,138 @@ describe('ExecutionEvent Service', () => {
                 expect(keys).not.toContain(forbiddenKey)
             }
         })
+    })
+})
+
+
+// Force the memory fallback deterministically (codeant finding on #393):
+// with a live Redis the suite would exercise the Redis path instead, and
+// the cap/eviction behavior under test would never run.
+import { redisConnections } from '../../../../src/app/database/redis-connections'
+
+describe('memory fallback eviction (issue #392)', () => {
+    beforeEach(() => {
+        vi.spyOn(redisConnections, 'useExisting').mockRejectedValue(new Error('redis unavailable (test)'))
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('critical events still land past the cap but never grow the list unbounded', async () => {
+        const executionId = 'exec_critical_cap_test'
+        const criticalType = ExecutionEventType.ExecutionCompleted
+        // fill past the cap with non-critical events; the cap drops them at 1000
+        for (let i = 0; i < 1005; i++) {
+            await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.PlannerStarted,
+                payload: { i },
+            })
+        }
+        const before = await executionEventService.readEventHistory({ executionId })
+        expect(before.length).toBe(1000)
+        // critical events must land even when the list is at the cap
+        const critical = await executionEventService.emit({
+            executionId,
+            type: criticalType,
+            payload: { done: true },
+        })
+        const after = await executionEventService.readEventHistory({ executionId })
+        expect(after.some((e) => e.id === critical.id)).toBe(true)
+        // and the list must not have grown: oldest non-critical was dropped
+        expect(after.length).toBe(1000)
+    })
+
+    it('sweeps memory-fallback history once the TTL elapses (fake timers, issue #392)', async () => {
+        __resetMemoryTtlSweepForTests()
+        vi.useFakeTimers()
+        try {
+            const executionId = 'exec_ttl_sweep_test'
+            await executionEventService.emit({
+                executionId,
+                type: ExecutionEventType.PlannerStarted,
+                payload: { i: 0 },
+            })
+            const fresh = await executionEventService.readEventHistory({ executionId })
+            expect(fresh).toHaveLength(1)
+
+            // advance past EVENT_TTL_SECONDS + one sweep interval: the interval
+            // fires ~61 times, and every tick after the TTL sees lastActivity
+            // older than the cutoff and evicts history, sequence and mutex state
+            await vi.advanceTimersByTimeAsync(3600_000 + 60_000)
+
+            const swept = await executionEventService.readEventHistory({ executionId })
+            expect(swept).toHaveLength(0)
+        } finally {
+            __resetMemoryTtlSweepForTests()
+            vi.useRealTimers()
+            __resetMemoryTtlSweepForTests()
+        }
+    })
+})
+
+describe('memory fallback history isolation', () => {
+    beforeEach(() => {
+        vi.spyOn(redisConnections, 'useExisting').mockRejectedValue(new Error('redis unavailable (test)'))
+    })
+
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('does not let a later emit mutate a snapshot a caller is still holding', async () => {
+        const executionId = 'exec_snapshot_isolation_test'
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.PlannerStarted,
+            payload: { i: 0 },
+        })
+
+        // getEventsSince with no lastEventId forwards readEventHistory's result
+        // verbatim - this is the array the SSE backfill serializes.
+        const snapshot = await executionEventService.getEventsSince({ executionId })
+        expect(snapshot).toHaveLength(1)
+
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.ExecutionCompleted,
+            payload: { done: true },
+        })
+
+        // The already-returned snapshot must not grow behind the caller's back.
+        expect(snapshot).toHaveLength(1)
+
+        const fresh = await executionEventService.getEventsSince({ executionId })
+        expect(fresh).toHaveLength(2)
+    })
+
+    it('does not let a caller corrupt stored history by mutating the returned array', async () => {
+        const executionId = 'exec_caller_mutation_test'
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.PlannerStarted,
+            payload: { i: 0 },
+        })
+
+        const borrowed = await executionEventService.readEventHistory({ executionId })
+        borrowed.length = 0
+
+        const stored = await executionEventService.readEventHistory({ executionId })
+        expect(stored).toHaveLength(1)
+    })
+
+    it('returns a distinct array on every read', async () => {
+        const executionId = 'exec_distinct_snapshot_test'
+        await executionEventService.emit({
+            executionId,
+            type: ExecutionEventType.PlannerStarted,
+            payload: { i: 0 },
+        })
+
+        const first = await executionEventService.readEventHistory({ executionId })
+        const second = await executionEventService.readEventHistory({ executionId })
+
+        expect(first).not.toBe(second)
     })
 })

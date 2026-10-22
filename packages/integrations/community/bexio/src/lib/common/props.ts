@@ -36,9 +36,10 @@ export const bexioCommonProps = {
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load accounts:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load accounts',
+            placeholder: 'Failed to load accounts. Check your Bexio connection and API permissions.',
             options: [],
           };
         }
@@ -73,9 +74,10 @@ export const bexioCommonProps = {
           })),
         };
       } catch (error) {
+        console.warn('[bexio] Failed to load taxes:', error);
         return {
           disabled: true,
-          placeholder: 'Failed to load taxes',
+          placeholder: 'Failed to load taxes. Check your Bexio connection and API permissions.',
           options: [],
         };
       }
@@ -114,9 +116,10 @@ export const bexioCommonProps = {
             })),
           };
         } catch (error) {
+          console.warn('[bexio] Failed to load currencies:', error);
           return {
             disabled: true,
-            placeholder: 'Failed to load currencies',
+            placeholder: 'Failed to load currencies. Check your Bexio connection and API permissions.',
             options: [],
           };
         }

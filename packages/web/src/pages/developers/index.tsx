@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { PageHeader } from '@/components/layout/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { buildRestSnippet } from './snippets'
 
 export default function DevelopersPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
@@ -43,19 +44,7 @@ const result = await inboxfm.execute({
 
 console.log(result);`
 
-  const restSnippet = `curl -X POST "${window.location.origin}/api/v1/execute" \\
-  -H "Authorization: Bearer <API_KEY>" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "projectId": "<PROJECT_ID>",
-    "integration": "@inboxfm-connect/piece-slack",
-    "tool": "send_message",
-    "externalUserId": "user_42",
-    "input": {
-      "channel": "#general",
-      "text": "Hello from my app!"
-    }
-  }'`
+  const restSnippet = buildRestSnippet({ origin: window.location.origin })
 
   return (
     <div className="space-y-6">

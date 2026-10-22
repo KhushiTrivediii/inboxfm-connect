@@ -1,28 +1,33 @@
 services:
   app:
-    extends:
-      file: docker-compose.dev.yml
-      service: app
+    # Self-contained: docker-compose.dev.yml no longer defines an app service
+    # (removed upstream in chore(dev): remove docker-compose dev), so this
+    # service cannot extend it. Run the api test suite in the same Node image
+    # the Dockerfile builds from, against the repository mounted from the host.
+    image: node:24.14.0-bullseye-slim
     user: "${UID}:${GID}"
-    command: /bin/sh -c "npm_config_cache=/usr/src/app/.npm-cache turbo run test --filter=api"
+    working_dir: /usr/src/app
+    volumes:
+      - ./:/usr/src/app
+    command: /bin/sh -c "npm_config_cache=/usr/src/app/.npm-cache npx turbo run test --filter=api"
+    depends_on:
+      - postgres
+      - redis
 
   postgres:
     extends:
       file: docker-compose.dev.yml
-      service: postgres
+      service: db
     ports:
-     - "5432:5432"
+      - "5432:5432"
 
   redis:
     extends:
       file: docker-compose.dev.yml
       service: redis
     ports:
-     - "6379:6379"
+      - "6379:6379"
 
 volumes:
-  postgres_data_dev:
-  redis_data_dev:
-
-networks:
-  activepieces_dev:
+  postgres_data:
+  redis_data:

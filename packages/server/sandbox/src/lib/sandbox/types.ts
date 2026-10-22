@@ -9,7 +9,6 @@ export type SandboxMount = {
 
 export type SandboxResourceLimits = {
     memoryLimitMb: number
-    cpuMsPerSec: number
     timeLimitSeconds: number
 }
 
@@ -19,6 +18,7 @@ export type CreateSandboxProcessParams = {
     mounts: SandboxMount[]
     env: Record<string, string>
     resourceLimits: SandboxResourceLimits
+    reusable?: boolean
 }
 
 export type SandboxProcessMaker = {
@@ -48,7 +48,6 @@ export type SandboxStartOptions = {
 export type SandboxInitOptions = {
     env: Record<string, string>
     memoryLimitMb: number
-    cpuMsPerSec: number
     timeLimitSeconds: number
     reusable: boolean
     maxHttpBufferSizeBytes: number

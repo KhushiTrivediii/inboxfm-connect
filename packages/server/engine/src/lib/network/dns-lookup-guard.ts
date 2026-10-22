@@ -64,14 +64,27 @@ function buildGuardedCallbackLookup({ policy, boundLookup }: BuildCallbackLookup
 }
 
 function buildGuardedPromiseLookup({ policy, boundPromisesLookup }: BuildPromiseLookupParams): GuardedPromiseLookup {
-    return async function promiseLookup(hostname, options) {
-        const allEntries = await boundPromisesLookup(hostname, { ...options, all: true })
+    // Overloads mirror `dns.promises.lookup` so the guarded function stays assignable
+    // to the original and callers keep their per-overload return types.
+    async function guardedLookup(hostname: string, family: number): Promise<dns.LookupAddress>
+    async function guardedLookup(hostname: string, options: dns.LookupOneOptions): Promise<dns.LookupAddress>
+    async function guardedLookup(hostname: string, options: dns.LookupAllOptions): Promise<dns.LookupAddress[]>
+    async function guardedLookup(hostname: string, options: dns.LookupOptions): Promise<dns.LookupAddress | dns.LookupAddress[]>
+    async function guardedLookup(hostname: string): Promise<dns.LookupAddress>
+    async function guardedLookup(hostname: string, options?: number | dns.LookupOneOptions | dns.LookupAllOptions | dns.LookupOptions): Promise<dns.LookupAddress | dns.LookupAddress[]> {
+        // The `family` overload passes a bare number; normalize it so the family
+        // filter actually reaches the resolver (spreading a number silently drops it).
+        const normalizedOptions = typeof options === 'number' ? { family: options } : options ?? {}
+        const requestOptions: dns.LookupOptions = { ...normalizedOptions, all: true }
+        const entries = await boundPromisesLookup(hostname, requestOptions)
+        const allEntries: dns.LookupAddress[] = Array.isArray(entries) ? entries : [entries]
         const blocked = findBlockedEntry({ entries: allEntries, allowList: policy.allowList })
         if (blocked) {
             throw buildBlockedError({ host: hostname, ip: blocked.address })
         }
-        return options?.all ? allEntries : allEntries[0]
+        return typeof options === 'object' && options.all ? allEntries : allEntries[0]
     }
+    return guardedLookup
 }
 
 function toAddressList({ address, family }: ToAddressListParams): dns.LookupAddress[] {

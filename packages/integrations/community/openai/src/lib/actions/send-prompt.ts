@@ -173,18 +173,32 @@ export const askOpenAI = createAction({
     });
 
     // Add response to message history
-    messageHistory = [...messageHistory, completion.choices[0].message];
+    // The raw completion message can carry `undefined` content when the
+    // model filters the response; normalizing to the stored { role, content }
+    // shape keeps the estimator (and the next API call) valid instead of
+    // degrading the estimate through encode(undefined) (issue #379).
+    const responseMessage = completion.choices[0].message;
+    messageHistory = [
+      ...messageHistory,
+      { role: responseMessage.role, content: responseMessage.content ?? '' },
+    ];
 
     // Check message history token size
     // System limit is 32K tokens, we can probably make it bigger but this is a safe spot
+    // The roles/system messages are sent on every call ([...roles, ...messageHistory]),
+    // so they consume request context the history-only estimate never saw. Include
+    // their tokens in the guard and hand the combined size to reduceContextSize so
+    // the reduced history actually fits alongside the system prompt (issue #379).
+    const rolesTokenLength = await calculateMessagesTokenSize(roles, model);
     const tokenLength = await calculateMessagesTokenSize(messageHistory, model);
     if (memoryKey) {
       // If tokens exceed 90% system limit or 90% of model limit - maxTokens, reduce history token size
-      if (exceedsHistoryLimit(tokenLength, model, maxTokens)) {
+      if (exceedsHistoryLimit(tokenLength + rolesTokenLength, model, maxTokens)) {
         messageHistory = await reduceContextSize(
           messageHistory,
           model,
-          maxTokens
+          maxTokens,
+          rolesTokenLength
         );
       }
       // Store history

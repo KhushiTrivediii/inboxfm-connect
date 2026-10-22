@@ -128,6 +128,17 @@ export const authenticationService = (log: FastifyBaseLogger) => ({
             })
         }
 
+        // The domain allowlist must hold on every auth path into the platform, not
+        // only on the ones that create a new identity (signUp) or use a password
+        // (signInWithPassword). Without this, an existing identity from a domain
+        // the platform admin explicitly blocked can still mint a full platform
+        // token through federated sign-in, and an identity that never joined the
+        // platform silently self-provisions a user + project row.
+        await authenticationUtils(log).assertDomainIsAllowed({
+            email: params.email,
+            platformId,
+        })
+
         if (params.provider == UserIdentityProvider.SAML) {
             await authenticationUtils(log).assertEmailMatchesSsoDomain({
                 email: params.email,

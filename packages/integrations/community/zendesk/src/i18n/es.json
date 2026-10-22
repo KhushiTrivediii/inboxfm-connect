@@ -2,7 +2,7 @@
   "Customer service software and support ticket system": "Software de servicio al cliente y sistema de tickets de soporte",
   "Agent Email": "Email del agente",
   "Token": "Token",
-  "Organization (e.g activepieceshelp)": "Organización (por ejemplo, activepieceshelp)",
+  "Organization (e.g inboxfmhelp)": "Organización (por ejemplo, inboxfmhelp)",
   "The email address you use to login to Zendesk": "La dirección de correo electrónico que utiliza para iniciar sesión en Zendesk",
   "The API token you can generate in Zendesk": "El token de API que puedes generar en Zendesk",
   "The subdomain of your Zendesk instance": "El subdominio de su instancia de Zendesk",

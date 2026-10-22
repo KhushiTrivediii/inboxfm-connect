@@ -108,7 +108,7 @@ export function Sidebar({ className }: { className?: string }) {
             <DropdownMenuTrigger className="flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-left hover:bg-muted text-foreground transition-colors outline-none cursor-pointer">
               <div className="flex flex-col truncate">
                 <span className="text-xs font-bold leading-tight truncate">
-                  {currentProject?.displayName || t('InboxFM Main Project')}
+                  {currentProject?.displayName || t('No Project')}
                 </span>
                 <span className="text-[10px] text-muted-foreground leading-tight">{t('Developer Console')}</span>
               </div>
@@ -206,7 +206,7 @@ export function Sidebar({ className }: { className?: string }) {
                   {user?.firstName ? `${user.firstName} ${user.lastName || ''}` : t('Developer')}
                 </span>
                 <span className="text-[10px] text-muted-foreground truncate leading-tight">
-                  {user?.email || 'developer@inboxfm.local'}
+                  {user?.email || 'Not signed in'}
                 </span>
               </div>
               <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -217,7 +217,7 @@ export function Sidebar({ className }: { className?: string }) {
                   <p className="text-xs font-semibold text-foreground">
                     {user?.firstName ? `${user.firstName} ${user.lastName || ''}` : t('Developer')}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">{user?.email}</p>
+                  <p className="text-[11px] text-muted-foreground">{user?.email || 'Not signed in'}</p>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />

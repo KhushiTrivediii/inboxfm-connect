@@ -30,7 +30,7 @@ export const asknews = createPiece({
     updateANewsletter,
     createCustomApiCallAction({
       auth: asknewsAuth,
-      baseUrl: () => 'https://api.asknews.com/v1',
+      baseUrl: () => 'https://api.asknews.app/v1',
       authMapping: async (auth) => {
         return {
           Authorization: `Bearer ${auth.secret_text}`,

@@ -151,7 +151,7 @@ export const newTicket = createTrigger({
         },
         body: {
           webhook: {
-            name: `Activepieces New Ticket Webhook - ${Date.now()}`,
+            name: `Inboxfm Connect New Ticket Webhook - ${Date.now()}`,
             endpoint: context.webhookUrl,
             http_method: 'POST',
             request_format: 'json',

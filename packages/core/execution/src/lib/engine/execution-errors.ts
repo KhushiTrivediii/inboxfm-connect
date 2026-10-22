@@ -131,3 +131,56 @@ export class SSRFBlockedError extends ExecutionError {
         )
     }
 }
+
+export type PropsValidationErrors = {
+    [key: string]: string[] | string | PropsValidationErrors | PropsValidationErrors[] | undefined
+}
+
+export class PropsValidationError extends ExecutionError {
+    public readonly fieldErrors: PropsValidationErrors
+
+    constructor(fieldErrors: PropsValidationErrors, cause?: unknown) {
+        const readable = PropsValidationError.formatHumanReadable(fieldErrors)
+        super('PropsValidationError', readable, ExecutionErrorType.USER, cause)
+        this.fieldErrors = fieldErrors
+    }
+
+    private static formatFields(fieldErrors: PropsValidationErrors): string {
+        const errorEntries = Object.entries(fieldErrors).filter(([, val]) => val !== undefined)
+        if (errorEntries.length === 0) {
+            return ''
+        }
+        const formattedFields = errorEntries.map(([key, val]) => {
+            if (Array.isArray(val)) {
+                const hasObjects = val.some(item => typeof item === 'object' && item !== null)
+                if (hasObjects) {
+                    const itemDescriptions = (val as Array<Record<string, unknown>>)
+                        .map((item, index) => {
+                            if (typeof item === 'object' && item !== null) {
+                                if (Object.keys(item).length === 0) {
+                                    return null
+                                }
+                                const inner = PropsValidationError.formatFields(item as PropsValidationErrors)
+                                return inner ? `item ${index + 1}: ${inner}` : null
+                            }
+                            return String(item)
+                        })
+                        .filter(Boolean)
+                    return `${key}: ${itemDescriptions.join('; ')}`
+                }
+                return `${key}: ${val.join(', ')}`
+            }
+            if (typeof val === 'object' && val !== null) {
+                const inner = PropsValidationError.formatFields(val as PropsValidationErrors)
+                return `${key}: ${inner}`
+            }
+            return `${key}: ${String(val)}`
+        })
+        return formattedFields.join('; ')
+    }
+
+    public static formatHumanReadable(fieldErrors: PropsValidationErrors): string {
+        const formatted = PropsValidationError.formatFields(fieldErrors)
+        return formatted ? `Property validation failed: ${formatted}` : 'Property validation failed'
+    }
+}

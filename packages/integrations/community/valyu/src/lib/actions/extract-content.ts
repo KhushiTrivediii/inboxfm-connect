@@ -132,7 +132,7 @@ export const extractContentAction = createAction({
       }
     }
 
-    const response = await makeRequest(apiKey as unknown as string, HttpMethod.POST, '/v1/contents', body);
+    const response = await makeRequest(apiKey.secret_text, HttpMethod.POST, '/v1/contents', body);
     return response;
   },
 });

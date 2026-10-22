@@ -72,3 +72,9 @@ export const CountTablesRequest = z.object({
 
 export type CountTablesRequest = z.infer<typeof CountTablesRequest>
 
+export const DuplicateTableRequest = z.object({
+    name: z.string().trim().min(1).max(100).optional(),
+    includeRecords: z.boolean().default(false),
+})
+
+export type DuplicateTableRequest = z.infer<typeof DuplicateTableRequest>

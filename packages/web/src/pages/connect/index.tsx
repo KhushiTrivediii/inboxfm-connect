@@ -174,16 +174,16 @@ export default function ConnectPage() {
   return (
     <ConnectPageShell>
       {piece.auth?.type === 'SECRET_TEXT' && (
-        <SecretTextConnectPublic token={token} piece={piece} onConnected={setConnectedDisplayName} />
+        <SecretTextConnectPublic token={token} piece={piece} session={session} onConnected={setConnectedDisplayName} />
       )}
       {piece.auth?.type === 'BASIC_AUTH' && (
-        <BasicAuthConnectPublic token={token} piece={piece} onConnected={setConnectedDisplayName} />
+        <BasicAuthConnectPublic token={token} piece={piece} session={session} onConnected={setConnectedDisplayName} />
       )}
       {piece.auth?.type === 'CUSTOM_AUTH' && (
-        <CustomAuthConnectPublic token={token} piece={piece} onConnected={setConnectedDisplayName} />
+        <CustomAuthConnectPublic token={token} piece={piece} session={session} onConnected={setConnectedDisplayName} />
       )}
       {piece.auth?.type === 'OAUTH2' && (
-        <PlatformOAuthConnectPublic token={token} piece={piece} onConnected={setConnectedDisplayName} />
+        <PlatformOAuthConnectPublic token={token} piece={piece} session={session} onConnected={setConnectedDisplayName} />
       )}
       {!['SECRET_TEXT', 'BASIC_AUTH', 'CUSTOM_AUTH', 'OAUTH2'].includes(piece.auth?.type ?? '') && (
         <Card className="rounded-xl">
@@ -214,7 +214,24 @@ function describeConnectError(error: unknown): string {
   return 'The connection could not be created. Try again.'
 }
 
-function SecretTextConnectPublic({ token, piece, onConnected }: { token: string, piece: PieceMetadata, onConnected: (displayName: string) => void }) {
+/**
+ * Fields the redemption body needs to satisfy the route's zod schema.
+ *
+ * `POST /v1/connect-sessions/:token/connections` validates its body against
+ * `UpsertAppConnectionRequestBody`, whose every union branch requires
+ * `projectId` and `externalId` (see `upsert-app-connection-request.ts`). The
+ * server then IGNORES both values — `connect-session.controller.ts` re-derives
+ * the tenant and external user from the session row, and its acceptance test
+ * pins that ("ignores projectId and externalUserId supplied in the redemption
+ * body — the session wins") — so sending the session's own values satisfies
+ * validation without changing what is stored. Omitting them 400s every public
+ * connect redemption before the handler ever runs.
+ */
+function redemptionIdentity(session: ConnectSessionInfo): { projectId: string, externalId: string } {
+  return { projectId: session.projectId, externalId: session.externalUserId }
+}
+
+function SecretTextConnectPublic({ token, piece, session, onConnected }: { token: string, piece: PieceMetadata, session: ConnectSessionInfo, onConnected: (displayName: string) => void }) {
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
   const { control, handleSubmit, formState: { errors } } = useForm<SecretTextValues>({
@@ -226,6 +243,7 @@ function SecretTextConnectPublic({ token, piece, onConnected }: { token: string,
     setErrorMessage(undefined)
     try {
       await apiClient.post(`/connect-sessions/${encodeURIComponent(token)}/connections`, {
+        ...redemptionIdentity(session),
         type: 'SECRET_TEXT',
         displayName: values.displayName.trim(),
         pieceName: piece.name,
@@ -271,7 +289,7 @@ function SecretTextConnectPublic({ token, piece, onConnected }: { token: string,
   )
 }
 
-function BasicAuthConnectPublic({ token, piece, onConnected }: { token: string, piece: PieceMetadata, onConnected: (displayName: string) => void }) {
+function BasicAuthConnectPublic({ token, piece, session, onConnected }: { token: string, piece: PieceMetadata, session: ConnectSessionInfo, onConnected: (displayName: string) => void }) {
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
   const { control, handleSubmit, formState: { errors } } = useForm<BasicAuthValues>({
@@ -283,6 +301,7 @@ function BasicAuthConnectPublic({ token, piece, onConnected }: { token: string, 
     setErrorMessage(undefined)
     try {
       await apiClient.post(`/connect-sessions/${encodeURIComponent(token)}/connections`, {
+        ...redemptionIdentity(session),
         type: 'BASIC_AUTH',
         displayName: values.displayName.trim(),
         pieceName: piece.name,
@@ -336,7 +355,7 @@ function BasicAuthConnectPublic({ token, piece, onConnected }: { token: string, 
   )
 }
 
-function CustomAuthConnectPublic({ token, piece, onConnected }: { token: string, piece: PieceMetadata, onConnected: (displayName: string) => void }) {
+function CustomAuthConnectPublic({ token, piece, session, onConnected }: { token: string, piece: PieceMetadata, session: ConnectSessionInfo, onConnected: (displayName: string) => void }) {
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
   const propEntries = Object.entries(piece.auth?.props ?? {})
@@ -352,6 +371,7 @@ function CustomAuthConnectPublic({ token, piece, onConnected }: { token: string,
     setErrorMessage(undefined)
     try {
       await apiClient.post(`/connect-sessions/${encodeURIComponent(token)}/connections`, {
+        ...redemptionIdentity(session),
         type: 'CUSTOM_AUTH',
         displayName: values.displayName.trim(),
         pieceName: piece.name,
@@ -400,13 +420,24 @@ function CustomAuthConnectPublic({ token, piece, onConnected }: { token: string,
   )
 }
 
-function PlatformOAuthConnectPublic({ token, piece, onConnected }: { token: string, piece: PieceMetadata, onConnected: (displayName: string) => void }) {
+function PlatformOAuthConnectPublic({ token, piece, session, onConnected }: { token: string, piece: PieceMetadata, session: ConnectSessionInfo, onConnected: (displayName: string) => void }) {
   const [phase, setPhase] = useState<'form' | 'authorizing' | 'creating'>('form')
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
   const cleanupPopupRef = useRef<(() => void) | null>(null)
   const auth = piece.auth
-  const { control, handleSubmit, formState: { errors }, reset } = useForm<{ displayName: string }>({
-    defaultValues: { displayName: `${piece.displayName} connection` },
+  // Some OAuth pieces declare auth props (e.g. a tenant domain templated into the
+  // provider's authUrl). The console flow renders and submits them; the server's
+  // connect-session endpoints accept `props` in both the authorization-url and the
+  // connection-create bodies, so the public flow must collect them too — otherwise
+  // the authorization URL is built from the raw `{key}` template and the flow
+  // breaks for exactly those pieces.
+  const propEntries = Object.entries(auth?.props ?? {})
+  const hasProps = propEntries.length > 0
+  const { control, handleSubmit, formState: { errors }, reset } = useForm<{ displayName: string, props: Record<string, unknown> }>({
+    defaultValues: {
+      displayName: `${piece.displayName} connection`,
+      props: Object.fromEntries(propEntries.map(([key, prop]) => [key, prop.defaultValue ?? ''])),
+    },
   })
 
   useEffect(() => () => cleanupPopupRef.current?.(), [])
@@ -423,6 +454,7 @@ function PlatformOAuthConnectPublic({ token, piece, onConnected }: { token: stri
         pieceName: piece.name,
         pieceVersion: piece.version,
         redirectUrl: buildRedirectUrl(),
+        ...(hasProps ? { props: values.props } : {}),
       })
     } catch (err) {
       setPhase('form')
@@ -437,6 +469,7 @@ function PlatformOAuthConnectPublic({ token, piece, onConnected }: { token: stri
           setPhase('creating')
           try {
             await apiClient.post(`/connect-sessions/${encodeURIComponent(token)}/connections`, {
+              ...redemptionIdentity(session),
               type: 'PLATFORM_OAUTH2',
               displayName: values.displayName.trim(),
               pieceName: piece.name,
@@ -450,6 +483,7 @@ function PlatformOAuthConnectPublic({ token, piece, onConnected }: { token: stri
                 code,
                 scope: (auth?.scope ?? []).join(' '),
                 redirect_url: buildRedirectUrl(),
+                ...(hasProps ? { props: values.props } : {}),
                 ...(authorization.codeVerifier ? { code_challenge: authorization.codeVerifier } : {}),
                 ...(auth?.authorizationMethod ? { authorization_method: auth.authorizationMethod } : {}),
               },
@@ -494,6 +528,17 @@ function PlatformOAuthConnectPublic({ token, piece, onConnected }: { token: stri
           <TextField id="connect-oauth-display-name" label="Connection name" required value={field.value} onChange={field.onChange} disabled={pending} error={errors.displayName?.message} autoComplete="off" />
         )}
       />
+      {propEntries.map(([name, prop]) => (
+        <Controller
+          key={name}
+          name={`props.${name}`}
+          control={control}
+          rules={{ required: prop.required ? `${prop.displayName} is required` : false }}
+          render={({ field, fieldState }) => (
+            <AuthPropertyRenderer name={name} property={prop} value={field.value ?? ''} onChange={field.onChange} error={fieldState.error?.message} disabled={pending} />
+          )}
+        />
+      ))}
       <div className="rounded-md border border-dashed border-border bg-muted/40 p-3">
         <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden="true" />

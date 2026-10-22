@@ -1,5 +1,5 @@
-import { ArrowLeft, KeyRound, PencilLine, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { Activity, ArrowLeft, KeyRound, PencilLine, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ConnectionStatusBadge } from '@/components/connections/connection-status-badge'
@@ -11,7 +11,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiClientError } from '@/lib/api/client'
-import { useConnection, useDeleteConnection, useIntegration } from '@/lib/query/hooks'
+import { TestConnectionResult } from '@/lib/api/types'
+import { useConnection, useDeleteConnection, useIntegration, useTestConnection } from '@/lib/query/hooks'
 import { connectionLinks } from '@/lib/utils/connection-links'
 import { connectionFormat } from '@/lib/utils/connection-format'
 
@@ -40,7 +41,44 @@ export default function ConnectionDetailPage() {
   const { data: connection, isLoading, isError, error, refetch } = useConnection(id)
   const { data: piece } = useIntegration(connection?.pieceName)
   const deleteConnection = useDeleteConnection()
+  const testConnection = useTestConnection()
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [testResult, setTestResult] = useState<TestConnectionResult | null>(null)
+
+  // Navigating from one connection's detail straight to another reuses this
+  // component instance (same route, different :id), so the previous
+  // connection's verdict, timestamp and failure message would otherwise stay
+  // on screen next to the new connection. Drop it whenever the id changes.
+  useEffect(() => {
+    setTestResult(null)
+  }, [id])
+
+  function handleTest() {
+    if (!id) return
+    testConnection.mutate(
+      { id },
+      {
+        onSuccess: (result) => {
+          setTestResult(result)
+          if (result.ok) {
+            toast.success('Connection is healthy')
+          } else {
+            toast.error('Connection test failed', {
+              description: result.message ?? 'The connection could not be refreshed.',
+            })
+          }
+        },
+        onError: (testError) => {
+          toast.error('Connection test failed', {
+            description:
+              testError instanceof Error
+                ? testError.message
+                : 'The connection could not be tested. Try again.',
+          })
+        },
+      },
+    )
+  }
 
   if (!id || isLoading) {
     return (
@@ -88,6 +126,14 @@ export default function ConnectionDetailPage() {
   }
 
   const pieceDisplayName = piece?.displayName ?? connection.pieceName
+  // The in-flight result (if any) is fresher than what the GET returned, so it
+  // wins; otherwise fall back to the persisted verdict so last-tested info
+  // survives reloads and navigation.
+  const lastTestedAt = testResult?.testedAt ?? connection.testedAt ?? null
+  const lastTestFailed = testResult
+    ? !testResult.ok
+    : connection.testedStatus === 'ERROR'
+  const lastTestMessage = testResult?.message ?? connection.testedMessage ?? null
 
   return (
     <div className="space-y-6">
@@ -111,6 +157,16 @@ export default function ConnectionDetailPage() {
                 <PencilLine className="h-3.5 w-3.5" />
                 <span>Reconnect</span>
               </Link>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={handleTest}
+              disabled={testConnection.isPending}
+            >
+              <Activity className="h-3.5 w-3.5" />
+              <span>{testConnection.isPending ? 'Testing…' : 'Test'}</span>
             </Button>
             <Button
               variant="outline"
@@ -149,8 +205,16 @@ export default function ConnectionDetailPage() {
               {connectionFormat.connectionTypeLabel(connection.type)}
             </DetailRow>
             <DetailRow label="Status">
-              <ConnectionStatusBadge status={connection.status} />
+              <ConnectionStatusBadge status={testResult?.status ?? connection.status} />
             </DetailRow>
+            <DetailRow label="Last tested">
+              {lastTestedAt ? formatDate(lastTestedAt) : '—'}
+            </DetailRow>
+            {lastTestFailed && (
+              <DetailRow label="Test result">
+                <span className="text-destructive">{lastTestMessage ?? 'The connection failed its last health check.'}</span>
+              </DetailRow>
+            )}
             <DetailRow label="Created">{formatDate(connection.created)}</DetailRow>
             <DetailRow label="Updated">{formatDate(connection.updated)}</DetailRow>
             {connection.externalId && (

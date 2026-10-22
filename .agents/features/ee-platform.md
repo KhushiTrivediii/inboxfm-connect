@@ -24,7 +24,7 @@ The EE Platform module manages billing, quota enforcement, AI credits, license k
 > Canonical term definitions live in the bounded-context glossaries — see [CONTEXT-MAP.md](../../CONTEXT-MAP.md).
 
 - **PlatformPlan**: The single entity (one-per-platform) holding all billing state, feature flags, and limits.
-- **Active Flows**: Published and enabled flows that count against the `activeFlowsLimit` quota.
+- **Active Flows**: A planned quota unit for published/enabled flows. Nothing counts against `activeFlowsLimit` today — see [Quota Enforcement](#usage--quota-enforcement).
 - **AI Credits**: Usage currency for OpenRouter-backed AI actions. 1000 credits = $1 USD.
 - **Auto Top-Up**: Automatic Stripe invoice triggered when AI credits fall below a configured threshold.
 - **License Key**: A signed token (self-hosted EE) that maps to a feature set and expiration date.
@@ -49,7 +49,7 @@ The EE Platform module manages billing, quota enforcement, AI credits, license k
 
 `platformPlanService.getUsage(platformId)` returns: `{ activeFlows, aiCreditsLimit, aiCreditsRemaining, totalAiCreditsUsed, totalAiCreditsUsedThisMonth }`
 
-`checkActiveFlowsExceededLimit()` — called when enabling/publishing flows. Throws `QUOTA_EXCEEDED` (402) if `activeFlows >= activeFlowsLimit`. Skipped in CE edition.
+`checkActiveFlowsExceededLimit()` — **currently not called from anywhere.** It throws `QUOTA_EXCEEDED` (402) if `activeFlows >= activeFlowsLimit` and is skipped in CE, but it has no call site: this fork removed the visual flow builder, so there is no flow module and no enable/publish path to enforce it from, and `getUsage()` hardcodes `activeFlows: 0`. The active-flows quota is therefore **stored and displayed but never enforced**; do not assume a 402 on flow publish exists. Tracked in #20.
 
 ## AI Credits (OpenRouter)
 

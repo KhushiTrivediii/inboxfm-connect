@@ -4,10 +4,17 @@ import {
     ApIdSchema,
     BaseColumnSchemaPart,
 } from '../../database/database-common'
+import { EncryptedObject } from '../../helper/encryption'
 
-export type AppCredentialSchema = {
+// Settings carry the OAuth2 clientSecret, so they are stored encrypted at
+// rest (encryptUtils.encryptObject — same at-rest policy as app-connection
+// values). Rows written before encryption shipped keep the plaintext
+// settings object in this column; read paths shape-discriminate and decrypt
+// (see app-credentials.service.ts).
+export type AppCredentialSchema = Omit<AppCredential, 'settings'> & {
     project: Project[]
-} & AppCredential
+    settings: EncryptedObject | AppCredential['settings']
+}
 
 export const AppCredentialEntity = new EntitySchema<AppCredentialSchema>({
     name: 'app_credential',

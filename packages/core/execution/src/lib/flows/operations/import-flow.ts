@@ -1,5 +1,5 @@
-import { isNil } from '@inboxfm-connect/core-utils'
-import { FlowAction, FlowActionType } from '../actions/action'
+import { ActivepiecesError, ErrorCode, isNil } from '@inboxfm-connect/core-utils'
+import { BranchExecutionType, FlowAction, FlowActionType, RouterAction, ValidBranchCondition } from '../actions/action'
 import { FlowVersion } from '../flow-version'
 import { FlowTrigger, FlowTriggerType } from '../triggers/trigger'
 import { flowStructureUtil } from '../util/flow-structure-util'
@@ -156,7 +156,47 @@ function removeAnySubsequentAction(action: FlowAction): FlowAction {
     return clonedAction
 }
 
+function _validateImportBranches(trigger: FlowTrigger): void {
+    const steps = flowStructureUtil.getAllSteps(trigger)
+    for (const step of steps) {
+        if (step.type === FlowActionType.ROUTER) {
+            const routerAction = step as RouterAction
+            for (const branch of routerAction.settings?.branches ?? []) {
+                if (branch.branchType === BranchExecutionType.CONDITION) {
+                    if (
+                        !branch.conditions ||
+                        branch.conditions.length === 0 ||
+                        branch.conditions.every((group) => !group || group.length === 0)
+                    ) {
+                        throw new ActivepiecesError({
+                            code: ErrorCode.FLOW_OPERATION_INVALID,
+                            params: {
+                                message: `Invalid branch condition in step '${step.displayName || step.name}': condition values must not be empty.`,
+                            },
+                        })
+                    }
+                    for (const conditionGroup of branch.conditions) {
+                        for (const condition of conditionGroup) {
+                            const parseResult = ValidBranchCondition.safeParse(condition)
+                            if (!parseResult.success) {
+                                throw new ActivepiecesError({
+                                    code: ErrorCode.FLOW_OPERATION_INVALID,
+                                    params: {
+                                        message: `Invalid branch condition in step '${step.displayName || step.name}': condition values must not be empty.`,
+                                    },
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 function _importFlow(flowVersion: FlowVersion, request: ImportFlowRequest): FlowOperationRequest[] {
+    _validateImportBranches(request.trigger)
+
     const existingActions = flowStructureUtil.getAllNextActionsWithoutChildren(flowVersion.trigger)
 
     const deleteOperations = existingActions.map(action =>

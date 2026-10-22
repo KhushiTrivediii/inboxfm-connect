@@ -5,11 +5,13 @@
  * exclusively from the `Authorization: Bearer <jwt>` header
  * (`authentication-middleware.ts`) and `EventSource` cannot set request headers.
  *
- * The parser deliberately handles only what the backend actually emits
- * (`execution.controller.ts`): frames of the shape `data: <json>\n\n`. There are no
- * `event:`, `id:` or `retry:` lines, no comment/heartbeat frames and no terminal
- * sentinel, so none of those are invented here. Unknown field names are ignored
- * rather than guessed at.
+ * The parser extracts only the `data:` payloads of what the backend actually emits
+ * (`execution.controller.ts`): frames shaped `id: <event id>\ndata: <json>\n\n`. The
+ * `id:` line exists so a native EventSource can auto-reconnect with `Last-Event-ID`;
+ * fetch-based callers read the same id from the JSON payload instead, so the line is
+ * dropped here along with every other non-`data:` field. There are no `event:` or
+ * `retry:` lines, no comment/heartbeat frames and no terminal sentinel, so none of
+ * those are invented. Unknown field names are ignored rather than guessed at.
  */
 
 const FRAME_SEPARATOR = /\r?\n\r?\n/

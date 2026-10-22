@@ -2,6 +2,9 @@ import { createPiece } from '@inboxfm-connect/pieces-framework';
 import { signrequestAuth } from './lib/common/auth';
 import { PieceCategory } from '@inboxfm-connect/pieces-framework';
 import { sendSignrequest } from './lib/actions/send-signrequest';
+import { signrequestDeclined } from './lib/triggers/signrequest-declined';
+import { signrequestReceived } from './lib/triggers/signrequest-received';
+import { signrequestSigned } from './lib/triggers/signrequest-signed';
 import { createCustomApiCallAction } from '@inboxfm-connect/pieces-common';
 
 export const signrequest = createPiece({
@@ -18,10 +21,10 @@ export const signrequest = createPiece({
       baseUrl: () => 'https://signrequest.com/api/v1',
       authMapping: async (auth) => {
         return {
-          Authorization: auth.secret_text,
+          Authorization: `Token ${auth.secret_text}`,
         };
       },
     }),
   ],
-  triggers: [],
+  triggers: [signrequestDeclined, signrequestReceived, signrequestSigned],
 });

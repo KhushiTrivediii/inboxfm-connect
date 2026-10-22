@@ -1,5 +1,5 @@
 import { ApId, Permission, SeekPage } from '@inboxfm-connect/core-utils'
-import { CountTablesRequest, CreateTableRequest, ExportTableResponse, ListTablesRequest, PrincipalType, SERVICE_KEY_SECURITY_OPENAPI, SharedTemplate, Table, UpdateTableRequest } from '@inboxfm-connect/shared'
+import { CountTablesRequest, CreateTableRequest, DuplicateTableRequest, ExportTableResponse, ListTablesRequest, PrincipalType, SERVICE_KEY_SECURITY_OPENAPI, SharedTemplate, Table, UpdateTableRequest } from '@inboxfm-connect/shared'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
 import { z } from 'zod'
@@ -20,6 +20,15 @@ export const tablesController: FastifyPluginAsyncZod = async (fastify) => {
             projectId: request.projectId,
             request: request.body,
         })
+    })
+
+    fastify.post('/:id/duplicate', DuplicateTableRequestOptions, async (request, reply) => {
+        const table = await tableService.duplicate({
+            projectId: request.projectId,
+            id: request.params.id,
+            request: request.body,
+        })
+        await reply.status(StatusCodes.CREATED).send(table)
     })
 
     fastify.post('/:id', UpdateRequest, async (request) => {
@@ -251,7 +260,7 @@ const ClearTableRequest = {
 const GetTableTemplateRequestOptions = {
     config: {
         security: securityAccess.project(
-            [PrincipalType.USER, PrincipalType.ENGINE, PrincipalType.SERVICE], 
+            [PrincipalType.USER, PrincipalType.ENGINE, PrincipalType.SERVICE],
             Permission.READ_TABLE, {
                 type: ProjectResourceType.TABLE,
                 tableName: TableEntity,
@@ -266,6 +275,27 @@ const GetTableTemplateRequestOptions = {
         }),
         response: {
             [StatusCodes.OK]: SharedTemplate,
+        },
+    },
+}
+
+const DuplicateTableRequestOptions = {
+    config: {
+        security: securityAccess.project([PrincipalType.USER, PrincipalType.ENGINE, PrincipalType.SERVICE], Permission.WRITE_TABLE, {
+            type: ProjectResourceType.TABLE,
+            tableName: TableEntity,
+        }),
+    },
+    schema: {
+        tags: ['tables'],
+        security: [SERVICE_KEY_SECURITY_OPENAPI],
+        description: 'Duplicate a table',
+        params: z.object({
+            id: ApId,
+        }),
+        body: DuplicateTableRequest,
+        response: {
+            [StatusCodes.CREATED]: Table,
         },
     },
 }

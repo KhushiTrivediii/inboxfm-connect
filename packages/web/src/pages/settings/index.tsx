@@ -30,9 +30,16 @@ import type {
 } from '@inboxfm-connect/shared'
 import { toast } from 'sonner'
 
+// Mirrors the api-keys page gate: backend write endpoints for AI providers
+// accept only this platform role.
+const PLATFORM_ADMIN_ROLE = 'ADMIN'
+
 export default function SettingsPage() {
   const { user, currentProject } = useAuth()
   const { theme, setTheme } = useTheme()
+  // AI provider create/update/delete endpoints are `securityAccess.platformAdminOnly`
+  // on the backend, so the mutation affordances must not render for other users.
+  const isPlatformAdmin = user?.platformRole === PLATFORM_ADMIN_ROLE
   const billingQuery = useBillingInfoQuery()
   const portalMutation = useCreateBillingPortalMutation()
   const checkoutMutation = useCreateBillingCheckoutMutation()
@@ -264,14 +271,16 @@ export default function SettingsPage() {
                   Configure large language model credentials for agent automations, tools, and chat.
                 </CardDescription>
               </div>
-              <Button
-                size="sm"
-                className="gap-1.5 text-xs shadow-xs"
-                onClick={handleOpenAddProvider}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Add Provider</span>
-              </Button>
+              {isPlatformAdmin && (
+                <Button
+                  size="sm"
+                  className="gap-1.5 text-xs shadow-xs"
+                  onClick={handleOpenAddProvider}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Provider</span>
+                </Button>
+              )}
             </div>
           </CardHeader>
           <CardContent>
@@ -291,12 +300,13 @@ export default function SettingsPage() {
                 icon={Bot}
                 title="No AI providers configured"
                 description="Connect an API key from OpenAI, Anthropic, Google Gemini, or AWS Bedrock to empower AI agent capabilities."
-                actionLabel="Add AI Provider"
-                onAction={handleOpenAddProvider}
+                actionLabel={isPlatformAdmin ? 'Add AI Provider' : undefined}
+                onAction={isPlatformAdmin ? handleOpenAddProvider : undefined}
               />
             ) : (
               <AIProvidersTable
                 providers={aiProviders}
+                canManage={isPlatformAdmin}
                 onEdit={handleOpenEditProvider}
                 onDelete={(p) => setDeletingProvider(p)}
                 onBrowseModels={(p) => setBrowsingProvider(p)}
@@ -321,11 +331,19 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-foreground">Project Display Name</label>
-              <Input defaultValue={currentProject?.displayName || 'InboxFM Main Project'} readOnly />
+              <Input
+                value={currentProject?.displayName || ''}
+                placeholder="No project selected"
+                readOnly
+              />
             </div>
             <div className="space-y-1">
               <label className="text-xs font-semibold text-foreground">Project ID</label>
-              <Input defaultValue={currentProject?.id || 'proj_default'} readOnly className="font-mono text-xs" />
+              <Input
+                value={currentProject?.id || '—'}
+                readOnly
+                className="font-mono text-xs"
+              />
             </div>
           </CardContent>
         </Card>
@@ -344,11 +362,18 @@ export default function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-foreground">Email Address</label>
-              <Input defaultValue={user?.email || 'developer@inboxfm.local'} readOnly />
+              <Input
+                value={user?.email || ''}
+                placeholder="Not signed in"
+                readOnly
+              />
             </div>
             <div className="space-y-1">
               <label className="text-xs font-semibold text-foreground">Platform Role</label>
-              <Input defaultValue={user?.platformRole || 'ADMIN'} readOnly />
+              <Input
+                value={user?.platformRole || '—'}
+                readOnly
+              />
             </div>
           </CardContent>
         </Card>
@@ -415,11 +440,8 @@ export default function SettingsPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Every query and execution is isolated by <code className="font-mono text-primary font-bold">x-project-id</code> and validated through Fastify security middleware.
+              Every query and execution is isolated by <code className="font-mono text-primary font-bold">x-project-id</code> and validated through Fastify security middleware. Executions run in an isolated-vm sandbox; outbound network access is restricted to the SafeHttp allowlist.
             </p>
-            <Button size="sm" variant="outline" className="text-xs" onClick={() => toast.success('Security policies are active.')}>
-              Inspect Security Policies
-            </Button>
           </CardContent>
         </Card>
       </div>

@@ -20,12 +20,14 @@ export const ArraySubProps = z.record(z.string(), z.union([
     CheckboxProperty,
     NumberProperty,
     FileProperty,
+    JsonProperty,
+    ColorProperty,
     DateTimeProperty,
 ]))
 
 export const ArrayProperty = z.object({
     ...BasePropertySchema.shape,
-    properties: ArraySubProps,
+    properties: z.optional(ArraySubProps),
     ...TPropertyValue(z.array(z.unknown()), PropertyType.ARRAY).shape,
 })
 

@@ -238,8 +238,16 @@ const RenewTriggerBindingRouteOptions = {
  * no `projectId` in the params, query or body for a caller to influence. The console
  * also calls this route for "Run / Test" with its bearer token, which the public
  * config simply ignores.
+ *
+ * Body limit of 1MB: an unauthenticated caller can otherwise exhaust memory or
+ * trigger costly LLM executions with a single oversized request (issue #351).
+ * Fastify only honors bodyLimit as a TOP-LEVEL route option — nesting it in
+ * `config` is silently ignored, and the app-level default (server.ts) is
+ * max(file-size, flow-run-log, 25)MB, so without this the public ingress
+ * accepts 25MB+ bodies.
  */
 const RunTriggerBindingRouteOptions = {
+    bodyLimit: 1024 * 1024,
     config: {
         security: securityAccess.public(),
     },

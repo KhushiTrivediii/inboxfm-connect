@@ -88,7 +88,7 @@ async function validatePieceComponent({ pieceName, componentName, componentType,
 
     if (diagnosis.missing.length === 0 && diagnosis.invalidEnums.length === 0) {
         const uiHint = diagnosis.uiRequired.length > 0
-            ? `\nNote: these fields require configuration in the Activepieces UI: ${diagnosis.uiRequired.join(', ')}.`
+            ? `\nNote: these fields require configuration in the Inboxfm Connect UI: ${diagnosis.uiRequired.join(', ')}.`
             : ''
         return {
             content: [{ type: 'text', text: `✅ Valid configuration for ${componentType.toUpperCase()} "${normalized}/${componentName}".${uiHint}` }],

@@ -38,7 +38,7 @@ export const uploadAttachmentAction = createAction({
     type FileEntry = { fileName: string; fileContent: { base64: string } };
     for (const file of context.propsValue.files as Array<FileEntry>) {
       const binary = Buffer.from(file.fileContent.base64, 'base64');
-      const boundary = '----ActivepiecesBoundary' + Date.now();
+      const boundary = '----InboxfmConnectBoundary' + Date.now();
       const parts: Buffer[] = [];
 
       parts.push(Buffer.from(

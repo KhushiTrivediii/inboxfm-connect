@@ -29,16 +29,20 @@ function projectQuery(): Record<string, string> {
  * row itself and must never be handed a client-asserted project.
  */
 const automationsApi = {
-  listTriggerBindings(): Promise<SeekPage<TriggerBinding>> {
-    return apiClient.get<SeekPage<TriggerBinding>>('/trigger-bindings', { params: projectQuery() })
+  listTriggerBindings(params?: { cursor?: string; limit?: number }): Promise<SeekPage<TriggerBinding>> {
+    return apiClient.get<SeekPage<TriggerBinding>>('/trigger-bindings', {
+      params: { ...projectQuery(), ...params },
+    })
   },
 
   createTriggerBinding(request: CreateTriggerBindingRequest): Promise<TriggerBinding> {
     return apiClient.post<TriggerBinding>('/trigger-bindings', withProjectId(request))
   },
 
-  listScheduledTasks(): Promise<SeekPage<ScheduledTask>> {
-    return apiClient.get<SeekPage<ScheduledTask>>('/scheduled-tasks', { params: projectQuery() })
+  listScheduledTasks(params?: { cursor?: string; limit?: number }): Promise<SeekPage<ScheduledTask>> {
+    return apiClient.get<SeekPage<ScheduledTask>>('/scheduled-tasks', {
+      params: { ...projectQuery(), ...params },
+    })
   },
 
   createScheduledTask(request: CreateScheduledTaskRequest): Promise<ScheduledTask> {

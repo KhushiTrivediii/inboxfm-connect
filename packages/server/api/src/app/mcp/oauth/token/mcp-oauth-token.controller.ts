@@ -1,9 +1,10 @@
 import { isNil } from '@inboxfm-connect/core-utils'
 import { McpOAuthClient } from '@inboxfm-connect/shared'
-import { FastifyReply } from 'fastify'
+import { FastifyBaseLogger, FastifyReply } from 'fastify'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { securityAccess } from '../../../core/security/authorization/fastify-security'
+import { authAbuseRateLimitOptions } from '../../../core/security/rate-limit'
 import { mcpOAuthClientService } from '../client/mcp-oauth-client.service'
 import { mcpOAuthCodeService } from '../code/mcp-oauth-code.service'
 import { mcpOAuthTokenService, OAuthTokenError } from './mcp-oauth-token.service'
@@ -18,7 +19,7 @@ export const mcpOAuthTokenController: FastifyPluginAsyncZod = async (app) => {
                 return await handleAuthorizationCode(req.body, reply)
             }
             if (grant_type === 'refresh_token') {
-                return await handleRefreshToken(req.body, reply)
+                return await handleRefreshToken(req.body, reply, req.log)
             }
             return await reply.status(400).send({ error: 'unsupported_grant_type' })
         }
@@ -58,6 +59,21 @@ async function authenticateClient(body: TokenRequestBody, reply: FastifyReply): 
     return client
 }
 
+// RFC 7591 §2.1: a client may only use grant types it registered. The register
+// endpoint persists grant_types (defaulting to both supported grants), but the
+// token endpoint never checked them - a client registered as authorization_code-
+// only could still exercise the refresh_token grant (and vice versa).
+async function assertGrantAllowed(client: McpOAuthClient, grantType: string, reply: FastifyReply): Promise<boolean> {
+    if (!client.grantTypes.includes(grantType)) {
+        await reply.status(400).send({
+            error: 'unauthorized_client',
+            error_description: `Client is not registered for the ${grantType} grant type`,
+        })
+        return false
+    }
+    return true
+}
+
 async function handleAuthorizationCode(body: TokenRequestBody, reply: FastifyReply): Promise<void> {
     const { code, code_verifier, redirect_uri } = body
     if (!code || !code_verifier || !redirect_uri) {
@@ -67,6 +83,7 @@ async function handleAuthorizationCode(body: TokenRequestBody, reply: FastifyRep
 
     const client = await authenticateClient(body, reply)
     if (isNil(client)) return
+    if (!(await assertGrantAllowed(client, 'authorization_code', reply))) return
 
     const authCode = await mcpOAuthCodeService.consume(code, client.clientId, redirect_uri)
     if (isNil(authCode)) {
@@ -88,7 +105,7 @@ async function handleAuthorizationCode(body: TokenRequestBody, reply: FastifyRep
     await reply.status(200).send(tokens)
 }
 
-async function handleRefreshToken(body: TokenRequestBody, reply: FastifyReply): Promise<void> {
+async function handleRefreshToken(body: TokenRequestBody, reply: FastifyReply, log: FastifyBaseLogger): Promise<void> {
     const { refresh_token } = body
     if (!refresh_token) {
         await reply.status(400).send({ error: 'invalid_request', error_description: 'Missing refresh_token' })
@@ -97,10 +114,12 @@ async function handleRefreshToken(body: TokenRequestBody, reply: FastifyReply): 
 
     const client = await authenticateClient(body, reply)
     if (isNil(client)) return
+    if (!(await assertGrantAllowed(client, 'refresh_token', reply))) return
 
     const tokens = await mcpOAuthTokenService.refreshAccessToken({
         refreshToken: refresh_token,
         clientId: client.clientId,
+        log,
     })
 
     await reply.status(200).send(tokens)
@@ -118,7 +137,14 @@ const tokenRequestSchema = z.object({
 })
 
 const TokenRequest = {
-    config: { security: securityAccess.public() },
+    config: {
+        security: securityAccess.public(),
+        // This endpoint authenticates client_secret_post secrets and consumes
+        // one-time authorization codes — the same tighter tier as sign-up /
+        // sign-in (see core/security/rate-limit.ts). 10/min/IP is far above a
+        // legitimate client's refresh cadence.
+        rateLimit: authAbuseRateLimitOptions,
+    },
     schema: {
         hide: true,
         body: tokenRequestSchema,

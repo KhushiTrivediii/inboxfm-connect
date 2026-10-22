@@ -1,0 +1,127 @@
+# External-User MCP Delegation with Account and Tool Isolation
+
+## Overview
+
+InboxFM Connect provides an isolated Model Context Protocol (MCP) server designed specifically for delegated end-customer execution. Consuming applications can grant AI agents secure, scoped access to third-party tools and connected accounts on behalf of a specific customer—without exposing privileged Project API Keys (`cak-...`) or risking cross-customer account access.
+
+## Architectural Comparison
+
+| Dimension | Operator Project MCP Server | Customer-Delegated MCP Server |
+|---|---|---|
+| **Endpoint** | `POST /mcp` (User/Service JWT) | `POST /mcp` or `GET /v1/connect-mcp/sse` (Customer MCP Token) |
+| **Authentication** | Operator JWT or Project API Key | Delegated Customer JWT (`aud: CONNECT_EXTERNAL_MCP`) |
+| **Identity Scope** | Workspace builder / administrator | Single customer (`externalUserId`) inside a project |
+| **Available Tools** | Flow building, table mutations, connection admin, AI models | Bounded execution tools: `ap_list_connections`, `ap_run_action`, `ap_get_piece_props`, `ap_research_pieces` |
+| **Connection Access** | All connections across the project | Strictly connections where `externalId === externalUserId` |
+| **Integration Filtering** | All platform/project pieces | Restricted to tenant-specified `allowedPieceNames` |
+| **Credential Safety** | Admin managed credentials | Upstream tokens strictly sealed; error traces sanitized |
+
+## Supported Transports
+
+InboxFM Connect implements the Model Context Protocol (MCP Specification 2024-11-05):
+
+1. **Streamable HTTP (`POST /mcp`)**:
+   - Modern, high-performance HTTP transport for LLM frameworks and agent runtimes.
+   - Header requirements:
+     - `Authorization: Bearer <customer_mcp_token>`
+     - `Accept: application/json, text/event-stream`
+     - `Content-Type: application/json`
+
+2. **Server-Sent Events (`GET /v1/connect-mcp/sse`)**:
+   - SSE connection endpoint for streaming clients.
+   - Query parameter: `?token=<customer_mcp_token>`.
+   - Message posting endpoint: `POST /v1/connect-mcp/messages?sessionId=<session_id>`.
+
+## Delegation Workflows
+
+### 1. Consuming Backend Delegation (Server-to-Server)
+
+Your backend generates a customer MCP token using its privileged Project API Key:
+
+```ts
+import { InboxFM } from '@inboxfm-connect/sdk'
+
+const client = new InboxFM({
+    baseUrl: 'https://connect.yourdomain.com/api',
+    apiKey: process.env.INBOXFM_PROJECT_API_KEY!,
+})
+
+const { token, expiresAt, serverUrl } = await client.createMcpToken({
+    externalUserId: customer.id, // e.g. "cust_123"
+    allowedPieceNames: ['slack', 'github'], // Optional scope limit
+    expiresInSeconds: 3600, // 1 hour (default: 3600s, max: 604800s / 7 days)
+})
+
+// Pass token and serverUrl to your customer's agent session
+```
+
+### 2. Connect Session Exchange (Frontend/Session-to-Server)
+
+When an end-user connects their accounts through the embedded Connect modal, your client or agent can exchange the active connect session token directly for a customer MCP token:
+
+```http
+POST /api/v1/connect-sessions/:sessionToken/mcp-token
+Content-Type: application/json
+
+{
+    "expiresInSeconds": 3600
+}
+```
+
+## Security Invariants
+
+1. **Audience & Token Separation**:
+   Customer MCP tokens are signed with HMAC SHA-256 and enforce `aud: CONNECT_EXTERNAL_MCP`. They cannot be used against administrative API endpoints, and platform session tokens cannot be passed to customer MCP endpoints.
+
+2. **Account Isolation & Substitution Prevention**:
+   Every connection lookup filters on `projectIds @> [token.projectId]` AND `externalId = token.externalUserId`. Even if an agent provides a `connectionExternalId` parameter to `ap_run_action`, the server verifies `connectionExternalId === token.externalUserId` and rejects any mismatch.
+
+3. **Live Reconnection & Immediate Revocation**:
+   Integrations are verified dynamically against active database records at invocation time. When a customer disconnects an app, all subsequent tool calls fail immediately without waiting for token expiry.
+
+4. **Credential Redaction**:
+   OAuth refresh tokens, client secrets, and access tokens never enter model prompts, structured returns, or server logs. Upstream execution errors are sanitized to redact Bearer tokens and sensitive key patterns.
+
+## Multi-Tenant Agent Example
+
+```ts
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHttpClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+
+async function runCustomerAgent(customerToken: string, prompt: string) {
+    const transport = new StreamableHttpClientTransport(
+        new URL('https://connect.yourdomain.com/api/mcp'),
+        {
+            requestInit: {
+                headers: {
+                    Authorization: `Bearer ${customerToken}`,
+                    Accept: 'application/json, text/event-stream',
+                },
+            },
+        },
+    )
+
+    const client = new Client({ name: 'agent-runtime', version: '1.0.0' })
+    await client.connect(transport)
+
+    // Discover tools authorized for this customer
+    const tools = await client.listTools()
+    console.log('Available tools:', tools.tools.map((t) => t.name))
+
+    // Execute action
+    const response = await client.callTool({
+        name: 'ap_run_action',
+        arguments: {
+            pieceName: 'slack',
+            actionName: 'send_channel_message',
+            input: {
+                channel: 'C12345678',
+                text: 'Autonomous update completed',
+            },
+        },
+    })
+
+    await client.close()
+    return response
+}
+```

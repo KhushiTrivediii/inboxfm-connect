@@ -2,7 +2,7 @@ import { Cell, Field, FieldType, Project, Table } from '@inboxfm-connect/shared'
 import { EntitySchema } from 'typeorm'
 import { ApIdSchema, BaseColumnSchemaPart } from '../../database/database-common'
 
-type FieldSchema = Field & {
+export type FieldSchema = Field & {
     table: Table
     project: Project
     cells: Cell[]

@@ -25,6 +25,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@inboxfm-connect/shared': path.resolve(__dirname, '../../../packages/core/shared/src/index.ts'),
+      '@inboxfm-connect/core-execution': path.resolve(__dirname, '../../../packages/core/execution/src/index.ts'),
       '@inboxfm-connect/pieces-framework': path.resolve(__dirname, '../../../packages/integrations/framework/src/index.ts'),
       '@inboxfm-connect/pieces-common': path.resolve(__dirname, '../../../packages/integrations/common/src/index.ts'),
       '@inboxfm-connect/core-formula': path.resolve(__dirname, '../../../packages/core/formula/src/index.ts'),

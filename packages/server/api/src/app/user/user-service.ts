@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid'
 import { In, IsNull } from 'typeorm'
 import { userIdentityRepository } from '../authentication/user-identity/user-identity-service'
 import { repoFactory } from '../core/db/repo-factory'
+import { distributedLock } from '../database/redis-connections'
 import { projectMemberRepo } from '../ee/projects/project-role/project-role.service'
 import { buildPaginator } from '../helper/pagination/build-paginator'
 import { paginationHelper } from '../helper/pagination/pagination-utils'
@@ -16,6 +17,14 @@ import { UserEntity, UserSchema } from './user-entity'
 
 
 export const userRepo = repoFactory(UserEntity)
+
+// Postgres surfaces a unique violation as SQLSTATE 23505 on `code`, and pglite puts it
+// on `driverError.code` instead, so a matcher keyed on the message misses half the
+// supported drivers. Same shape as the other services in this package.
+const isUniqueViolation = (error: unknown): boolean => {
+    const candidate = error as { code?: unknown, driverError?: { code?: unknown } } | null
+    return candidate?.code === '23505' || candidate?.driverError?.code === '23505'
+}
 
 export const userService = (log: FastifyBaseLogger) => ({
     async create(params: CreateParams): Promise<User> {
@@ -31,26 +40,57 @@ export const userService = (log: FastifyBaseLogger) => ({
         return userRepo().save(user)
     },
     async getOrCreateWithProject({ identity, platformId }: GetOrCreateWithProjectParams): Promise<User> {
-        const user = await this.getOneByIdentityAndPlatform({
-            identityId: identity.id,
-            platformId,
-        })
-        if (isNil(user)) {
-            const newUser = await this.create({
-                identityId: identity.id,
-                platformId,
-                platformRole: PlatformRole.MEMBER,
-            })
-
-            await projectService(log).create({
-                displayName: identity.firstName + '\'s Project',
-                ownerId: newUser.id,
-                platformId,
-                type: ProjectType.PERSONAL,
-            })
-            return newUser
+        // Two sign-ins for the same identity on the same platform can both observe "no
+        // user" and provision concurrently. Both inserts then target
+        // idx_user_platform_id_email (platformId, identityId) and the loser surfaced a
+        // raw unique violation out of a sign-in path - or, when the user insert did land,
+        // a second personal project for the same person. Serialize on the natural key and
+        // re-check inside the lock; the out-of-lock read stays so a warm call never
+        // touches Redis.
+        const existing = await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })
+        if (!isNil(existing)) {
+            return existing
         }
-        return user
+
+        const key = `user:get-or-create:${platformId}:${identity.id}`
+        try {
+            return await distributedLock(log).runExclusive({
+                key,
+                timeoutInSeconds: 60,
+                fn: async () => {
+                    // Re-check under the lock: the winner of a race has already committed.
+                    const user = await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })
+                    if (!isNil(user)) {
+                        return user
+                    }
+                    const newUser = await this.create({
+                        identityId: identity.id,
+                        platformId,
+                        platformRole: PlatformRole.MEMBER,
+                    })
+
+                    await projectService(log).create({
+                        displayName: identity.firstName + '\'s Project',
+                        ownerId: newUser.id,
+                        platformId,
+                        type: ProjectType.PERSONAL,
+                    })
+                    return newUser
+                },
+            })
+        }
+        catch (error) {
+            // The lock is an optimisation, not the correctness boundary: if it is
+            // unavailable, or the insert lost the race anyway, converge on the
+            // committed row rather than failing a sign-in.
+            if (isUniqueViolation(error) || await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })) {
+                const winner = await this.getOneByIdentityAndPlatform({ identityId: identity.id, platformId })
+                if (!isNil(winner)) {
+                    return winner
+                }
+            }
+            throw error
+        }
     },
     async updateLastActiveDate({ id }: UpdateLastActiveDateParams): Promise<void> {
         await userRepo().update({ id }, { lastActiveDate: dayjs().toISOString() })

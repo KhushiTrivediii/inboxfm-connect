@@ -172,3 +172,55 @@ describe('Cron Parser & Validator', () => {
         })
     })
 })
+
+
+describe('validateCronExpression fireability (issue #389)', () => {
+    it('accepts dom OR dow schedules that fire (CR on #390, item 1)', () => {
+        // both-restricted OR branch: "0 0 31 2 MON" fires every February Monday
+        expect(cronParser.validateCronExpression('0 0 31 2 MON')).toBe(true)
+        expect(cronParser.validateCronExpression('0 0 30 2 MON')).toBe(true)
+        expect(cronParser.validateCronExpression('0 0 31 2 SUN')).toBe(true)
+        // dow-restricted in a real month
+        expect(cronParser.validateCronExpression('0 0 31 4 MON')).toBe(true)
+        // leap-day + weekday OR (CR non-blocking suggestion)
+        expect(cronParser.validateCronExpression('0 0 29 2 MON')).toBe(true)
+    })
+
+    it('still rejects structurally unfireable dom-only schedules', () => {
+        expect(cronParser.validateCronExpression('0 0 31 4 *')).toBe(false) // 31 April
+        expect(cronParser.validateCronExpression('0 0 31 6 *')).toBe(false) // 31 June
+        expect(cronParser.validateCronExpression('0 0 30 2 *')).toBe(false) // 30 February
+    })
+
+    it('rejects syntactically valid crons that can never fire', () => {
+        expect(cronParser.validateCronExpression('0 0 31 2 *')).toBe(false) // 31 February
+        expect(cronParser.validateCronExpression('0 0 30 2 *')).toBe(false) // 30 February
+        expect(cronParser.validateCronExpression('0 0 31 4 *')).toBe(false) // 31 April
+        expect(cronParser.validateCronExpression('0 0 31 4,6,9,11 *')).toBe(false) // 31 in 30-day months
+    })
+
+    it('keeps fireable day/month combinations', () => {
+        expect(cronParser.validateCronExpression('0 0 29 2 *')).toBe(true) // leap-day, fires on leap years
+        expect(cronParser.validateCronExpression('0 0 31 1,3 *')).toBe(true) // Jan/Mar 31
+        expect(cronParser.validateCronExpression('0 0 30 2,4 *')).toBe(true) // 30th — April has one
+        expect(cronParser.validateCronExpression('0 0 30 4 *')).toBe(true) // April's last day (parity with #391)
+        expect(cronParser.validateCronExpression('0 0 31 * *')).toBe(true) // wildcard month
+        expect(cronParser.validateCronExpression('0 0 * 2 *')).toBe(true) // wildcard dom
+        expect(cronParser.validateCronExpression('*/5 * * * *')).toBe(true)
+    })
+
+    it('handles month-name fields in the fireability probe', () => {
+        // parity with #391: names resolve before the probe runs
+        expect(cronParser.validateCronExpression('0 0 31 FEB *')).toBe(false) // 31 Feb, by name
+        expect(cronParser.validateCronExpression('0 0 30 APR *')).toBe(true) // 30 Apr, by name
+    })
+
+    it('answers the unfireable case without the multi-second clock scan', () => {
+        // The naive probe (run computeNextTick and catch the search-window throw)
+        // takes >7s on '0 0 31 2 *'; the structural check is O(1) on the field sets.
+        const t0 = performance.now()
+        expect(cronParser.validateCronExpression('0 0 31 2 *')).toBe(false)
+        const ms = performance.now() - t0
+        expect(ms).toBeLessThan(100)
+    })
+})

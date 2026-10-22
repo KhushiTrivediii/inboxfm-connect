@@ -135,6 +135,47 @@ describe('DynamicOptionsSelect', () => {
     expect((searchRequests[0].body as { searchValue?: string }).searchValue).toBe('ved')
   }, 15000)
 
+  it('keeps the search input mounted and focused while a follow-up search loads', async () => {
+    const { requests } = stubApi(optionsRoutes())
+    const container = renderSelect(baseProps())
+
+    await waitFor(() => container.querySelector('select') !== null)
+    await waitFor(() => container.textContent?.includes('vedlabs/inboxfm') === true)
+
+    const searchInput = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Search options for repository"]'
+    )
+    expect(searchInput).not.toBeNull()
+
+    await act(async () => {
+      searchInput?.focus()
+    })
+    expect(document.activeElement).toBe(searchInput)
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(searchInput, 'inbox')
+      searchInput?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    // Wait for the debounced follow-up request to be sent.
+    await waitFor(
+      () =>
+        requests.filter(
+          (request) => (request.body as { searchValue?: string })?.searchValue === 'inbox'
+        ).length >= 1,
+      5000
+    )
+
+    // The refetch may not unmount the search input: it must still be in the DOM
+    // and keep focus, so the user can continue typing their query.
+    const inputAfterRefetch = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Search options for repository"]'
+    )
+    expect(inputAfterRefetch).not.toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Search options for repository')
+  }, 15000)
+
   it('maps a selected label back to the raw option value', async () => {
     let selected: unknown = null
     stubApi(optionsRoutes())

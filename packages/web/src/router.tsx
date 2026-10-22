@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { AppShell } from './components/layout/app-shell'
 import { RequireAuth } from './components/layout/require-auth'
+import { setAuthNavigator } from './lib/auth/auth-navigation'
 import { LoadingState } from './components/ui/loading-state'
 
 const DashboardPage = lazy(() => import('./pages/dashboard'))
@@ -162,3 +163,8 @@ export const router = createBrowserRouter([
     ],
   },
 ])
+
+setAuthNavigator((to, opts) => {
+  void router.navigate(to, opts)
+})
+

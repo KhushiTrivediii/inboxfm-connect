@@ -80,7 +80,13 @@ describe('fileSystemUtils', () => {
             const outsideDir = await mkdtemp(join(tmpdir(), 'server-utils-test-outside-'))
             try {
                 const symlinkInBase = join(tempDir, 'pointer')
-                await symlink(outsideDir, symlinkInBase)
+                try {
+                    await symlink(outsideDir, symlinkInBase)
+                }
+                catch (e: any) {
+                    if (e?.code === 'EPERM') return // Skip on Windows without Developer Mode
+                    throw e
+                }
                 const target = join(symlinkInBase, 'file.json')
                 await expect(fileSystemUtils.assertPathInside({ baseDir: tempDir, targetPath: target })).rejects.toThrow(/path escape detected/)
             }
@@ -95,7 +101,13 @@ describe('fileSystemUtils', () => {
             try {
                 await writeFile(outsideFile, '{}')
                 const symlinkFile = join(tempDir, 'inner.json')
-                await symlink(outsideFile, symlinkFile)
+                try {
+                    await symlink(outsideFile, symlinkFile)
+                }
+                catch (e: any) {
+                    if (e?.code === 'EPERM') return // Skip on Windows without Developer Mode
+                    throw e
+                }
                 await expect(fileSystemUtils.assertPathInside({ baseDir: tempDir, targetPath: symlinkFile })).rejects.toThrow(/path escape detected/)
             }
             finally {
@@ -107,7 +119,13 @@ describe('fileSystemUtils', () => {
             const innerReal = join(tempDir, 'real')
             await mkdir(innerReal, { recursive: true })
             const symlinkInBase = join(tempDir, 'alias')
-            await symlink(innerReal, symlinkInBase)
+            try {
+                await symlink(innerReal, symlinkInBase)
+            }
+            catch (e: any) {
+                if (e?.code === 'EPERM') return // Skip on Windows without Developer Mode
+                throw e
+            }
             const target = join(symlinkInBase, 'file.json')
             await expect(fileSystemUtils.assertPathInside({ baseDir: tempDir, targetPath: target })).resolves.toBeUndefined()
         })

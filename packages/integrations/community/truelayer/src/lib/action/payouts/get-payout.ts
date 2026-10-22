@@ -1,6 +1,6 @@
 
 import { httpClient, HttpMethod } from '@inboxfm-connect/pieces-common';
-import { createAction, Property } from '@inboxfm-connect/pieces-framework';
+import { createAction, OAuth2PropertyValue, Property } from '@inboxfm-connect/pieces-framework';
 import { trueLayerCommon } from '../../common';
 
 export const getPayout = createAction({
@@ -21,7 +21,7 @@ export const getPayout = createAction({
       method: HttpMethod.GET,
       url: `${trueLayerCommon.baseUrl}/v3/payouts/${ctx.propsValue.id}`,
       headers: {
-        Authorization: `${ctx.auth}`,
+        Authorization: `Bearer ${(ctx.auth as OAuth2PropertyValue).access_token}`,
       }
     })
 

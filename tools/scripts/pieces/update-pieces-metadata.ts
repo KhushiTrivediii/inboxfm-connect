@@ -1,7 +1,7 @@
 import assert from 'node:assert';
-import { PieceMetadata } from '../../../packages/pieces/framework/src';
+import { PieceMetadata } from '../../../packages/integrations/framework/src';
 import { StatusCodes } from 'http-status-codes';
-import { HttpHeader } from '../../../packages/pieces/common/src';
+import { HttpHeader } from '../../../packages/integrations/common/src';
 import { AP_CLOUD_API_BASE, findNewPieces, pieceMetadataExists } from '../utils/piece-script-utils';
 import { chunk } from '@inboxfm-connect/core-utils';
 assert(process.env['AP_CLOUD_API_KEY'], 'API Key is not defined');

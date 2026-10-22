@@ -29,6 +29,7 @@ import {
     ExecuteToolOperation,
     ExecuteValidateAuthOperation,
     ExecuteValidateAuthResponse,
+    PropsValidationError,
 } from '@inboxfm-connect/shared'
 import { EngineConstants } from '../handler/context/engine-constants'
 import { ExecutionContext } from '../handler/context/execution-context'
@@ -224,7 +225,7 @@ export const pieceHelper = {
             {},
         )
         if (Object.keys(errors).length > 0) {
-            throw new Error(JSON.stringify(errors, null, 2))
+            throw new PropsValidationError(errors)
         }
 
         const context = {
@@ -233,7 +234,7 @@ export const pieceHelper = {
                 apiUrl: params.internalApiUrl,
                 prefix: '',
                 flowId: 'headless',
-                flowVersionId: 'headless',
+                engineToken: params.engineToken,
             }),
             step: {
                 name: params.actionName,
@@ -255,6 +256,15 @@ export const pieceHelper = {
             connections: {
                 get: async () => null,
             },
+            // The flow-run context wires flows; the headless context must honour the same
+            // PieceContext contract or any piece reading context.flows.current crashes
+            // (#618). Placeholder ids mirror the store/run headless convention.
+            flows: createFlowsContext({
+                engineToken: params.engineToken,
+                internalApiUrl: params.internalApiUrl,
+                flowId: 'headless',
+                flowVersionId: 'headless',
+            }),
             run: {
                 id: 'headless',
                 stop: () => {},

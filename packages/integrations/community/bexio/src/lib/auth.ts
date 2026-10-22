@@ -26,6 +26,8 @@ export const bexioAuth = PieceAuth.OAuth2({
     'monitoring_edit',
     'accounting',
     'file',
+    'general',
+    'stock_edit',
   ],
   validate: async ({ auth }) => {
     try {

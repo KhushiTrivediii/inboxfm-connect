@@ -249,12 +249,13 @@ describe('knowledgeSearchService', () => {
     })
 
     describe('custom embedder propagation', () => {
-        it('forwards custom embedder to toolSearchService', async () => {
+        it('forwards the custom embedder (memo-wrapped) to toolSearchService and embeds the shared query once', async () => {
+            const embedSpy = vi.fn().mockResolvedValue([[0.1, 0.2]])
             const fakeEmbedder: ToolSearchEmbedder = {
                 modelVersion: 'test-v1',
                 dimensions: 768,
                 tau: 0.5,
-                embed: vi.fn().mockResolvedValue([[0.1, 0.2]]),
+                embed: embedSpy,
             }
 
             mockSearchActions.mockResolvedValueOnce({ results: [], mode: 'semantic' })
@@ -268,12 +269,51 @@ describe('knowledgeSearchService', () => {
                 embedder: fakeEmbedder,
             })
 
-            expect(mockSearchActions).toHaveBeenCalledWith('test', expect.objectContaining({
+            // The unified pipeline forwards a memoizing wrapper, not the raw
+            // object: the custom embedder's config must survive the wrap...
+            const actionsArg = mockSearchActions.mock.calls[0][1]
+            const triggersArg = mockSearchTriggers.mock.calls[0][1]
+            expect(actionsArg.embedder).toBeDefined()
+            expect(actionsArg.embedder.modelVersion).toBe('test-v1')
+            expect(actionsArg.embedder.dimensions).toBe(768)
+            expect(actionsArg.embedder.tau).toBe(0.5)
+            expect(triggersArg.embedder.modelVersion).toBe('test-v1')
+            // ...and the shared query text is embedded exactly once, not once
+            // per branch.
+            await Promise.all([
+                actionsArg.embedder.embed(['test']),
+                triggersArg.embedder.embed(['test']),
+            ])
+            expect(embedSpy).toHaveBeenCalledTimes(1)
+            // A different text is NOT memoized - it passes through to the API.
+            await actionsArg.embedder.embed(['other'])
+            expect(embedSpy).toHaveBeenCalledTimes(2)
+        })
+
+        it('single-kind searches forward the memo-wrapped custom embedder too', async () => {
+            const embedSpy = vi.fn().mockResolvedValue([[0.5, 0.5]])
+            const fakeEmbedder: ToolSearchEmbedder = {
+                modelVersion: 'test-v1',
+                dimensions: 768,
+                tau: 0.5,
+                embed: embedSpy,
+            }
+
+            mockSearchActions.mockResolvedValueOnce({ results: [], mode: 'semantic' })
+
+            const service = knowledgeSearchService(mockLog)
+            await service.query({
+                query: 'test',
+                platformId: 'plt-test',
+                projectId: 'prj-test',
+                objectKind: 'action',
                 embedder: fakeEmbedder,
-            }))
-            expect(mockSearchTriggers).toHaveBeenCalledWith('test', expect.objectContaining({
-                embedder: fakeEmbedder,
-            }))
+            })
+
+            const actionsArg = mockSearchActions.mock.calls[0][1]
+            expect(actionsArg.embedder.modelVersion).toBe('test-v1')
+            await actionsArg.embedder.embed(['test'])
+            expect(embedSpy).toHaveBeenCalledTimes(1)
         })
     })
 })

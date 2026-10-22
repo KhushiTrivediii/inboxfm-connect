@@ -33,10 +33,30 @@ import {
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const { data: integrationsData, isLoading: isIntegrationsLoading } = useIntegrations()
-  const { data: connections, isLoading: isConnectionsLoading } = useConnectionsQuery()
-  const { data: triggerBindings, isLoading: isTriggersLoading } = useTriggerBindingsQuery()
-  const { data: scheduledTasks, isLoading: isSchedulesLoading } = useScheduledTasksQuery()
+  const {
+    data: integrationsData,
+    isLoading: isIntegrationsLoading,
+    isError: isIntegrationsError,
+    refetch: refetchIntegrations,
+  } = useIntegrations()
+  const {
+    data: connections,
+    isLoading: isConnectionsLoading,
+    isError: isConnectionsError,
+    refetch: refetchConnections,
+  } = useConnectionsQuery()
+  const {
+    data: triggerBindings,
+    isLoading: isTriggersLoading,
+    isError: isTriggersError,
+    refetch: refetchTriggers,
+  } = useTriggerBindingsQuery()
+  const {
+    data: scheduledTasks,
+    isLoading: isSchedulesLoading,
+    isError: isSchedulesError,
+    refetch: refetchSchedules,
+  } = useScheduledTasksQuery()
   const {
     data: executionsData,
     isLoading: isExecutionsLoading,
@@ -84,14 +104,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isIntegrationsLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {totalToolsCount}
+            ) : isIntegrationsError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchIntegrations()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {totalToolsCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Across {integrationList.length} integrations
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              Across {integrationList.length} integrations
-            </p>
           </div>
         </Card>
 
@@ -106,14 +141,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isConnectionsLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {activeConnectionsCount}
+            ) : isConnectionsError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchConnections()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {activeConnectionsCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {connectionList.length} total credentials
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {connectionList.length} total credentials
-            </p>
           </div>
         </Card>
 
@@ -128,14 +178,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isTriggersLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {activeTriggersCount}
+            ) : isTriggersError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchTriggers()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {activeTriggersCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {triggerBindings?.length || 0} configured event listeners
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {triggerBindings?.length || 0} configured event listeners
-            </p>
           </div>
         </Card>
 
@@ -150,14 +215,29 @@ export default function DashboardPage() {
           <div className="mt-2">
             {isSchedulesLoading ? (
               <Skeleton className="h-7 w-16" />
-            ) : (
-              <div className="text-2xl font-bold tracking-tight text-foreground">
-                {activeSchedulesCount}
+            ) : isSchedulesError ? (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-destructive font-medium">Failed to load</span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  data-testid="retry-button"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => void refetchSchedules()}
+                >
+                  Retry
+                </Button>
               </div>
+            ) : (
+              <>
+                <div className="text-2xl font-bold tracking-tight text-foreground">
+                  {activeSchedulesCount}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  {scheduledTasks?.length || 0} cron schedules
+                </p>
+              </>
             )}
-            <p className="text-[11px] text-muted-foreground mt-0.5">
-              {scheduledTasks?.length || 0} active cron schedules
-            </p>
           </div>
         </Card>
       </div>

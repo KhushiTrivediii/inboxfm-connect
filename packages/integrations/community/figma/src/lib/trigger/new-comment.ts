@@ -7,13 +7,14 @@ import { assertNotNullOrUndefined } from '@inboxfm-connect/pieces-framework';
 import { nanoid } from 'nanoid';
 import { figmaCommon } from '../common';
 import { figmaWebhookPostRequest, figmaDeleteRequest } from '../common/utils';
+import {
+  FigmaWebhookData,
+  createWebhookTriggerKey,
+  verifyFigmaWebhookRequest,
+} from '../common/webhook';
 import { figmaAuth } from '../auth';
 
-type TriggerData = {
-  webhookId: string;
-};
-
-const TRIGGER_DATA_STORE_KEY = 'figma_new_comment_trigger_data';
+const TRIGGER_DATA_STORE_KEY = createWebhookTriggerKey('new_comment');
 
 export const newCommentTrigger = createTrigger({
   auth: figmaAuth,
@@ -67,8 +68,9 @@ export const newCommentTrigger = createTrigger({
       passcode,
     });
 
-    await context.store?.put<TriggerData>(TRIGGER_DATA_STORE_KEY, {
+    await context.store?.put<FigmaWebhookData>(TRIGGER_DATA_STORE_KEY, {
       webhookId: response_body['id'],
+      passcode,
     });
   },
 
@@ -77,7 +79,7 @@ export const newCommentTrigger = createTrigger({
 
     assertNotNullOrUndefined(token, 'token');
 
-    const triggerData = await context.store?.get<TriggerData>(
+    const triggerData = await context.store?.get<FigmaWebhookData>(
       TRIGGER_DATA_STORE_KEY
     );
     if (triggerData !== null && triggerData !== undefined) {
@@ -90,6 +92,8 @@ export const newCommentTrigger = createTrigger({
   },
 
   async run(context) {
+    await verifyFigmaWebhookRequest(context, 'new_comment');
+
     const payloadBody = context.payload.body as Record<string, unknown>;
     if ('event_type' in payloadBody && payloadBody['event_type'] === 'PING') {
       return [];

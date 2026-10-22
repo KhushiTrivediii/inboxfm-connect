@@ -253,7 +253,7 @@ describe('Piece Metadata CE API', () => {
             expect(bodyChanged.data[0].name).toBe(bodyFresh.data[0].name)
         })
 
-        it('should return 400 Bad Request when limit is invalid', async () => {
+        it('should enforce limit boundaries (-5, 0, 501, non-numeric -> 400; 1, 500 -> 200)', async () => {
             await pieceCache(mockLog).setup()
 
             const testToken = await generateMockToken({
@@ -261,22 +261,36 @@ describe('Piece Metadata CE API', () => {
                 id: apId(),
             })
 
-            const resNegative = await app?.inject({
-                method: 'GET',
-                url: '/api/v1/integrations?limit=-5',
-                headers: { authorization: `Bearer ${testToken}` },
-            })
-            expect(resNegative?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+            const testLimit = async (limitVal: string) => {
+                return app?.inject({
+                    method: 'GET',
+                    url: `/api/v1/integrations?limit=${limitVal}`,
+                    headers: { authorization: `Bearer ${testToken}` },
+                })
+            }
 
-            const resTooLarge = await app?.inject({
-                method: 'GET',
-                url: '/api/v1/integrations?limit=9999',
-                headers: { authorization: `Bearer ${testToken}` },
-            })
-            expect(resTooLarge?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+            // Invalid limits -> 400 Bad Request
+            expect((await testLimit('-5'))?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+            expect((await testLimit('0'))?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+            expect((await testLimit('501'))?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+            expect((await testLimit('not-a-number'))?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+
+            // Valid boundary limits -> 200 OK
+            const resMin = await testLimit('1')
+            expect(resMin?.statusCode).toBe(StatusCodes.OK)
+            expect(resMin?.json().data.length).toBe(1)
+
+            const resDefault = await testLimit('10')
+            expect(resDefault?.statusCode).toBe(StatusCodes.OK)
+
+            const resMax = await testLimit('500')
+            expect(resMax?.statusCode).toBe(StatusCodes.OK)
+            const maxCount = resMax?.json().data.length
+            expect(maxCount).toBeGreaterThanOrEqual(resDefault?.json().data.length)
+            expect(maxCount).toBeLessThanOrEqual(500)
         })
 
-        it('should restart at first page if sort parameter changes from cursor queryHash', async () => {
+        it('should restart at first page if orderBy parameter changes from cursor queryHash', async () => {
             await pieceCache(mockLog).setup()
 
             const testToken = await generateMockToken({
@@ -311,7 +325,42 @@ describe('Piece Metadata CE API', () => {
             expect(bodyChanged.data[0].name).toBe(bodyFresh.data[0].name)
         })
 
-        it('should produce identical pagination when boolean flags are omitted vs explicitly false', async () => {
+        it('should restart at first page if sortBy parameter changes from cursor queryHash', async () => {
+            await pieceCache(mockLog).setup()
+
+            const testToken = await generateMockToken({
+                type: PrincipalType.UNKNOWN,
+                id: apId(),
+            })
+
+            // Get page 1 sorted by NAME
+            const res1 = await app?.inject({
+                method: 'GET',
+                url: '/api/v1/integrations?limit=2&sortBy=NAME&orderBy=ASC',
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            const body1 = res1?.json()
+            expect(body1.next).not.toBeNull()
+
+            // Call with cursor from page 1 but different sortBy (CREATED)
+            const resChanged = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/integrations?limit=2&cursor=${encodeURIComponent(body1.next)}&sortBy=CREATED&orderBy=ASC`,
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            expect(resChanged?.statusCode).toBe(StatusCodes.OK)
+            const bodyChanged = resChanged?.json()
+
+            const resFresh = await app?.inject({
+                method: 'GET',
+                url: '/api/v1/integrations?limit=2&sortBy=CREATED&orderBy=ASC',
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            const bodyFresh = resFresh?.json()
+            expect(bodyChanged.data[0].name).toBe(bodyFresh.data[0].name)
+        })
+
+        it('should normalize boolean query flags in fingerprint so omitted vs false vs "false" advance cursor smoothly', async () => {
             await pieceCache(mockLog).setup()
 
             const testToken = await generateMockToken({
@@ -335,8 +384,78 @@ describe('Piece Metadata CE API', () => {
             })
             expect(resExplicit?.statusCode).toBe(StatusCodes.OK)
             const bodyExplicit = resExplicit?.json()
-            // Should successfully advance to page 2 (not restart at page 1)
             expect(bodyExplicit.data[0].name).not.toBe(bodyOmitted.data[0].name)
+
+            // Explicit includeHidden=false only
+            const resHiddenFalse = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/integrations?limit=2&cursor=${encodeURIComponent(bodyOmitted.next)}&includeHidden=false`,
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            expect(resHiddenFalse?.statusCode).toBe(StatusCodes.OK)
+            expect(resHiddenFalse?.json().data[0].name).toBe(bodyExplicit.data[0].name)
+
+            // Replay with includeHidden=true restarts at page 1 of includeHidden results
+            const resHiddenTrue = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/integrations?limit=2&cursor=${encodeURIComponent(bodyOmitted.next)}&includeHidden=true`,
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            expect(resHiddenTrue?.statusCode).toBe(StatusCodes.OK)
+            const bodyHiddenTrue = resHiddenTrue?.json()
+            const freshHiddenTrue = await app?.inject({
+                method: 'GET',
+                url: '/api/v1/integrations?limit=2&includeHidden=true',
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            expect(bodyHiddenTrue.data[0].name).toBe(freshHiddenTrue?.json().data[0].name)
+        })
+
+        it('should maintain stable cursor behavior when catalog mutates between requests', async () => {
+            await pieceCache(mockLog).setup()
+
+            const testToken = await generateMockToken({
+                type: PrincipalType.UNKNOWN,
+                id: apId(),
+            })
+
+            // Step 1: Request page 1 with limit=2
+            const res1 = await app?.inject({
+                method: 'GET',
+                url: '/api/v1/integrations?limit=2&sortBy=NAME&orderBy=ASC',
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            expect(res1?.statusCode).toBe(StatusCodes.OK)
+            const body1 = res1?.json()
+            expect(body1.data.length).toBe(2)
+            const anchorPiece = body1.data[1]
+
+            // Step 2: Mutate catalog by inserting a piece that alphabetically sorts ahead of page 1
+            const prefixPiece = createMockPieceMetadata({
+                name: '000-aaa-prefixed-catalog-mutation-piece',
+                pieceType: PieceType.OFFICIAL,
+                displayName: '000 AAA Prefixed Piece',
+                packageType: PackageType.REGISTRY,
+            })
+            await db.save('integration_metadata', prefixPiece)
+            await pieceCache(mockLog).setup()
+
+            // Step 3: Replay cursor from before mutation
+            // Even though the index of anchorPiece shifted, cursor locates anchor by name
+            const resReplayed = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/integrations?limit=2&sortBy=NAME&orderBy=ASC&cursor=${encodeURIComponent(body1.next)}`,
+                headers: { authorization: `Bearer ${testToken}` },
+            })
+            expect(resReplayed?.statusCode).toBe(StatusCodes.OK)
+            const bodyReplayed = resReplayed?.json()
+            expect(bodyReplayed.data.length).toBeGreaterThan(0)
+            // It must not return the anchor piece itself or anything before it; all items must be strictly after anchorPiece
+            expect(bodyReplayed.data.map((p: PieceMetadataModelSummary) => p.name)).not.toContain(anchorPiece.name)
+            expect(bodyReplayed.data.map((p: PieceMetadataModelSummary) => p.name)).not.toContain(prefixPiece.name)
+            for (const piece of bodyReplayed.data as PieceMetadataModelSummary[]) {
+                expect(piece.name.localeCompare(anchorPiece.name)).toBeGreaterThan(0)
+            }
         })
     })
 

@@ -1,8 +1,9 @@
-import { AIProviderName, apId } from '@inboxfm-connect/core-utils'
+import { AIProviderName, apId, ErrorCode } from '@inboxfm-connect/core-utils'
 import { DefaultProjectRole, PrincipalType } from '@inboxfm-connect/shared'
 import { FastifyInstance } from 'fastify'
 import { StatusCodes } from 'http-status-codes'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { aiProviders } from '../../../../src/app/ai/providers'
 import { generateMockToken } from '../../../helpers/auth'
 import { db } from '../../../helpers/db'
 import { mockAndSaveAIProvider } from '../../../helpers/mocks'
@@ -24,7 +25,107 @@ beforeEach(async () => {
     ctx = await createTestContext(app!)
 })
 
+afterEach(() => {
+    vi.restoreAllMocks()
+})
+
 describe('AI Providers API', () => {
+    describe('POST /v1/ai-providers/test (test connection)', () => {
+        it('validates provider credentials statelessly and returns { valid: true }', async () => {
+            const validateSpy = vi.spyOn(aiProviders[AIProviderName.OPENAI], 'validateConnection').mockResolvedValueOnce()
+
+            const response = await ctx.post('/v1/ai-providers/test', {
+                provider: AIProviderName.OPENAI,
+                auth: { apiKey: 'sk-test-valid-key-123' },
+                config: {},
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.OK)
+            expect(response?.json()).toEqual({ valid: true })
+            expect(validateSpy).toHaveBeenCalledTimes(1)
+            expect(validateSpy).toHaveBeenCalledWith(
+                { apiKey: 'sk-test-valid-key-123' },
+                {},
+                expect.anything(),
+            )
+
+            // Strict statelessness: no database row created
+            const saved = await db.findOneBy('ai_provider', {
+                platformId: ctx.platform.id,
+                provider: AIProviderName.OPENAI,
+            })
+            expect(saved).toBeNull()
+        })
+
+        it('rejects invalid credentials with 400 and masked error payload', async () => {
+            const sensitiveError = new Error('Upstream 401 with secret sk-leak-9988 at http://169.254.169.254/meta')
+            const validateSpy = vi.spyOn(aiProviders[AIProviderName.OPENAI], 'validateConnection').mockRejectedValueOnce(sensitiveError)
+
+            const response = await ctx.post('/v1/ai-providers/test', {
+                provider: AIProviderName.OPENAI,
+                auth: { apiKey: 'sk-invalid-key' },
+                config: {},
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+            const body = response?.json()
+            expect(body.code).toBe(ErrorCode.INVALID_AI_PROVIDER_CREDENTIALS)
+            expect(body.params?.provider).toBe(AIProviderName.OPENAI)
+            expect(body.params?.message).toBe('Failed to validate credentials for OpenAI')
+
+            // Ensure no sensitive upstream tokens or IPs leaked to client
+            const serialized = JSON.stringify(body)
+            expect(serialized).not.toContain('sk-leak-9988')
+            expect(serialized).not.toContain('169.254.169.254')
+        })
+
+        it('preserves strict statelessness and creates no entity in database', async () => {
+            const response = await ctx.post('/v1/ai-providers/test', {
+                provider: AIProviderName.CUSTOM,
+                config: {
+                    baseUrl: 'https://api.together.xyz/v1',
+                    apiKeyHeader: 'Authorization',
+                    models: [],
+                },
+                auth: { apiKey: 'custom-key' },
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.OK)
+            expect(response?.json()).toEqual({ valid: true })
+
+            const saved = await db.findOneBy('ai_provider', {
+                platformId: ctx.platform.id,
+            })
+            expect(saved).toBeNull()
+        })
+
+        it('rejects test connection request from non-admin platform members with 403 Forbidden', async () => {
+            const memberCtx = await createMemberContext(app!, ctx, {
+                projectRole: DefaultProjectRole.ADMIN,
+            })
+
+            const response = await memberCtx.post('/v1/ai-providers/test', {
+                provider: AIProviderName.OPENAI,
+                auth: { apiKey: 'test-key' },
+                config: {},
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+
+        it('rejects test connection with invalid provider configuration (malformed Azure resourceName)', async () => {
+            const response = await ctx.post('/v1/ai-providers/test', {
+                provider: AIProviderName.AZURE,
+                config: {
+                    resourceName: 'evil.com#',
+                },
+                auth: { apiKey: 'test-key' },
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.BAD_REQUEST)
+        })
+    })
+
     describe('POST /v1/ai-providers (create)', () => {
         it('should create a custom provider with defaultHeaders', async () => {
             const response = await ctx.post('/v1/ai-providers', {
@@ -73,7 +174,7 @@ describe('AI Providers API', () => {
 
         it('rejects Azure provider with host-manipulating resourceName', async () => {
             const response = await ctx.post('/v1/ai-providers', {
-                provider: AIProviderName.AZURE_OPENAI,
+                provider: AIProviderName.AZURE,
                 displayName: 'Malicious Azure',
                 config: {
                     resourceName: 'evil.com#',

@@ -35,7 +35,12 @@ export const smtpEmailSender = (log: FastifyBaseLogger): SMTPEmailSender => {
         async send({ emails, platformId, templateData, replyTo }) {
             try {
                 const platform = await getPlatform(platformId, log)
-                const emailSubject = getEmailSubject(templateData.name, templateData.vars)
+                const platformName = platform?.name ?? defaultTheme.websiteName
+                const emailSubject = getEmailSubject({
+                    templateName: templateData.name,
+                    vars: templateData.vars,
+                    platformName,
+                })
                 const senderName = system.get(AppSystemProp.SMTP_SENDER_NAME)
                 const senderEmail = system.get(AppSystemProp.SMTP_SENDER_EMAIL)
     
@@ -50,10 +55,13 @@ export const smtpEmailSender = (log: FastifyBaseLogger): SMTPEmailSender => {
                 })
     
                 const smtpClient = initSmtpClient()
+                // templateData.vars carries the setup links, which embed the
+                // one-time credential (e.g. ?otpcode=...) for verify-email /
+                // reset-password mails. Log the template name only.
                 log.info({
                     emails,
                     platform: { id: platformId },
-                    templateData,
+                    template: templateData.name,
                 }, '[smtpEmailSender#send] sending email')
                 await smtpClient.sendMail({
                     from: `${senderName} <${senderEmail}>`,
@@ -124,14 +132,22 @@ const initSmtpClient = (): Transporter => {
     })
 }
 
-const getEmailSubject = (templateName: EmailTemplateData['name'], vars: Record<string, string>): string => {
+export const getEmailSubject = ({
+    templateName,
+    vars,
+    platformName,
+}: {
+    templateName: EmailTemplateData['name']
+    vars: Record<string, string>
+    platformName?: string
+}): string => {
     const templateToSubject: Record<EmailTemplateData['name'], string> = {
-        'invitation-email': `You have been invited to "${vars.projectName}" project ✉️`,
+        'invitation-email': `You have been invited to the "${vars.projectName}" project ✉️`,
         'project-member-added': `Welcome to ${vars.projectName} 🎉`,
         'verify-email': 'Verify your email address ✅',
         'reset-password': 'Reset your password 🔑',
         'issue-created': `[${vars.projectName}] Flow has an issue "${vars.flowName}" ⚠️`,
-        'scim-user-welcome': 'Welcome! Your account has been created 🎉',
+        'scim-user-welcome': `Welcome to ${platformName ?? defaultTheme.websiteName} 🎉`,
         'chat-notification': vars.subject,
     }
 

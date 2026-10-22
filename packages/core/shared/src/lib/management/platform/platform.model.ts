@@ -1,4 +1,4 @@
-import { ApId, BaseModelSchema, DateOrString, Nullable } from '@inboxfm-connect/core-utils'
+import { ApId, BaseModelSchema, DateOrString, formErrors, Nullable } from '@inboxfm-connect/core-utils'
 import { z } from 'zod'
 import { FederatedAuthnProviderConfig, FederatedAuthnProviderConfigWithoutSensitiveData } from '../../core/federated-authn'
 import { SsoDomainVerification } from './sso-domain-verification'
@@ -105,7 +105,7 @@ export type PlatformPlanWithOnlyLimits = Omit<PlatformPlanLimits, 'stripeSubscri
 
 export const HEX_COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
 
-const hexColor = z.string().regex(HEX_COLOR_PATTERN, 'invalidHexColor')
+const hexColor = z.string().regex(HEX_COLOR_PATTERN, formErrors.invalidHexColor)
 
 export const PlatformThemeColors = z.object({
     avatar: hexColor.optional(),

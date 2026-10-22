@@ -32,7 +32,7 @@ npm run cli -- pieces migrate <piece-name> --dry-run
 npm run cli -- pieces migrate <piece-name>
 ```
 
-- Pass `--all` to migrate every piece under `packages/pieces`.
+- Pass `--all` to migrate every piece under `packages/integrations`.
 - It is idempotent — re-running it on an already-migrated piece makes no changes.
 
 Then build the piece to verify:
@@ -110,7 +110,7 @@ Add a `no-restricted-imports` rule to the `*.ts`/`*.tsx` override in the piece's
 npm run build-piece your-piece
 ```
 
-The archive produced in `packages/pieces/<type>/your-piece/dist/` is now a self-contained bundle.
+The archive produced in `packages/integrations/<type>/your-piece/dist/` is now a self-contained bundle.
 </Step>
 </Steps>
 

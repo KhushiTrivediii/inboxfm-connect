@@ -161,9 +161,10 @@ export const connectionKeyService = (log: FastifyBaseLogger) => ({
         const { data, cursor } = await paginator.paginate(queryBuilder)
         return paginationHelper.createPage<ConnectionKey>(data, cursor)
     },
-    async delete(id: ConnectionKeyId): Promise<void> {
+    async delete({ id, projectId }: { id: ConnectionKeyId, projectId: string }): Promise<void> {
         await connectionKeyRepo().delete({
             id,
+            projectId,
         })
     },
 })

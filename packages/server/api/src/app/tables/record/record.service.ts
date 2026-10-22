@@ -1,9 +1,13 @@
 import { ActivepiecesError, apId, chunk, Cursor, ErrorCode, isNil, SeekPage } from '@inboxfm-connect/core-utils'
 import { Cell, CreateRecordsRequest, Field, Filter, FilterOperator, PopulatedRecord, TableWebhookEventType, UpdateRecordRequest } from '@inboxfm-connect/shared'
 import { FastifyBaseLogger } from 'fastify'
-import { EntityManager, In } from 'typeorm'
+import { EntityManager, In, SelectQueryBuilder } from 'typeorm'
 import { repoFactory } from '../../core/db/repo-factory'
 import { transaction } from '../../core/db/transaction'
+import { distributedLock } from '../../database/redis-connections'
+import { buildPaginator } from '../../helper/pagination/build-paginator'
+import { paginationHelper } from '../../helper/pagination/pagination-utils'
+import { Order } from '../../helper/pagination/paginator'
 import { system } from '../../helper/system/system'
 import { AppSystemProp } from '../../helper/system/system-props'
 import { FieldEntity } from '../field/field.entity'
@@ -12,6 +16,24 @@ import { CellEntity } from './cell.entity'
 import { RecordEntity, RecordSchema } from './record.entity'
 
 const MAX_BATCH_SIZE = 50
+
+// Lock acquisition budget for record creates, mirroring the field writer lock.
+// Redlock auto-extends while the locked fn runs (distributed-lock-factory), so
+// this only bounds acquisition retries, not the insert itself.
+const RECORD_INSERT_LOCK_TIMEOUT_SECONDS = 30
+
+// Bounded pagination for record listing (issue #400). MAX_PAGE_SIZE follows the
+// piece-metadata pagination convention; the service-level clamp bounds every
+// caller (REST querystring, MCP tool, piece sentinel) regardless of upstream
+// validation.
+const DEFAULT_PAGE_SIZE = 10
+const MAX_PAGE_SIZE = 500
+
+export function clampRecordListLimit(rawLimit: number | undefined): number {
+    // Mirrors the piece-metadata pagination convention: [1, MAX_PAGE_SIZE],
+    // falling back to the default when absent or non-numeric (issue #400).
+    return Math.max(1, Math.min(Math.floor(rawLimit ?? DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE))
+}
 
 const recordRepo = repoFactory(RecordEntity)
 const cellsRepo = repoFactory(CellEntity)
@@ -22,7 +44,6 @@ export const recordService = {
         projectId,
         fields,
     }: CreateParams): Promise<PopulatedRecord[]> {
-        await this.validateCount({ projectId, tableId: request.tableId }, request.records.length)
         const existingFields = fields ?? await fieldService.getAll({
             tableId: request.tableId,
             projectId,
@@ -34,24 +55,37 @@ export const recordService = {
             ),
         )
 
-        let insertedRecordIds: string[] = []
-        insertedRecordIds = await transaction(async (entityManager: EntityManager) => {
-            const batches = chunk(validRecords, MAX_BATCH_SIZE)
-            const records: RecordSchema[] = []
-            const insertedRecordIds: string[] = []
+        // The MAX_RECORDS_PER_TABLE check used to run before the insert
+        // transaction, making the quota a check-then-act: two concurrent batch
+        // creates both counted below the limit and both inserted, drifting the
+        // quota by one racing batch. Serialize the count check with the insert
+        // behind a per-table distributedLock - the same writer serialization
+        // field.service relies on - so create, the only records insert path,
+        // always counts the rows the previous create committed.
+        const insertedRecordIds = await distributedLock(system.globalLogger()).runExclusive({
+            key: recordInsertLockKey(request.tableId),
+            timeoutInSeconds: RECORD_INSERT_LOCK_TIMEOUT_SECONDS,
+            fn: async () => {
+                await this.validateCount({ projectId, tableId: request.tableId }, request.records.length)
+                return transaction(async (entityManager: EntityManager) => {
+                    const batches = chunk(validRecords, MAX_BATCH_SIZE)
+                    const records: RecordSchema[] = []
+                    const insertedRecordIds: string[] = []
 
-            for (const batch of batches) {
-                const now = new Date(new Date().getTime() + records.length)
-                const recordInsertions = prepareRecordInsertions(batch, request.tableId, projectId, now)
-                await entityManager.getRepository(RecordEntity).insert(recordInsertions)
+                    for (const batch of batches) {
+                        const now = new Date(new Date().getTime() + records.length)
+                        const recordInsertions = prepareRecordInsertions(batch, request.tableId, projectId, now)
+                        await entityManager.getRepository(RecordEntity).insert(recordInsertions)
 
-                const cellInsertions = prepareCellInsertions(batch, recordInsertions, projectId)
-                await entityManager.getRepository(CellEntity).insert(cellInsertions)
+                        const cellInsertions = prepareCellInsertions(batch, recordInsertions, projectId)
+                        await entityManager.getRepository(CellEntity).insert(cellInsertions)
 
-                insertedRecordIds.push(...recordInsertions.map((r) => r.id))
-            }
+                        insertedRecordIds.push(...recordInsertions.map((r) => r.id))
+                    }
 
-            return insertedRecordIds
+                    return insertedRecordIds
+                })
+            },
         })
 
         const insertedRecords = await recordRepo().find({
@@ -67,32 +101,70 @@ export const recordService = {
     async list({
         tableId,
         projectId,
+        cursorRequest,
         filters,
         limit,
         fields: prefetchedFields,
     }: ListParams): Promise<SeekPage<PopulatedRecord>> {
+        // Clamp first (issue #400): the request contract only coerces
+        // (z.coerce.number()), so REST callers can pass any number, and the
+        // tables piece sends a 999999999 sentinel for "no limit" - the clamp
+        // is the single boundary every caller passes through.
+        const boundedLimit = clampRecordListLimit(limit)
+        const decodedCursor = paginationHelper.decodeCursor(cursorRequest)
+
+        const paginator = buildPaginator({
+            entity: RecordEntity,
+            query: {
+                limit: boundedLimit,
+                order: 'ASC',
+                afterCursor: decodedCursor.nextCursor,
+                beforeCursor: decodedCursor.previousCursor,
+                orderBy: [
+                    { field: 'created', order: Order.ASC },
+                    { field: 'id', order: Order.ASC },
+                ],
+            },
+        })
+
+        const queryBuilder = recordRepo()
+            .createQueryBuilder('record')
+            .where({
+                projectId,
+                tableId,
+            })
+
+        if (filters && filters.length > 0) {
+            for (let i = 0; i < filters.length; i++) {
+                applyFilterToQueryBuilder(queryBuilder, filters[i], i)
+            }
+        }
+
+        const { data: pageRecords, cursor } = await paginator.paginate(queryBuilder)
+
+        if (pageRecords.length === 0) {
+            return paginationHelper.createPage([], cursor)
+        }
+
         const fields = prefetchedFields ?? await fieldService.getAll({
             tableId,
             projectId,
         })
-        const records = await recordRepo().find({
-            where: {
-                projectId,
-                tableId,
-            },
-            order: {
-                created: 'ASC',
-            },
-        })
 
-        const cells = await cellsRepo().find({
-            where: {
-                projectId,
-                fieldId: In(fields.map((field) => field.id)),
-                recordId: In(records.map((record) => record.id)),
-            },
-        })
-        const cellsByRecordId = new Map<string, typeof cells>()
+        const pageRecordIds = pageRecords.map((r) => r.id)
+        const fieldIds = fields.map((f) => f.id)
+
+        const cells = fieldIds.length > 0 && pageRecordIds.length > 0
+            ? await cellsRepo().find({
+                where: {
+                    projectId,
+                    fieldId: In(fieldIds),
+                    recordId: In(pageRecordIds),
+                },
+            })
+            : []
+
+        const cellsByRecordId = new Map<string, Cell[]>()
         for (const cell of cells) {
             const group = cellsByRecordId.get(cell.recordId)
             if (group) {
@@ -102,27 +174,18 @@ export const recordService = {
                 cellsByRecordId.set(cell.recordId, [cell])
             }
         }
-        for (const record of records) {
+        for (const record of pageRecords) {
             record.cells = cellsByRecordId.get(record.id) ?? []
         }
-        const filteredOutRecords = records.filter((record) => {
-            if (!filters || filters.length === 0) {
-                return true
-            }
-            return filters.every((filter) => {
-                const cell = record.cells.find(c => c.fieldId === filter.fieldId)
-                    ?? { fieldId: filter.fieldId, value: '' }
-                return doesCellValueMatchFilters(cell, [filter])
-            })
+
+        const populatedRecords = await formatRecordsAndFetchField({
+            records: pageRecords,
+            tableId,
+            projectId,
+            fields,
         })
 
-        const populatedRecords = await formatRecordsAndFetchField({ records: filteredOutRecords, tableId, projectId, fields })
-
-        return {
-            data: populatedRecords.slice(0, limit),
-            next: null,
-            previous: null,
-        }
+        return paginationHelper.createPage(populatedRecords, cursor)
     },
 
     async getById({
@@ -226,34 +289,61 @@ export const recordService = {
     async delete({
         ids,
         projectId,
+        tableId,
     }: DeleteParams): Promise<PopulatedRecord[]> {
-        const firstRecord = await recordRepo().findOne({
-            where: { id: ids[0], projectId },
-            select: ['tableId'],
-        })
-        if (isNil(firstRecord)) {
-            throw new ActivepiecesError({
-                code: ErrorCode.ENTITY_NOT_FOUND,
-                params: { entityType: 'Record', entityId: ids[0] },
-            })
+        if (isNil(ids) || ids.length === 0) {
+            return []
         }
 
+        // A caller-declared tableId (the REST DeleteRecordsRequest contract
+        // carries one) pins the whole batch to that table, so the delete target
+        // always matches the table the security middleware resolved the
+        // permission from. When absent (MCP ap_delete_records passes bare ids
+        // collected via ap_find_records, which is single-table per call), the
+        // batch can span tables: resolve every record and group by its actual
+        // table instead of scoping the whole batch to ids[0]'s table, which
+        // silently dropped rows belonging to any other table.
         const records = await recordRepo().find({
-            where: { id: In(ids), projectId, tableId: firstRecord.tableId },
+            where: isNil(tableId) ? { id: In(ids), projectId } : { id: In(ids), projectId, tableId },
             relations: ['cells'],
-        })
-
-        await recordRepo().delete({
-            id: In(ids),
-            projectId,
-            tableId: firstRecord.tableId,
         })
 
         if (records.length === 0) {
             return []
         }
 
-        return formatRecordsAndFetchField({ records, tableId: firstRecord.tableId, projectId })
+        const recordsByTable = new Map<string, RecordSchema[]>()
+        for (const record of records) {
+            const existing = recordsByTable.get(record.tableId) ?? []
+            existing.push(record)
+            recordsByTable.set(record.tableId, existing)
+        }
+
+        // One transaction for the whole batch: a failure partway through must
+        // not leave the caller with a partially deleted batch.
+        await transaction(async (entityManager) => {
+            const repo = recordRepo(entityManager)
+            for (const [recordTableId, tableRecords] of recordsByTable) {
+                await repo.delete({
+                    id: In(tableRecords.map((record) => record.id)),
+                    projectId,
+                    tableId: recordTableId,
+                })
+            }
+        })
+
+        // Fields must be resolved per table: formatting a mixed batch against a
+        // single table's fields would label every other table's cells with the
+        // wrong field names and miss their fields entirely.
+        const fieldsByTable = await fieldService.getAllByTableIds({
+            projectId,
+            tableIds: [...recordsByTable.keys()],
+        })
+        const populatedRecords: PopulatedRecord[] = []
+        for (const [recordTableId, tableRecords] of recordsByTable) {
+            populatedRecords.push(...formatRecords(tableRecords, fieldsByTable.get(recordTableId) ?? []))
+        }
+        return populatedRecords
     },
 
     async deleteAll({
@@ -345,6 +435,7 @@ type UpdateParams = {
 type DeleteParams = {
     ids: string[]
     projectId: string
+    tableId?: string
 }
 
 type DeleteAllParams = {
@@ -378,6 +469,10 @@ type CellInsertion = {
     fieldId: string
     projectId: string
     value: string
+}
+
+function recordInsertLockKey(tableId: string): string {
+    return `record-insert_${tableId}`
 }
 
 function prepareRecordInsertions(
@@ -455,60 +550,122 @@ function formatRecords(records: RecordSchema[], fields: Field[]): PopulatedRecor
     })
 }
 
-function doesCellValueMatchFilters(cell: Pick<Cell, 'fieldId' | 'value'>, filters: Filter[]): boolean {
-    if (filters.length === 0) {
-        return true
-    }
-    return filters.every((filter) => {
-        if (filter.fieldId !== cell.fieldId) {
-            return true
-        }
-        switch (filter.operator) {
-            case FilterOperator.EXISTS: {
-                return cell.value !== null && cell.value !== ''
-            }
-            case FilterOperator.NOT_EXISTS: {
-                return cell.value === null || cell.value === ''
-            }
-            case FilterOperator.EQ: {
-                return cell.value === filter.value
-            }
-            case FilterOperator.NEQ: {
-                return cell.value !== filter.value
-            }
-            case FilterOperator.GT: {
-                return numberFilterValidator({ cellValue: cell.value, filterValue: filter.value, cb: ({ cellValue, filterValue }) => cellValue > filterValue })
-            }
-            case FilterOperator.GTE: {
-                return numberFilterValidator({ cellValue: cell.value, filterValue: filter.value, cb: ({ cellValue, filterValue }) => cellValue >= filterValue })
-            }
-            case FilterOperator.LT: {
-                return numberFilterValidator({ cellValue: cell.value, filterValue: filter.value, cb: ({ cellValue, filterValue }) => cellValue < filterValue })
-            }
-            case FilterOperator.LTE: {
-                return numberFilterValidator({ cellValue: cell.value, filterValue: filter.value, cb: ({ cellValue, filterValue }) => cellValue <= filterValue })
-            }
-            case FilterOperator.CO: {
-                if (typeof cell.value === 'string') {
-                    return cell.value.toLowerCase().includes(filter.value.toLowerCase())
-                }
-                return false
-            }
-        }
-    })
 
+const STRICT_NUMERIC_FILTER_REGEX = /^[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]{1,4})?$/
+
+function applyFilterToQueryBuilder(
+    qb: SelectQueryBuilder<RecordSchema>,
+    filter: Filter,
+    index: number,
+): void {
+    const fieldParam = `filter_field_${index}`
+    switch (filter.operator) {
+        case FilterOperator.EXISTS: {
+            qb.andWhere(
+                `EXISTS (
+                    SELECT 1 FROM cell
+                    WHERE cell."recordId" = record.id
+                      AND cell."fieldId" = :${fieldParam}
+                      AND cell."projectId" = record."projectId"
+                      AND cell.value IS NOT NULL
+                      AND cell.value != ''
+                )`,
+                { [fieldParam]: filter.fieldId },
+            )
+            break
+        }
+        case FilterOperator.NOT_EXISTS: {
+            qb.andWhere(
+                `NOT EXISTS (
+                    SELECT 1 FROM cell
+                    WHERE cell."recordId" = record.id
+                      AND cell."fieldId" = :${fieldParam}
+                      AND cell."projectId" = record."projectId"
+                      AND cell.value IS NOT NULL
+                      AND cell.value != ''
+                )`,
+                { [fieldParam]: filter.fieldId },
+            )
+            break
+        }
+        case FilterOperator.EQ: {
+            const valParam = `filter_val_${index}`
+            qb.andWhere(
+                `COALESCE((SELECT cell.value FROM cell WHERE cell."recordId" = record.id AND cell."fieldId" = :${fieldParam} AND cell."projectId" = record."projectId" LIMIT 1), '') = :${valParam}`,
+                {
+                    [fieldParam]: filter.fieldId,
+                    [valParam]: filter.value,
+                },
+            )
+            break
+        }
+        case FilterOperator.NEQ: {
+            const valParam = `filter_val_${index}`
+            qb.andWhere(
+                `COALESCE((SELECT cell.value FROM cell WHERE cell."recordId" = record.id AND cell."fieldId" = :${fieldParam} AND cell."projectId" = record."projectId" LIMIT 1), '') != :${valParam}`,
+                {
+                    [fieldParam]: filter.fieldId,
+                    [valParam]: filter.value,
+                },
+            )
+            break
+        }
+        case FilterOperator.CO: {
+            const patternParam = `filter_pattern_${index}`
+            const escaped = filter.value.replace(/([%_\\])/g, '\\$1')
+            qb.andWhere(
+                `COALESCE((SELECT cell.value FROM cell WHERE cell."recordId" = record.id AND cell."fieldId" = :${fieldParam} AND cell."projectId" = record."projectId" LIMIT 1), '') ILIKE :${patternParam}`,
+                {
+                    [fieldParam]: filter.fieldId,
+                    [patternParam]: `%${escaped}%`,
+                },
+            )
+            break
+        }
+        case FilterOperator.GT:
+        case FilterOperator.GTE:
+        case FilterOperator.LT:
+        case FilterOperator.LTE: {
+            const trimmedFilter = filter.value.trim()
+            if (!STRICT_NUMERIC_FILTER_REGEX.test(trimmedFilter)) {
+                qb.andWhere('1 = 0')
+                break
+            }
+            const sqlOp = filter.operator === FilterOperator.GT
+                ? '>'
+                : filter.operator === FilterOperator.GTE
+                    ? '>='
+                    : filter.operator === FilterOperator.LT
+                        ? '<'
+                        : '<='
+            const numParam = `filter_num_${index}`
+            // PostgreSQL / PGlite compatibility: Use ::numeric with a bounded regex guard
+            // to support arbitrary-precision numbers and prevent 22003 overflow errors on extreme values.
+            qb.andWhere(
+                `EXISTS (
+                    SELECT 1 FROM cell
+                    WHERE cell."recordId" = record.id
+                      AND cell."fieldId" = :${fieldParam}
+                      AND cell."projectId" = record."projectId"
+                      AND (
+                          CASE
+                              WHEN cell.value IS NOT NULL
+                               AND LENGTH(TRIM(cell.value)) <= 500
+                               AND TRIM(cell.value) ~ '^[-+]?([0-9]+(\\.[0-9]+)?|\\.[0-9]+)([eE][-+]?[0-9]{1,4})?$'
+                              THEN (TRIM(cell.value))::numeric
+                              ELSE NULL
+                          END
+                      ) ${sqlOp} :${numParam}::numeric
+                )`,
+                {
+                    [fieldParam]: filter.fieldId,
+                    [numParam]: trimmedFilter,
+                },
+            )
+            break
+        }
+    }
 }
 
-const numberFilterValidator = ({ cellValue, filterValue, cb }: { cellValue: unknown, filterValue: string, cb: ({ cellValue, filterValue }: { cellValue: number, filterValue: number }) => boolean }) => {
-    if (typeof cellValue === 'string' || typeof cellValue === 'number') {
-        const cv = parseFloat(cellValue as string)
-        const fv = parseFloat(filterValue)
-        if (isNaN(cv) || isNaN(fv)) {
-            return false
-        }
-        return cb({ cellValue: cv, filterValue: fv })
-    }
-    return false
-}
 
 

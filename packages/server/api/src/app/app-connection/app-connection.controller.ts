@@ -65,6 +65,14 @@ export const appConnectionController: FastifyPluginCallbackZod = (app, _opts, do
         return appConnection
     })
 
+    app.post('/:id/test', TestConnectionRequest, async (request) => {
+        return appConnectionService(request.log).testConnection({
+            id: request.params.id,
+            projectId: request.projectId,
+            platformId: request.principal.platform.id,
+        })
+    })
+
     app.get('/', ListAppConnectionsRequest, async (request): Promise<SeekPage<AppConnectionWithoutSensitiveData>> => {
         const { displayName, pieceName, status, cursor, limit, scope, externalId } = request.query
 
@@ -207,6 +215,35 @@ const UpdateConnectionValueRequest = {
     },
 }
 
+
+const TestConnectionRequest = {
+    config: {
+        security: securityAccess.project(
+            [PrincipalType.USER, PrincipalType.SERVICE],
+            Permission.WRITE_APP_CONNECTION,
+            {
+                type: ProjectResourceType.TABLE,
+                tableName: ConnectionEntity,
+            },
+        ),
+    },
+    schema: {
+        tags: ['app-connections'],
+        security: [SERVICE_KEY_SECURITY_OPENAPI],
+        description: 'Run a health check against an app connection (decrypt + refresh) and update its status',
+        params: z.object({
+            id: ApId,
+        }),
+        response: {
+            [StatusCodes.OK]: z.object({
+                ok: z.boolean(),
+                status: z.nativeEnum(AppConnectionStatus),
+                testedAt: z.string(),
+                message: z.string().optional(),
+            }),
+        },
+    },
+}
 
 const ListAppConnectionsRequest = {
     config: {

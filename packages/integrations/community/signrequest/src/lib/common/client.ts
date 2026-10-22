@@ -13,7 +13,7 @@ export async function makeRequest(
       method,
       url: `${BASE_URL}${path}`,
       headers: {
-        Authorization: `${api_key}`,
+        Authorization: `Token ${api_key}`,
         'Content-Type': 'application/json',
       },
       body,

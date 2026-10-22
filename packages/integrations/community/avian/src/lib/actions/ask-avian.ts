@@ -1,4 +1,5 @@
 import { avianAuth } from '../auth';
+import { historyBudgetFor, trimHistoryToBudget } from '../common/history-guard';
 import { createAction, Property, StoreScope } from '@inboxfm-connect/pieces-framework';
 import OpenAI from 'openai';
 import { baseUrl } from '../common/common';
@@ -153,6 +154,10 @@ export const askAvian = createAction({
     let messageHistory: any[] | null = [];
     if (memoryKey) {
       messageHistory = (await store.get(memoryKey, StoreScope.PROJECT)) ?? [];
+      // Trim the RESTORED history too (review #386): a wedged memoryKey must
+      // recover on this run — the store.put side never runs when the request
+      // itself fails.
+      messageHistory = trimHistoryToBudget(messageHistory, historyBudgetFor(model));
     }
 
     messageHistory.push({
@@ -197,6 +202,10 @@ export const askAvian = createAction({
           messageHistory.length - MAX_HISTORY_MESSAGES
         );
       }
+      // Count cap first, then the token budget (issue #385): 50 large
+      // messages can still exceed the model window, which wedges every
+      // later run for this memoryKey.
+      messageHistory = trimHistoryToBudget(messageHistory, historyBudgetFor(model));
       await store.put(memoryKey, messageHistory, StoreScope.PROJECT);
     }
 

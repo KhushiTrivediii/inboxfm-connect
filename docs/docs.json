@@ -108,7 +108,9 @@
                   "group": "Connect SDK",
                   "pages": [
                      "connect-sdk/overview",
-                     "connect-sdk/reference"
+                     "connect-sdk/reference",
+                     "connect-sdk/api-proxy",
+                     "connect-sdk/mcp-delegation"
                   ]
                },
                {
@@ -627,6 +629,7 @@
                      "handbook/engineering/playbooks/security-advisory-response",
                      "handbook/engineering/playbooks/product-announcement",
                      "handbook/engineering/playbooks/frontend-best-practices",
+                     "handbook/engineering/design-system",
                      "handbook/engineering/playbooks/e2e-tests",
                      "handbook/engineering/playbooks/testing-strategy",
                      "handbook/engineering/playbooks/connect-claude-to-chrome",

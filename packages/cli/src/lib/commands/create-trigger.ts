@@ -137,6 +137,8 @@ export const createTriggerCommand = new Command('create')
         ];
 
         const answers = await inquirer.prompt(questions);
-        createTrigger(answers.pieceName, answers.triggerName, answers.triggerDescription, answers.triggerTechnique);
+        // Await so failures inside createTrigger (write errors, missing piece) reject
+        // the commander action instead of becoming an unhandled rejection.
+        await createTrigger(answers.pieceName, answers.triggerName, answers.triggerDescription, answers.triggerTechnique);
     });
 

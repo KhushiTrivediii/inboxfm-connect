@@ -48,7 +48,7 @@ export const zendeskAuth = PieceAuth.CustomAuth({
       required: true,
     }),
     subdomain: Property.ShortText({
-      displayName: 'Organization (e.g activepieceshelp)',
+      displayName: 'Organization (e.g inboxfmhelp)',
       description: 'The subdomain of your Zendesk instance',
       required: true,
     }),

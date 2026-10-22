@@ -37,13 +37,20 @@ export const mcpOAuthCodeService = {
     },
 
     async consume(code: string, clientId: string, redirectUri: string): Promise<McpOAuthAuthorizationCode | null> {
+        // Single-use enforcement must work on every driver. The PGLite driver does
+        // not populate UpdateResult.affected (it stays undefined), so the previous
+        // affected === 0 check never fired there and an already-used or mismatched
+        // code silently "succeeded". RETURNING is populated by both PGLite and
+        // Postgres, making the claim verdict portable.
         const updateResult = await repo().createQueryBuilder()
             .update()
             .set({ used: true })
             .where('"code" = :code AND "used" = false AND "expiresAt" > NOW() AND "clientId" = :clientId AND "redirectUri" = :redirectUri', { code, clientId, redirectUri })
+            .returning('id')
             .execute()
 
-        if (updateResult.affected === 0) {
+        const claimedRows = updateResult.raw as unknown[]
+        if (!Array.isArray(claimedRows) || claimedRows.length === 0) {
             return null
         }
         return repo().findOneByOrFail({ code })

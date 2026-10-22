@@ -133,11 +133,16 @@ describe('Scheduled task lifecycle (Issue #160)', () => {
         createdTaskIds.push(created.id)
         const before = created.nextRunAt as string
 
+        // `3 * * * *` (minute 3) is disjoint from `*/5` (minutes 0,5,10,...):
+        // 3 mod 5 !== 0, so the recomputed tick can never equal `before`, no
+        // matter when the run lands. The previous `*/7` shared minutes 0 and 35
+        // with `*/5`, so runs hitting those boundaries recomputed the same
+        // timestamp and flaked the not.toBe(before) assertion.
         const updated = await scheduledTaskService.update({
             id: created.id,
             projectId: ctx.project.id,
             platformId: ctx.platform.id,
-            request: { cronExpression: '*/7 * * * *' },
+            request: { cronExpression: '3 * * * *' },
         })
         expect(updated.nextRunAt).not.toBeNull()
         expect(updated.nextRunAt).not.toBe(before)

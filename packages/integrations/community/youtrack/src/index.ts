@@ -35,7 +35,7 @@ export const youtrackAuth = PieceAuth.CustomAuth({
     '1. Log in to your YouTrack instance\n' +
     '2. Click your avatar -> **Profile** -> **Authentication** tab\n' +
     '3. Click **New permanent token**\n' +
-    '4. Name it (e.g. "Activepieces") and click **Create**\n' +
+    '4. Name it (e.g. "Inboxfm Connect") and click **Create**\n' +
     '5. **Copy the token immediately** - it is shown only once\n' +
     '6. Paste it below with your Instance URL\n\n' +
     'Your **Instance URL** is your browser address, e.g. https://example.youtrack.cloud',

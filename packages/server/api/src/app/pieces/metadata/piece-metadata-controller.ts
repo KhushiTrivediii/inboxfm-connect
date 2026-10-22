@@ -1,6 +1,6 @@
 import { ActivepiecesError, ErrorCode, isNil, LocalesEnum, SeekPage } from '@inboxfm-connect/core-utils'
 import { PieceMetadataModel, PieceMetadataModelSummary } from '@inboxfm-connect/pieces-framework'
-import { ALL_PRINCIPAL_TYPES, EngineResponse, GetPieceRequestParams, GetPieceRequestQuery, GetPieceRequestWithScopeParams, ListPiecesRequestQuery, PieceCategory, PieceOptionRequest, Principal, PrincipalType, RegistryPiecesRequestQuery, WorkerJobType } from '@inboxfm-connect/shared'
+import { ALL_PRINCIPAL_TYPES, GetPieceRequestParams, GetPieceRequestQuery, GetPieceRequestWithScopeParams, ListPiecesRequestQuery, PieceCategory, PieceOptionRequest, Principal, PrincipalType, RegistryPiecesRequestQuery, WorkerJobType } from '@inboxfm-connect/shared'
 import { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 import { StatusCodes } from 'http-status-codes'
 import { z } from 'zod'
@@ -122,7 +122,7 @@ const basePiecesController: FastifyPluginAsyncZod = async (app) => {
         async (req) => {
             const projectId = req.projectId
             const platform = req.principal.platform
-            const { response } = await userInteractionWatcher.submitAndWaitForResponse<EngineResponse<unknown>>({
+            return userInteractionWatcher.submitAndWaitForResponse<unknown>({
                 jobType: WorkerJobType.EXECUTE_PROPERTY,
                 platformId: platform.id,
                 projectId,
@@ -133,7 +133,6 @@ const basePiecesController: FastifyPluginAsyncZod = async (app) => {
                 searchValue: req.body.searchValue,
                 piece: await getPiecePackageWithoutArchive(req.log, platform.id, req.body),
             }, req.log)
-            return response
         },
     )
 
@@ -145,6 +144,10 @@ type PieceCursorPayload = {
     name: string
     index: number
     queryHash?: string
+}
+
+function normalizeBooleanFlag(val: unknown): boolean {
+    return val === true || val === 'true'
 }
 
 function computeQueryFingerprint(query?: Record<string, unknown>): string {
@@ -162,8 +165,8 @@ function computeQueryFingerprint(query?: Record<string, unknown>): string {
         'projectId',
     ]
     const normalized: Record<string, unknown> = {
-        includeHidden: Boolean(query.includeHidden),
-        includeTags: Boolean(query.includeTags),
+        includeHidden: normalizeBooleanFlag(query.includeHidden),
+        includeTags: normalizeBooleanFlag(query.includeTags),
     }
     for (const key of relevantKeys.sort()) {
         const val = query[key]
@@ -378,3 +381,12 @@ const DeletePieceRequest = {
         }),
     },
 }
+
+export const pieceMetadataTesting = {
+    computeQueryFingerprint,
+    paginatePieces,
+    decodePieceCursor,
+    encodePieceCursor,
+    normalizeBooleanFlag,
+}
+

@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from 'crypto'
 import { createServer, Server as HttpServer } from 'http'
 import path from 'path'
 import { ActivepiecesError, assertNotNullOrUndefined, ErrorCode, isNil, tryCatch } from '@inboxfm-connect/core-utils'
-import { createNotifyServer, createRpcClient, RuntimeContract, RuntimeOperation, RuntimeOperationType, RuntimeResponse, RuntimeStderr, RuntimeStdout, WorkerNotifyContract } from '@inboxfm-connect/shared'
+import { createNotifyServer, createRpcClient, FlowRunStatus, RuntimeContract, RuntimeOperation, RuntimeOperationType, RuntimeResponse, RuntimeStderr, RuntimeStdout, WorkerNotifyContract } from '@inboxfm-connect/shared'
 import { Socket, Server as SocketIOServer } from 'socket.io'
 import treeKill from 'tree-kill'
 import { cacheUtils } from '../cache/cache-paths'
@@ -213,9 +213,9 @@ export function createSandbox(
                 },
                 resourceLimits: {
                     memoryLimitMb: options.memoryLimitMb,
-                    cpuMsPerSec: options.cpuMsPerSec,
                     timeLimitSeconds: options.timeLimitSeconds,
                 },
+                reusable: options.reusable,
             })
 
             nativeStdOut = ''
@@ -275,8 +275,17 @@ export function createSandbox(
                 timeout = setTimeout(async () => {
                     killedByTimeout = true
                     log.debug({ sandbox: { id: sandboxId } }, 'Killing sandbox by timeout')
-                    if (!isNil(executeProcess)) {
-                        await killProcess(executeProcess, log)
+                    // Timer callbacks are fire-and-forget: an unguarded
+                    // rejection here (killProcess throws synchronously when the
+                    // child has no pid) becomes an unhandledRejection that
+                    // crashes the worker process instead of failing the run.
+                    try {
+                        if (!isNil(executeProcess)) {
+                            await killProcess(executeProcess, log)
+                        }
+                    }
+                    catch (error) {
+                        log.error({ sandbox: { id: sandboxId }, error: String(error) }, 'Failed to kill sandbox on timeout')
                     }
                 }, executeOptions.timeoutInSeconds * 1000)
 
@@ -473,6 +482,19 @@ function authenticateHandshake({ getExpectedToken, log, sandboxId }: {
             return next(new Error('unauthorized'))
         }
         next()
+    }
+}
+
+export function mapSandboxErrorCodeToFlowRunStatus(code: ErrorCode): FlowRunStatus {
+    switch (code) {
+        case ErrorCode.SANDBOX_EXECUTION_TIMEOUT:
+            return FlowRunStatus.TIMEOUT
+        case ErrorCode.SANDBOX_MEMORY_ISSUE:
+            return FlowRunStatus.MEMORY_LIMIT_EXCEEDED
+        case ErrorCode.SANDBOX_LOG_SIZE_EXCEEDED:
+            return FlowRunStatus.LOG_SIZE_EXCEEDED
+        default:
+            return FlowRunStatus.INTERNAL_ERROR
     }
 }
 

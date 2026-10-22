@@ -16,7 +16,7 @@ const main = async () => {
   // pieces-framework, pieces-common and @inboxfm-connect/shared are no longer published to npm:
   // pieces are self-contained bundles that inline these at build time. Exclude them from the
   // publishable-package validation and only validate the pieces themselves.
-  const notPublished = ['packages/pieces/framework', 'packages/pieces/common']
+  const notPublished = ['packages/integrations/framework', 'packages/integrations/common']
   await processBatches(
     piecesMetadata.filter(p => !notPublished.includes(p)),
     10,

@@ -19,7 +19,9 @@ export const getSessionDetails = createAction({
   async run({ auth, propsValue }) {
     const response = await httpClient.sendRequest({
       method: HttpMethod.GET,
-      url: `https://api.devin.ai/v1/session/${propsValue.sessionId}`,
+      // v1 endpoint is GET /v1/sessions/{session_id} (plural "sessions"):
+      // https://docs.devin.ai/api-reference/v1/sessions/retrieve-details-about-an-existing-session
+      url: `https://api.devin.ai/v1/sessions/${propsValue.sessionId}`,
       headers: {
         Authorization: `Bearer ${auth.secret_text}`,
       },

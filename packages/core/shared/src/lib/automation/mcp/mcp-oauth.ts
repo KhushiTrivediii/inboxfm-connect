@@ -18,6 +18,12 @@ export type McpOAuthClient = z.infer<typeof McpOAuthClient>
 export const McpOAuthToken = z.object({
     ...BaseModelSchema,
     refreshToken: z.string(),
+    // Hash of the refresh token this row was rotated FROM (null on first issue).
+    // Lets a replayed token be attributed to its lineage (issue #332).
+    previousRefreshToken: z.string().nullable(),
+    // Stable id of the lineage root: every rotation descendant carries the
+    // familyId of the first-issued token, enabling family revocation (#332).
+    familyId: z.string(),
     clientId: z.string(),
     userId: z.string(),
     projectId: z.string().nullable(),

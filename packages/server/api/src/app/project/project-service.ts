@@ -44,11 +44,20 @@ export const projectService = (log: FastifyBaseLogger) => ({
         if (isNil(personalProject)) {
             return
         }
-        const softDeleteResult = await projectRepo().softDelete({
+        await projectRepo().softDelete({
             id: personalProject.id,
             platformId,
         })
-        if (softDeleteResult.affected === 0) {
+        // softDelete's UpdateResult.affected is not populated by the PGLite driver,
+        // so the previous affected === 0 guard never fired there. Re-read the row
+        // instead (soft-deleted rows are excluded from find*): still finding it
+        // means the delete did not land, and the caller must hear ENTITY_NOT_FOUND
+        // rather than proceed as if the personal project was removed.
+        const stillPresent = await projectRepo().findOneBy({
+            id: personalProject.id,
+            platformId,
+        })
+        if (!isNil(stillPresent)) {
             throw new ActivepiecesError({
                 code: ErrorCode.ENTITY_NOT_FOUND,
                 params: {

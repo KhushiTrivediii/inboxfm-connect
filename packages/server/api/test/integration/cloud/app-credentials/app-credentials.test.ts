@@ -70,7 +70,8 @@ describe('App Credentials API', () => {
                 },
             })
 
-            const response = await ctx.get(`/v1/app-credentials?projectId=${ctx.project.id}`)
+            const response = await ctx.get('/v1/app-credentials', { projectId: ctx.project.id })
+
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -120,7 +121,8 @@ describe('App Credentials API', () => {
                 settings: { type: AppCredentialType.API_KEY },
             })
 
-            const response = await ctx.get(`/v1/app-credentials?projectId=${ctx.project.id}&appName=filter-app-a`)
+            const response = await ctx.get('/v1/app-credentials', { projectId: ctx.project.id, appName: 'filter-app-a' })
+
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -146,7 +148,8 @@ describe('App Credentials API', () => {
                 },
             })
 
-            const response = await ctx.get(`/v1/app-credentials?projectId=${ctx.project.id}&appName=censor-test-app`)
+            const response = await ctx.get('/v1/app-credentials', { projectId: ctx.project.id, appName: 'censor-test-app' })
+
 
             expect(response?.statusCode).toBe(StatusCodes.OK)
             const body = response?.json()
@@ -173,4 +176,28 @@ describe('App Credentials API', () => {
             expect(response?.statusCode).toBe(StatusCodes.OK)
         })
     })
+    describe('GET /v1/app-credentials (Security gating, #358)', () => {
+        it('should reject an unauthenticated list request', async () => {
+            const ctx = await createTestContext(app!)
+
+            const response = await app?.inject({
+                method: 'GET',
+                url: `/api/v1/app-credentials?projectId=${ctx.project.id}`,
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+
+        it('should reject a caller from another platform listing credentials they do not belong to', async () => {
+            const ctx = await createTestContext(app!)
+            const other = await createTestContext(app!)
+
+            const response = await other.get('/v1/app-credentials', {
+                projectId: ctx.project.id,
+            })
+
+            expect(response?.statusCode).toBe(StatusCodes.FORBIDDEN)
+        })
+    })
+
 })

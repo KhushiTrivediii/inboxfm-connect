@@ -1,7 +1,6 @@
 import { Command } from "commander";
-import { findPieces, publishPieceFromFolder } from '../utils/piece-utils';
+import { customPiecePath, findPieces, publishPieceFromFolder } from '../utils/piece-utils';
 import chalk from "chalk";
-import { join } from "path";
 
 async function syncPieces(
   params:
@@ -10,7 +9,7 @@ async function syncPieces(
   pieces: string[] | null,
   failOnError: boolean,}
 ) {
-  const piecesDirectory = join(process.cwd(), 'packages', 'pieces', 'custom')
+  const piecesDirectory = customPiecePath()
   const pieceFolders = await findPieces(piecesDirectory, params.pieces);
     for (const pieceFolder of pieceFolders) {
       await publishPieceFromFolder({
