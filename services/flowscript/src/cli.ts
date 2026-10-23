@@ -37,7 +37,8 @@ export async function runCli(argv: string[], io: CliIo = {
   flow logs <run-id> [--api-url <url>] [--project-id <id>]
   flow rollback <name> [--env <environment>] [--api-url <url>] [--project-id <id>]
   flow triggers <name> [--api-url <url>] [--project-id <id>]
-  flow cancel <run-id> [--reason <msg>] [--api-url <url>] [--project-id <id>]`)
+  flow cancel <run-id> [--reason <msg>] [--api-url <url>] [--project-id <id>]
+  flow replay <run-id> [--api-url <url>] [--project-id <id>]`)
     return io.exit(2)
   }
 
@@ -390,6 +391,41 @@ output:
       }
 
       io.stdout(`✓ Cancelled run ${runId}`)
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'replay') {
+    const runId = file
+    if (!runId) {
+      io.stderr('ERROR: flow replay requires <run-id>')
+      return io.exit(2)
+    }
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/runs/${encodeURIComponent(runId)}/replay`, {
+        method: 'POST',
+        headers: {
+          'x-project-id': projectId,
+        },
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Replay failed (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (isRecord(data) && typeof data.id === 'string') {
+        io.stdout(`✓ Replayed run ${runId} -> new run ${data.id}`)
+      } else {
+        io.stdout(JSON.stringify(data, null, 2))
+      }
       return
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)

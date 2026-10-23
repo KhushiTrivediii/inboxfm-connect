@@ -673,6 +673,43 @@ export async function cancelRun(
   }
 }
 
+export async function replayRun(
+  projectId: string,
+  runId: string,
+): Promise<{ id: string; replayedFrom: string; flowName: string; status: string } | null> {
+  const check = await pool.query<{
+    id: string
+    project_id: string
+    flow_name: string
+    environment: string
+    version_id: string
+    trigger_kind: string
+    status: string
+    input: Record<string, unknown>
+    max_attempts: number
+  }>(
+    'SELECT id, project_id, flow_name, environment, version_id, trigger_kind, status, input, max_attempts FROM flowscript_runs WHERE project_id=$1 AND id=$2',
+    [projectId, runId],
+  )
+  const run = check.rows[0]
+  if (!run) {
+    return null
+  }
+
+  if (run.status === 'running' || run.status === 'queued') {
+    throw new Error(`Cannot replay run "${runId}" while it is ${run.status}`)
+  }
+
+  const newRunId = randomUUID()
+  const maxAttempts = run.max_attempts ?? 3
+  await pool.query(
+    `INSERT INTO flowscript_runs (id, project_id, flow_name, environment, version_id, trigger_kind, status, input, max_attempts, started_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'queued',$7,$8,NULL)`,
+    [newRunId, run.project_id, run.flow_name, run.environment, run.version_id, run.trigger_kind, JSON.stringify(run.input), maxAttempts],
+  )
+  return { id: newRunId, replayedFrom: runId, flowName: run.flow_name, status: 'queued' }
+}
+
 export async function recordStepAttemptStart(params: {
   runId: string
   stepId: string

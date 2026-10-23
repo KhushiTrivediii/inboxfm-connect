@@ -294,4 +294,25 @@ output:
     expect(mock.stdout[0]).toContain('[ENABLED] trig_1 (schedule) - env: production')
     expect(mock.stdout[1]).toContain('[DISABLED] trig_2 (webhook) - env: production')
   })
+
+  it('replays a run via API client', async () => {
+    const mockFetch: typeof fetch = async (input, init) => {
+      expect(input.toString()).toContain('/v1/runs/failed_run_1/replay')
+      expect(init?.method).toBe('POST')
+      return new Response(JSON.stringify({
+        id: 'new_run_2',
+        replayedFrom: 'failed_run_1',
+        flowName: 'my-flow',
+        status: 'queued',
+      }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['replay', 'failed_run_1'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('✓ Replayed run failed_run_1 -> new run new_run_2')
+  })
 });

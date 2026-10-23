@@ -24,6 +24,7 @@ import {
   rotateWebhookTriggerToken,
   validateScheduleConfig,
   cancelRun,
+  replayRun,
   listStepAttempts,
 } from './store.js'
 
@@ -634,6 +635,29 @@ export function buildServer(): FastifyInstance {
     const cancelled = await cancelRun(projectId, params.data.id, body.success ? body.data.reason : undefined)
     if (!cancelled) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
     return reply.code(200).send(cancelled)
+  })
+
+  
+
+  app.post('/v1/runs/:id/replay', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
+    const projectId = auth.projectId
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run ID')
+    try {
+      const replayed = await replayRun(projectId, params.data.id)
+      if (!replayed) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
+      return reply.code(201).send(replayed)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Replay failed'
+      if (msg.includes('Cannot replay')) {
+        return sendError(reply, 409, 'CANNOT_REPLAY_ACTIVE_RUN', msg)
+      }
+      return sendError(reply, 422, 'REPLAY_FAILED', msg)
+    }
   })
 
   app.get('/v1/runs/:id/attempts', async (request, reply) => {
