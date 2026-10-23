@@ -315,4 +315,25 @@ output:
     expect(mock.exitCode).toBeUndefined()
     expect(mock.stdout[0]).toContain('✓ Replayed run failed_run_1 -> new run new_run_2')
   })
+
+  it('fetches metrics via API client', async () => {
+    const mockFetch: typeof fetch = async (input) => {
+      expect(input.toString()).toContain('/v1/metrics')
+      return new Response(JSON.stringify({
+        runs: { total: 10, succeeded: 9, failed: 1, errorRate: 0.1 },
+        latency: { avgRunDurationMs: 250, maxRunDurationMs: 800, avgQueueLagMs: 20 },
+        triggers: { total: 2, active: 2, schedule: 1, webhook: 1, avgDispatchLagMs: 15 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['metrics'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('"runs"')
+    expect(mock.stdout[0]).toContain('"latency"')
+    expect(mock.stdout[0]).toContain('"triggers"')
+  })
 });

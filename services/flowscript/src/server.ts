@@ -26,6 +26,7 @@ import {
   cancelRun,
   replayRun,
   listStepAttempts,
+  getProjectMetrics,
 } from './store.js'
 
 const envSchema = z.object({
@@ -638,6 +639,16 @@ export function buildServer(): FastifyInstance {
   })
 
   
+
+
+  app.get('/v1/metrics', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
+    const metrics = await getProjectMetrics(auth.projectId)
+    return reply.code(200).send(metrics)
+  })
 
   app.post('/v1/runs/:id/replay', async (request, reply) => {
     const auth = verifyProjectIdentity(request)

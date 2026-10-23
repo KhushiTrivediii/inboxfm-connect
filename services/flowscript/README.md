@@ -79,6 +79,10 @@ node services/flowscript/dist/cli.js deploy my-flow <versionId>
 node services/flowscript/dist/cli.js runs [--flow my-flow]
 node services/flowscript/dist/cli.js logs <runId>
 node services/flowscript/dist/cli.js cancel <runId>
+node services/flowscript/dist/cli.js rollback <name> [--env <environment>]
+node services/flowscript/dist/cli.js triggers <name>
+node services/flowscript/dist/cli.js replay <runId>
+node services/flowscript/dist/cli.js metrics
 ```
 
 Use `--input path.json` to pass structured input. Integration steps require either the hosted Connect runtime adapter or local --mock / --mock-integrations <file.json>.

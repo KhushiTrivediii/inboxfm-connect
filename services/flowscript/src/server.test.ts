@@ -340,4 +340,32 @@ describe('server endpoints', () => {
       delete process.env.FLOWSCRIPT_GATEWAY_SECRET
     }
   })
+
+  it('enforces gateway authentication on metrics endpoint', async () => {
+    const app = buildServer()
+    const secret = 'test-secret-gateway-metrics'
+    process.env.FLOWSCRIPT_GATEWAY_SECRET = secret
+    try {
+      const unauth = await app.inject({
+        method: 'GET',
+        url: '/v1/metrics',
+      })
+      expect(unauth.statusCode).toBe(401)
+
+      const validSig = signProjectId('proj_metrics', secret)
+      const signedRes = await app.inject({
+        method: 'GET',
+        url: '/v1/metrics',
+        headers: {
+          'x-project-id': 'proj_metrics',
+          'x-project-signature': validSig,
+        },
+      })
+      expect(signedRes.statusCode).not.toBe(401)
+      // without db connection it fails past 401
+      expect(signedRes.statusCode).toBeDefined()
+    } finally {
+      delete process.env.FLOWSCRIPT_GATEWAY_SECRET
+    }
+  })
 });

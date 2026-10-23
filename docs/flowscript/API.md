@@ -33,6 +33,10 @@ Request: JSON with source. Compiles and persists an immutable version. Response 
 
 Request: versionId UUID and optional environment (defaults to production). Activates the chosen version for that flow/environment.
 
+### POST /v1/flows/:name/rollback
+
+Request: Optional environment (defaults to production). Rolls back the active deployment to the immediately preceding version. Returns HTTP 200 with the activated version details, or HTTP 404 if no previous version exists.
+
 ### POST /v1/flows/:name/run
 
 Request: input object and optional environment. Resolves active deployment, persists a queued run and returns HTTP 202 with run ID. Integration-bearing flows are refused until the trusted adapter is wired.
@@ -80,6 +84,23 @@ Ingress endpoint for registered webhook triggers.
 - GET /v1/runs/:id
 
 Project ID is used in queries. Add cursor pagination before run history grows significantly.
+
+### POST /v1/runs/:id/replay
+
+Request: Re-enqueues a previous failed, succeeded, or cancelled run with its original input, environment, and version ID. Active (running or queued) runs cannot be replayed (HTTP 409). Returns HTTP 201 with the newly queued run ID and `replayedFrom`.
+
+### POST /v1/runs/:id/cancel
+
+Request: Cancels an active or queued run with an optional cancellation `reason`. Returns HTTP 200.
+
+## Observability & Metrics
+
+### GET /v1/metrics
+
+Project-scoped metrics endpoint reporting:
+- `runs`: total, queued, running, succeeded, failed, cancelled, and error rate.
+- `latency`: average run duration, maximum run duration, and average queue lag.
+- `triggers`: total count, active count, schedule vs webhook breakdown, and average dispatch lag.
 
 ## Request IDs and trace correlation
 - Every request accepts an optional `x-request-id` header from the client or edge gateway.

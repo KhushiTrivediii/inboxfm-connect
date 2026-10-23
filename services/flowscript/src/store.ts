@@ -1184,3 +1184,104 @@ export async function rotateWebhookTriggerToken(
   const row = result.rows[0]
   return row ? { id: row.id, flowName: row.flow_name, token: newToken } : null
 }
+
+export async function getProjectMetrics(projectId: string): Promise<FlowScriptProjectMetrics> {
+  const runStats = await pool.query<{
+    total: string;
+    queued: string;
+    running: string;
+    succeeded: string;
+    failed: string;
+    cancelled: string;
+    avg_duration_ms: string | null;
+    max_duration_ms: string | null;
+    avg_queue_lag_ms: string | null;
+  }>(
+    `SELECT
+       COUNT(*)::text AS total,
+       COUNT(*) FILTER (WHERE status = 'queued')::text AS queued,
+       COUNT(*) FILTER (WHERE status = 'running')::text AS running,
+       COUNT(*) FILTER (WHERE status = 'succeeded')::text AS succeeded,
+       COUNT(*) FILTER (WHERE status = 'failed' OR status = 'dead_letter')::text AS failed,
+       COUNT(*) FILTER (WHERE status = 'cancelled')::text AS cancelled,
+       COALESCE(AVG(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000) FILTER (WHERE finished_at IS NOT NULL AND started_at IS NOT NULL), 0)::text AS avg_duration_ms,
+       COALESCE(MAX(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000) FILTER (WHERE finished_at IS NOT NULL AND started_at IS NOT NULL), 0)::text AS max_duration_ms,
+       COALESCE(AVG(EXTRACT(EPOCH FROM (started_at - created_at)) * 1000) FILTER (WHERE started_at IS NOT NULL), 0)::text AS avg_queue_lag_ms
+     FROM flowscript_runs
+     WHERE project_id = $1`,
+    [projectId],
+  );
+
+  const triggerStats = await pool.query<{
+    total: string;
+    active: string;
+    schedule: string;
+    webhook: string;
+    avg_dispatch_lag_ms: string | null;
+  }>(
+    `SELECT
+       COUNT(*)::text AS total,
+       COUNT(*) FILTER (WHERE enabled = true)::text AS active,
+       COUNT(*) FILTER (WHERE kind = 'schedule')::text AS schedule,
+       COUNT(*) FILTER (WHERE kind = 'webhook')::text AS webhook,
+       COALESCE(AVG(dispatch_lag_ms) FILTER (WHERE dispatch_lag_ms IS NOT NULL), 0)::text AS avg_dispatch_lag_ms
+     FROM flowscript_triggers
+     WHERE project_id = $1`,
+    [projectId],
+  );
+
+  const r = runStats.rows[0];
+  const totalRuns = Number.parseInt(r?.total ?? '0', 10);
+  const failedRuns = Number.parseInt(r?.failed ?? '0', 10);
+  const errorRate = totalRuns > 0 ? failedRuns / totalRuns : 0;
+
+  const t = triggerStats.rows[0];
+
+  return {
+    runs: {
+      total: totalRuns,
+      queued: Number.parseInt(r?.queued ?? '0', 10),
+      running: Number.parseInt(r?.running ?? '0', 10),
+      succeeded: Number.parseInt(r?.succeeded ?? '0', 10),
+      failed: failedRuns,
+      cancelled: Number.parseInt(r?.cancelled ?? '0', 10),
+      errorRate: Math.round(errorRate * 1000) / 1000,
+    },
+    latency: {
+      avgRunDurationMs: Math.round(Number.parseFloat(r?.avg_duration_ms ?? '0')),
+      maxRunDurationMs: Math.round(Number.parseFloat(r?.max_duration_ms ?? '0')),
+      avgQueueLagMs: Math.round(Number.parseFloat(r?.avg_queue_lag_ms ?? '0')),
+    },
+    triggers: {
+      total: Number.parseInt(t?.total ?? '0', 10),
+      active: Number.parseInt(t?.active ?? '0', 10),
+      schedule: Number.parseInt(t?.schedule ?? '0', 10),
+      webhook: Number.parseInt(t?.webhook ?? '0', 10),
+      avgDispatchLagMs: Math.round(Number.parseFloat(t?.avg_dispatch_lag_ms ?? '0')),
+    },
+  };
+}
+
+export type FlowScriptProjectMetrics = {
+  runs: {
+    total: number;
+    queued: number;
+    running: number;
+    succeeded: number;
+    failed: number;
+    cancelled: number;
+    errorRate: number;
+  };
+  latency: {
+    avgRunDurationMs: number;
+    maxRunDurationMs: number;
+    avgQueueLagMs: number;
+  };
+  triggers: {
+    total: number;
+    active: number;
+    schedule: number;
+    webhook: number;
+    avgDispatchLagMs: number;
+  };
+};
