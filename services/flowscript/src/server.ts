@@ -9,6 +9,7 @@ import {
   closeStore,
   createRun,
   deployFlow,
+  rollbackFlow,
   finishRun,
   getDeployedFlow,
   getRun,
@@ -326,6 +327,33 @@ export function buildServer(): FastifyInstance {
         return sendError(reply, 404, 'VERSION_NOT_FOUND', msg)
       }
       return sendError(reply, 422, 'DEPLOYMENT_FAILED', msg)
+    }
+  })
+
+  
+
+  app.post('/v1/flows/:name/rollback', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    if (!params.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid flow name', { issues: params.error.issues })
+    }
+    const body = z.object({ environment: z.string().min(1).max(64).default('production') }).safeParse(request.body ?? {})
+    if (!body.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid rollback request', { issues: body.error.issues })
+    }
+    try {
+      return await rollbackFlow(projectId, params.data.name, body.data.environment)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Rollback failed'
+      if (msg.includes('No previous version') || msg.includes('No active deployment')) {
+        return sendError(reply, 404, 'ROLLBACK_NOT_FOUND', msg)
+      }
+      return sendError(reply, 422, 'ROLLBACK_FAILED', msg)
     }
   })
 

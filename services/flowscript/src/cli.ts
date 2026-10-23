@@ -35,6 +35,8 @@ export async function runCli(argv: string[], io: CliIo = {
   flow deploy <name> <versionId> [--env <environment>] [--api-url <url>] [--project-id <id>]
   flow runs [--flow <name>] [--limit <n>] [--api-url <url>] [--project-id <id>]
   flow logs <run-id> [--api-url <url>] [--project-id <id>]
+  flow rollback <name> [--env <environment>] [--api-url <url>] [--project-id <id>]
+  flow triggers <name> [--api-url <url>] [--project-id <id>]
   flow cancel <run-id> [--reason <msg>] [--api-url <url>] [--project-id <id>]`)
     return io.exit(2)
   }
@@ -176,6 +178,87 @@ output:
     }
   }
 
+
+
+  if (command === 'rollback') {
+    const flowName = file
+    if (!flowName) {
+      io.stderr('ERROR: flow rollback requires <name>')
+      return io.exit(2)
+    }
+    const environment = getOption(allArgs, '--env') ?? 'production'
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/flows/${encodeURIComponent(flowName)}/rollback`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-project-id': projectId,
+        },
+        body: JSON.stringify({ environment }),
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Rollback failed (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (isRecord(data)) {
+        io.stdout(`✓ Rolled back flow "${flowName}" in ${environment} to version ${String(data.version)} (id: ${String(data.versionId)})`)
+      } else {
+        io.stdout(`✓ Rolled back flow "${flowName}" in ${environment}`)
+      }
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'triggers') {
+    const flowName = file
+    if (!flowName) {
+      io.stderr('ERROR: flow triggers requires <name>')
+      return io.exit(2)
+    }
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/flows/${encodeURIComponent(flowName)}/triggers`, {
+        method: 'GET',
+        headers: { 'x-project-id': projectId },
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Failed to fetch triggers (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (Array.isArray(data)) {
+        if (data.length === 0) {
+          io.stdout(`No triggers registered for flow "${flowName}".`)
+          return
+        }
+        for (const trigger of data) {
+          if (isRecord(trigger)) {
+            const status = trigger.enabled ? 'ENABLED' : 'DISABLED'
+            io.stdout(`[${status}] ${String(trigger.id)} (${String(trigger.kind)}) - env: ${String(trigger.environment)}`)
+          }
+        }
+      } else {
+        io.stdout(JSON.stringify(data, null, 2))
+      }
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
   if (command === 'deploy') {
     const flowName = file
     const versionId = args[0]

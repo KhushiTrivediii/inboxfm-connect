@@ -253,4 +253,45 @@ output:
     expect(mock.exitCode).toBeUndefined()
     expect(mock.stdout[0]).toContain('✓ Cancelled run run_target_123')
   })
-})
+
+  it('rolls back flow to previous version via API client', async () => {
+    const mockFetch: typeof fetch = async (input, init) => {
+      expect(input.toString()).toContain('/v1/flows/my-flow/rollback')
+      const body = JSON.parse(String(init?.body)) as { environment: string }
+      expect(body.environment).toBe('production')
+      return new Response(JSON.stringify({
+        flowName: 'my-flow',
+        version: 2,
+        versionId: 'ver_prev',
+        environment: 'production',
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['rollback', 'my-flow'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('✓ Rolled back flow "my-flow" in production to version 2 (id: ver_prev)')
+  })
+
+  it('lists registered triggers for a flow via API client', async () => {
+    const mockFetch: typeof fetch = async (input) => {
+      expect(input.toString()).toContain('/v1/flows/my-flow/triggers')
+      return new Response(JSON.stringify([
+        { id: 'trig_1', kind: 'schedule', environment: 'production', enabled: true },
+        { id: 'trig_2', kind: 'webhook', environment: 'production', enabled: false },
+      ]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['triggers', 'my-flow'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('[ENABLED] trig_1 (schedule) - env: production')
+    expect(mock.stdout[1]).toContain('[DISABLED] trig_2 (webhook) - env: production')
+  })
+});

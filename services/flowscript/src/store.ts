@@ -206,6 +206,55 @@ export async function getDeployedFlow(projectId: string, flowName: string, envir
   return result.rows[0] ?? null
 }
 
+export async function rollbackFlow(projectId: string, flowName: string, environment: string) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const current = await client.query<{ version_id: string }>(
+      "SELECT version_id FROM flowscript_deployments WHERE project_id=$1 AND flow_name=$2 AND environment=$3 AND status='active'",
+      [projectId, flowName, environment],
+    )
+    if (!current.rowCount) {
+      throw new Error("No active deployment found for flow '" + flowName + "' in environment '" + environment + "'")
+    }
+    const currentVersion = await client.query<{ version: number }>(
+      'SELECT version FROM flowscript_versions WHERE id=$1 AND project_id=$2',
+      [current.rows[0].version_id, projectId],
+    )
+    const currentVersionNum = currentVersion.rows[0]?.version ?? 0
+
+    const previous = await client.query<{ id: string; version: number }>(
+      'SELECT id, version FROM flowscript_versions WHERE project_id=$1 AND flow_name=$2 AND version < $3 ORDER BY version DESC LIMIT 1',
+      [projectId, flowName, currentVersionNum],
+    )
+    if (!previous.rowCount) {
+      throw new Error("No previous version available to roll back flow '" + flowName + "' in environment '" + environment + "'")
+    }
+
+    const previousVersionId = previous.rows[0].id
+    const previousVersionNum = previous.rows[0].version
+    await client.query(
+      'UPDATE flowscript_deployments SET version_id=$1, updated_at=now() WHERE project_id=$2 AND flow_name=$3 AND environment=$4',
+      [previousVersionId, projectId, flowName, environment],
+    )
+    await client.query('COMMIT')
+    return {
+      projectId,
+      flowName,
+      environment,
+      versionId: previousVersionId,
+      version: previousVersionNum,
+      rolledBackFromVersion: currentVersionNum,
+      status: 'active',
+    }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export function computeBackoff(
   attempt: number,
   baseMs: number = 1000,

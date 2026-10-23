@@ -287,4 +287,31 @@ describe('server endpoints', () => {
       delete process.env.FLOWSCRIPT_GATEWAY_SECRET
     }
   })
-})
+
+  it('enforces gateway authentication on rollback endpoint', async () => {
+    const app = buildServer()
+    const secret = 'test-secret-gateway-rollback'
+    process.env.FLOWSCRIPT_GATEWAY_SECRET = secret
+    try {
+      const unauth = await app.inject({
+        method: 'POST',
+        url: '/v1/flows/my-flow/rollback',
+      })
+      expect(unauth.statusCode).toBe(401)
+
+      const validSig = signProjectId('proj_secured', secret)
+      const signedRes = await app.inject({
+        method: 'POST',
+        url: '/v1/flows/my-flow/rollback',
+        headers: {
+          'x-project-id': 'proj_secured',
+          'x-project-signature': validSig,
+        },
+        payload: { environment: 'production' },
+      })
+      expect(signedRes.statusCode).not.toBe(401)
+    } finally {
+      delete process.env.FLOWSCRIPT_GATEWAY_SECRET
+    }
+  })
+});
