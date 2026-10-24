@@ -95,7 +95,16 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
 
   // Tests register unconditionally and skip at RUN time: pgAvailable is only known after
   // beforeAll, so deciding at registration time made every test it.skip (see review on #666).
-  const testIfPg = () => it
+    const testIfPg = () => it
+  const skipIfNoPg = (ctx?: { skip?: () => void }) => {
+    if (!pgAvailable) {
+      if (ctx && typeof ctx.skip === 'function') {
+        ctx.skip()
+      }
+      return true
+    }
+    return false
+  }
 
   describe('1. Full Lifecycle: Publish -> Deploy -> Run -> Worker Execution -> Inspection', () => {
     const projA = 'project_alpha_lifecycle'
@@ -104,7 +113,7 @@ describe('FlowScript E2E Lifecycle & Security Boundaries against PostgreSQL (iss
     let runId: string
 
     testIfPg()('publishes a valid FlowScript flow and verifies immutable storage', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       const source = `flow: ${flowName}
 version: 1
 trigger:
@@ -146,7 +155,7 @@ steps:
     })
 
     testIfPg()('deploys the published version to production environment', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       const res = await app.inject({
         method: 'POST',
         url: `/v1/flows/${flowName}/deploy`,
@@ -172,7 +181,7 @@ steps:
     })
 
     testIfPg()('enqueues a manual run and verifies queued status in database', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       const res = await app.inject({
         method: 'POST',
         url: `/v1/flows/${flowName}/run`,
@@ -200,7 +209,7 @@ steps:
     })
 
     testIfPg()('worker claims queued run and executes to completion with attempt logging', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       const workerId = 'worker-e2e-node-1'
       const job = await claimQueuedRun(workerId, 30_000)
       expect(job).not.toBeNull()
@@ -280,7 +289,7 @@ steps:
     let runAlphaId: string
 
     testIfPg()('rejects cross-project version deployment', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Project Alpha publishes flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -314,7 +323,7 @@ steps:
     })
 
     testIfPg()('prevents cross-project run inspection, listing, and cancellation', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Deploy flow in Alpha and enqueue run
       await deployFlow(projAlpha, 'secure_flow', versionAlphaId, 'production')
       const runRes = await app.inject({
@@ -374,7 +383,7 @@ steps:
     })
 
     testIfPg()('prevents cross-project trigger listing, patching, rotating, and deleting', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Create trigger in Alpha
       const trigRes = await app.inject({
         method: 'POST',
@@ -444,7 +453,7 @@ steps:
     let workerFlowVersionId: string
 
     testIfPg()('FOR UPDATE SKIP LOCKED ensures exactly one concurrent worker claims a queued run', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Publish and deploy flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -488,7 +497,7 @@ steps:
     })
 
     testIfPg()('recovers stale runs whose worker lease expired without completion', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Enqueue run and simulate crashed worker whose lease expired in the past
       const runRes = await createRun({
         projectId: projWorker,
@@ -535,7 +544,7 @@ steps:
     let webhookFlowVersionId: string
 
     testIfPg()('hashes webhook token at rest and deduplicates deliveries with idempotency key', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Publish and deploy flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -616,7 +625,7 @@ steps:
     let scheduleFlowVersionId: string
 
     testIfPg()('concurrent workers execute enqueueDueSchedule with atomic occurrence deduplication', async (ctx) => {
-      if (!pgAvailable) return ctx.skip()
+      if (skipIfNoPg(ctx)) return
       // Publish and deploy flow
       const pubRes = await app.inject({
         method: 'POST',
@@ -671,3 +680,4 @@ steps:
     })
   })
 })
+

@@ -368,4 +368,55 @@ describe('server endpoints', () => {
       delete process.env.FLOWSCRIPT_GATEWAY_SECRET
     }
   })
+  it('enforces gateway authentication on deployments endpoint', async () => {
+    const app = buildServer()
+    const secret = 'test-secret-gateway-deployments'
+    process.env.FLOWSCRIPT_GATEWAY_SECRET = secret
+    try {
+      const unauth = await app.inject({
+        method: 'GET',
+        url: '/v1/flows/my-flow/deployments',
+      })
+      expect(unauth.statusCode).toBe(401)
+
+      const validSig = signProjectId('proj_secured', secret)
+      const signedRes = await app.inject({
+        method: 'GET',
+        url: '/v1/flows/my-flow/deployments',
+        headers: {
+          'x-project-id': 'proj_secured',
+          'x-project-signature': validSig,
+        },
+      })
+      expect(signedRes.statusCode).not.toBe(401)
+    } finally {
+      delete process.env.FLOWSCRIPT_GATEWAY_SECRET
+    }
+  })
+
+  it('enforces gateway authentication on timeline endpoint', async () => {
+    const app = buildServer()
+    const secret = 'test-secret-gateway-timeline'
+    process.env.FLOWSCRIPT_GATEWAY_SECRET = secret
+    try {
+      const unauth = await app.inject({
+        method: 'GET',
+        url: '/v1/runs/00000000-0000-0000-0000-000000000000/timeline',
+      })
+      expect(unauth.statusCode).toBe(401)
+
+      const validSig = signProjectId('proj_secured', secret)
+      const signedRes = await app.inject({
+        method: 'GET',
+        url: '/v1/runs/00000000-0000-0000-0000-000000000000/timeline',
+        headers: {
+          'x-project-id': 'proj_secured',
+          'x-project-signature': validSig,
+        },
+      })
+      expect(signedRes.statusCode).not.toBe(401)
+    } finally {
+      delete process.env.FLOWSCRIPT_GATEWAY_SECRET
+    }
+  })
 });

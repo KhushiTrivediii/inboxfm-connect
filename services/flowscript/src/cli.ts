@@ -33,8 +33,10 @@ export async function runCli(argv: string[], io: CliIo = {
   flow run <file.flow> [--input <file.json>] [--mock] [--mock-integrations <file.json>]
   flow publish <file.flow> [--api-url <url>] [--project-id <id>]
   flow deploy <name> <versionId> [--env <environment>] [--api-url <url>] [--project-id <id>]
+  flow deployments <name> [--api-url <url>] [--project-id <id>]
   flow runs [--flow <name>] [--limit <n>] [--api-url <url>] [--project-id <id>]
   flow logs <run-id> [--api-url <url>] [--project-id <id>]
+  flow timeline <run-id> [--api-url <url>] [--project-id <id>]
   flow rollback <name> [--env <environment>] [--api-url <url>] [--project-id <id>]
   flow triggers <name> [--api-url <url>] [--project-id <id>]
   flow cancel <run-id> [--reason <msg>] [--api-url <url>] [--project-id <id>]
@@ -261,6 +263,48 @@ output:
       return io.exit(1)
     }
   }
+  if (command === 'deployments') {
+    const flowName = file
+    if (!flowName) {
+      io.stderr('ERROR: flow deployments requires <name>')
+      return io.exit(2)
+    }
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/flows/${encodeURIComponent(flowName)}/deployments`, {
+        method: 'GET',
+        headers: { 'x-project-id': projectId },
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Failed to fetch deployments (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (Array.isArray(data)) {
+        if (data.length === 0) {
+          io.stdout(`No deployments found for flow "${flowName}".`)
+          return
+        }
+        for (const dep of data) {
+          if (isRecord(dep)) {
+            const status = String(dep.status ?? 'active').toUpperCase()
+            io.stdout(`[${status}] env: ${String(dep.environment)} - version: v${String(dep.version)} (id: ${String(dep.versionId)})`)
+          }
+        }
+      } else {
+        io.stdout(JSON.stringify(data, null, 2))
+      }
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
   if (command === 'deploy') {
     const flowName = file
     const versionId = args[0]
@@ -358,6 +402,48 @@ output:
       }
 
       io.stdout(JSON.stringify(data, null, 2))
+      return
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      io.stderr(`ERROR: Failed to connect to FlowScript API at "${apiUrl}": ${msg}`)
+      return io.exit(1)
+    }
+  }
+
+  if (command === 'timeline') {
+    const runId = file
+    if (!runId) {
+      io.stderr('ERROR: flow timeline requires <run-id>')
+      return io.exit(2)
+    }
+
+    try {
+      const res = await fetchClient(`${apiUrl}/v1/runs/${encodeURIComponent(runId)}/timeline`, {
+        method: 'GET',
+        headers: { 'x-project-id': projectId },
+      })
+
+      const data: unknown = await res.json()
+      if (!res.ok) {
+        const errorMsg = isRecord(data) && typeof data.message === 'string' ? data.message : res.statusText
+        io.stderr(`ERROR: Failed to fetch run timeline (${res.status}): ${errorMsg}`)
+        return io.exit(1)
+      }
+
+      if (isRecord(data) && Array.isArray(data.events)) {
+        io.stdout(`Timeline for run ${String(data.runId)} (${String(data.flowName)}, ${String(data.status)}):`)
+        for (const ev of data.events) {
+          if (isRecord(ev)) {
+            const duration = typeof ev.durationMs === 'number' ? ` (+${ev.durationMs}ms)` : ''
+            const step = ev.stepId ? ` [step: ${String(ev.stepId)}]` : ''
+            const status = ev.status ? ` status: ${String(ev.status)}` : ''
+            const err = ev.error ? ` error: ${String(ev.error)}` : ''
+            io.stdout(`- ${String(ev.timestamp)}: ${String(ev.event)}${step}${status}${duration}${err}`)
+          }
+        }
+      } else {
+        io.stdout(JSON.stringify(data, null, 2))
+      }
       return
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)

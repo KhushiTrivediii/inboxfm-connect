@@ -1262,6 +1262,162 @@ export async function getProjectMetrics(projectId: string): Promise<FlowScriptPr
   };
 }
 
+
+
+
+export async function checkStoreHealth(): Promise<{ healthy: boolean; error?: string }> {
+  try {
+    if (!pool) return { healthy: false, error: 'Database pool is not initialized' };
+    await pool.query('SELECT 1');
+    return { healthy: true };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { healthy: false, error: errorMsg };
+  }
+}
+
+
+
+export async function listDeployments(projectId: string, flowName: string): Promise<FlowDeployment[]> {
+  const res = await pool.query<{
+    id: string;
+    project_id: string;
+    flow_name: string;
+    environment: string;
+    version_id: string;
+    version: number;
+    status: 'active' | 'disabled';
+    created_at: Date;
+    updated_at: Date;
+  }>(
+    `SELECT d.id, d.project_id, d.flow_name, d.environment, d.version_id, v.version, d.status, d.created_at, d.updated_at
+     FROM flowscript_deployments d
+     JOIN flowscript_versions v ON v.id = d.version_id
+     WHERE d.project_id = $1 AND d.flow_name = $2
+     ORDER BY d.environment ASC`,
+    [projectId, flowName],
+  );
+  return res.rows.map(r => ({
+    id: r.id,
+    projectId: r.project_id,
+    flowName: r.flow_name,
+    environment: r.environment,
+    versionId: r.version_id,
+    version: r.version,
+    status: r.status,
+    createdAt: r.created_at.toISOString(),
+    updatedAt: r.updated_at.toISOString(),
+  }));
+}
+
+
+
+
+
+export async function getRunTimeline(projectId: string, runId: string): Promise<RunTimeline | null> {
+  const run = await getRun(projectId, runId);
+  if (!run) return null;
+
+  const attempts = await listStepAttempts(runId);
+
+  const events: RunTimelineEvent[] = [];
+  const createdAt = run.createdAt ? new Date(run.createdAt) : null;
+  const startedAt = run.startedAt ? new Date(run.startedAt) : null;
+  const finishedAt = run.finishedAt ? new Date(run.finishedAt) : null;
+
+  if (createdAt) {
+    events.push({
+      event: 'enqueued',
+      timestamp: createdAt.toISOString(),
+    });
+  }
+
+  if (startedAt) {
+    const queueDurationMs = createdAt ? startedAt.getTime() - createdAt.getTime() : undefined;
+    events.push({
+      event: 'started',
+      timestamp: startedAt.toISOString(),
+      durationMs: queueDurationMs,
+    });
+  }
+
+  for (const att of attempts) {
+    const attStart = att.startedAt ? new Date(att.startedAt) : null;
+    const attFinish = att.finishedAt ? new Date(att.finishedAt) : null;
+    const stepDuration = attStart && attFinish ? attFinish.getTime() - attStart.getTime() : undefined;
+
+    events.push({
+      event: 'step_attempt',
+      timestamp: (attStart ?? new Date()).toISOString(),
+      stepId: att.stepId,
+      attemptNumber: att.attempt,
+      status: att.status,
+      durationMs: stepDuration,
+      error: att.errorMessage ?? undefined,
+    });
+  }
+
+  if (run.status === 'cancelled') {
+    events.push({
+      event: 'cancelled',
+      timestamp: (finishedAt ?? new Date()).toISOString(),
+      error: run.error ?? undefined,
+    });
+  } else if (finishedAt) {
+    events.push({
+      event: 'finished',
+      timestamp: finishedAt.toISOString(),
+      status: run.status,
+      error: run.error ?? undefined,
+    });
+  }
+
+  const queueDurationMs = createdAt && startedAt ? startedAt.getTime() - createdAt.getTime() : undefined;
+  const totalDurationMs = startedAt && finishedAt ? finishedAt.getTime() - startedAt.getTime() : undefined;
+
+  return {
+    runId,
+    flowName: run.flowName,
+    environment: run.environment,
+    status: run.status,
+    totalDurationMs,
+    queueDurationMs,
+    events,
+  };
+}
+
+export type FlowDeployment = {
+  id: string;
+  projectId: string;
+  flowName: string;
+  environment: string;
+  versionId: string;
+  version: number;
+  status: 'active' | 'disabled';
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RunTimelineEvent = {
+  event: 'enqueued' | 'started' | 'step_attempt' | 'finished' | 'cancelled';
+  timestamp: string;
+  stepId?: string;
+  attemptNumber?: number;
+  status?: string;
+  durationMs?: number;
+  error?: string;
+};
+
+export type RunTimeline = {
+  runId: string;
+  flowName: string;
+  environment: string;
+  status: string;
+  totalDurationMs?: number;
+  queueDurationMs?: number;
+  events: RunTimelineEvent[];
+};
+
 export type FlowScriptProjectMetrics = {
   runs: {
     total: number;

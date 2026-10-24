@@ -76,8 +76,10 @@ node services/flowscript/dist/cli.js test services/flowscript/examples/manual.fl
 node services/flowscript/dist/cli.js run services/flowscript/examples/manual.flow --input input.json
 node services/flowscript/dist/cli.js publish services/flowscript/examples/manual.flow
 node services/flowscript/dist/cli.js deploy my-flow <versionId>
+node services/flowscript/dist/cli.js deployments my-flow
 node services/flowscript/dist/cli.js runs [--flow my-flow]
 node services/flowscript/dist/cli.js logs <runId>
+node services/flowscript/dist/cli.js timeline <runId>
 node services/flowscript/dist/cli.js cancel <runId>
 node services/flowscript/dist/cli.js rollback <name> [--env <environment>]
 node services/flowscript/dist/cli.js triggers <name>

@@ -27,6 +27,9 @@ import {
   replayRun,
   listStepAttempts,
   getProjectMetrics,
+  checkStoreHealth,
+  listDeployments,
+  getRunTimeline,
 } from './store.js'
 
 const envSchema = z.object({
@@ -226,10 +229,16 @@ export function buildServer(): FastifyInstance {
     capabilities: ['ir-validation', 'source-compilation', 'safe-local-execution'],
   }))
 
-  app.get('/ready', async () => ({
-    status: 'ready',
-    service: 'flowscript',
-  }))
+  app.get('/ready', async (_request, reply) => {
+    const health = await checkStoreHealth()
+    if (!health.healthy) {
+      return reply.code(503).send({ status: 'unhealthy', service: 'flowscript', error: health.error })
+    }
+    return reply.code(200).send({
+      status: 'ready',
+      service: 'flowscript',
+    })
+  })
 
   app.post('/v1/source/compile', async (request, reply) => {
     const body = z.object({ source: z.string().min(1).max(1_000_000) }).safeParse(request.body)
@@ -333,6 +342,25 @@ export function buildServer(): FastifyInstance {
   })
 
   
+
+  app.get('/v1/flows/:name/deployments', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
+    const projectId = auth.projectId
+    const params = z.object({ name: z.string().min(1).max(128) }).safeParse(request.params)
+    if (!params.success) {
+      return sendError(reply, 400, 'BAD_REQUEST', 'Invalid flow name', { issues: params.error.issues })
+    }
+    try {
+      const deployments = await listDeployments(projectId, params.data.name)
+      return reply.code(200).send(deployments)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return sendError(reply, 500, 'STORE_ERROR', msg)
+    }
+  })
 
   app.post('/v1/flows/:name/rollback', async (request, reply) => {
     const auth = verifyProjectIdentity(request)
@@ -683,6 +711,24 @@ export function buildServer(): FastifyInstance {
     if (!run) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
     const attempts = await listStepAttempts(params.data.id)
     return reply.code(200).send({ runId: params.data.id, attempts })
+  })
+
+  app.get('/v1/runs/:id/timeline', async (request, reply) => {
+    const auth = verifyProjectIdentity(request)
+    if (!auth.valid || !auth.projectId) {
+      return sendError(reply, 401, auth.code ?? 'UNAUTHORIZED', auth.error ?? 'Verified x-project-id header is required from the trusted API gateway')
+    }
+    const projectId = auth.projectId
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params)
+    if (!params.success) return sendError(reply, 400, 'BAD_REQUEST', 'Invalid run ID')
+    try {
+      const timeline = await getRunTimeline(projectId, params.data.id)
+      if (!timeline) return sendError(reply, 404, 'RUN_NOT_FOUND', 'Run not found')
+      return reply.code(200).send(timeline)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return sendError(reply, 500, 'STORE_ERROR', msg)
+    }
   })
 
   app.post('/v1/ir/validate', async (request, reply) => {

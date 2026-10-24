@@ -5,7 +5,7 @@ Base URL: internal service network, port 8081. These endpoints are not safe to e
 ## Health
 
 - GET /health: process liveness and advertised capabilities.
-- GET /ready: currently reports readiness without proving DB/schema health. Improve before production.
+- GET /ready: reports service readiness after proving database and schema connectivity (returns 503 if DB is unreachable).
 
 ## Compile and validate
 

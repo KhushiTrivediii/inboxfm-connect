@@ -336,4 +336,54 @@ output:
     expect(mock.stdout[0]).toContain('"latency"')
     expect(mock.stdout[0]).toContain('"triggers"')
   })
+  it('fetches deployments for a flow via API client', async () => {
+    const mockFetch: typeof fetch = async (input) => {
+      expect(input.toString()).toContain('/v1/flows/my-flow/deployments')
+      return new Response(JSON.stringify([
+        {
+          id: 'dep_1',
+          environment: 'production',
+          versionId: 'ver_1',
+          version: 2,
+          status: 'active',
+        },
+      ]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['deployments', 'my-flow'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('[ACTIVE] env: production - version: v2 (id: ver_1)')
+  })
+
+  it('fetches run timeline via API client', async () => {
+    const mockFetch: typeof fetch = async (input) => {
+      expect(input.toString()).toContain('/v1/runs/run_123/timeline')
+      return new Response(JSON.stringify({
+        runId: 'run_123',
+        flowName: 'my-flow',
+        status: 'succeeded',
+        events: [
+          { event: 'enqueued', timestamp: '2026-10-24T12:00:00.000Z' },
+          { event: 'started', timestamp: '2026-10-24T12:00:01.000Z', durationMs: 1000 },
+          { event: 'step_attempt', stepId: 'step_1', attemptNumber: 1, status: 'succeeded', durationMs: 50, timestamp: '2026-10-24T12:00:01.050Z' },
+          { event: 'finished', status: 'succeeded', timestamp: '2026-10-24T12:00:01.100Z' },
+        ],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+
+    const mock = createMockIo(process.cwd(), mockFetch)
+    await runCli(['timeline', 'run_123'], mock.io)
+    expect(mock.exitCode).toBeUndefined()
+    expect(mock.stdout[0]).toContain('Timeline for run run_123 (my-flow, succeeded):')
+    expect(mock.stdout[1]).toContain('- 2026-10-24T12:00:00.000Z: enqueued')
+    expect(mock.stdout[2]).toContain('- 2026-10-24T12:00:01.000Z: started (+1000ms)')
+    expect(mock.stdout[3]).toContain('step: step_1')
+  })
 });
